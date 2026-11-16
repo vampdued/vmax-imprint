@@ -51,7 +51,14 @@ fn measure(
     let mut max_line_w: f32 = 0.0;
     for run in buf.layout_runs() {
         max_line_w = max_line_w.max(run.line_w);
-        let t = run.text.trim_end().to_string();
+        // NOTE: `run.text` is the FULL logical line, not this visual line's
+        // fragment — a sentence wrapping to N visual lines used to come
+        // back as N copies of the whole sentence (double-render bug,
+        // 2026-11-16). Slice by the run's glyph byte ranges to get the
+        // fragment actually laid out on this visual line.
+        let start = run.glyphs.first().map(|g| g.start).unwrap_or(0);
+        let end = run.glyphs.last().map(|g| g.end).unwrap_or(run.text.len());
+        let t = run.text.get(start..end).unwrap_or("").trim_end().to_string();
         if !t.is_empty() || lines.is_empty() {
             lines.push(t);
         }
@@ -718,6 +725,32 @@ mod tests {
         let small = fit_text_to_box("Hi", 200, 60, 40, None);
         assert_eq!(small.size, 40); // fast path fits
         assert_eq!(small.lines, vec!["Hi"]);
+    }
+
+    #[test]
+    fn fit_wraps_without_duplicating_text() {
+        // Regression test for the double-render bug (2026-11-16):
+        // cosmic-text `layout_runs()` yields the FULL logical line in
+        // `run.text` for every visual line, so `measure` used to return
+        // the whole sentence once per wrapped line — the plate grew N
+        // lines tall and the text drew N times. Wrapped lines must be
+        // true fragments: no line may equal the whole text, and the
+        // fragments must rejoin (word for word) to the original.
+        for text in [
+            "Chintu idha gavanichu kaduppa face vechitu",
+            "Appuram avaloda payyan pathi sollanum na avan peru chintu Namma ellarum maadhiriye appo appo actress pics paathutu poolu adichitu iruppan....",
+        ] {
+            let fitted = fit_text_to_box(text, 200, 400, 40, None);
+            assert!(fitted.lines.len() > 1, "expected wrapping, got {:?}", fitted.lines);
+            assert!(
+                fitted.lines.iter().all(|l| l != text),
+                "duplicated full text: {:?}",
+                fitted.lines
+            );
+            let rejoined: Vec<&str> = fitted.lines.join(" ").split_whitespace().collect();
+            let original: Vec<&str> = text.split_whitespace().collect();
+            assert_eq!(rejoined, original, "fragments lost/added words: {:?}", fitted.lines);
+        }
     }
 
     #[test]
