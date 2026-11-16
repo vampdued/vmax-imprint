@@ -747,7 +747,8 @@ mod tests {
                 "duplicated full text: {:?}",
                 fitted.lines
             );
-            let rejoined: Vec<&str> = fitted.lines.join(" ").split_whitespace().collect();
+            let joined = fitted.lines.join(" ");
+            let rejoined: Vec<&str> = joined.split_whitespace().collect();
             let original: Vec<&str> = text.split_whitespace().collect();
             assert_eq!(rejoined, original, "fragments lost/added words: {:?}", fitted.lines);
         }
