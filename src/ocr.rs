@@ -53,7 +53,14 @@ fn ocr_debug() -> bool {
 /// Recognition input height (RapidOCR `rec_image_shape`).
 const REC_H: usize = 48;
 /// Recognition input max width.
-const REC_MAX_W: usize = 320;
+// Rec input height; the width follows the crop's aspect ratio.
+// NOTE: this must NOT be a small cap like 320. RapidOCR lets the batch
+// width grow to the widest crop's aspect (its rec is a CRNN, so any width
+// works); capping at 320 squashed a 1293px-wide caption line 4x and the
+// recogniser read it as 'ae' at 0.19 (v1.0.1 "ugly output", 2026-11-16).
+// 4096 is only a memory guard: it covers every realistic caption line
+// (a 1600px-wide, 20px-tall line needs 3840).
+const REC_MAX_W: usize = 4096;
 
 static DET_MODEL: &[u8] = include_bytes!("../assets/models/ch_PP-OCRv4_det_infer.onnx");
 static REC_MODEL: &[u8] = include_bytes!("../assets/models/ch_PP-OCRv4_rec_infer.onnx");
@@ -344,7 +351,9 @@ impl OcrEngine {
             }
         }
 
-        // Resize to height 48, width proportional (capped at 320).
+        // Resize to height 48, width proportional to the crop's aspect
+        // (capped only by REC_MAX_W, a memory guard — see above). The CRNN
+        // takes any width, so wide lines are NOT squashed to 320.
         let aspect = crop_w as f32 / crop_h as f32;
         let rec_w = ((REC_H as f32 * aspect).round() as usize).clamp(8, REC_MAX_W);
         let rec_img = image::imageops::resize(
@@ -770,5 +779,24 @@ mod tests {
     #[test]
     fn dict_loads() {
         assert_eq!(DICT_TXT.lines().count(), 6623);
+    }
+
+    #[test]
+    fn long_line_reads_at_full_width() {
+        // Regression test for the v1.0.1 "ugly output" bug (2026-11-16):
+        // the rec input was capped at 320px wide, so the 1293px-wide first
+        // line of the _12 meme caption was squashed 4x and read as 'ae'
+        // at 0.19 — the line was dropped, the block shrank to lines 2-3,
+        // and the render came out narrow and misplaced. RapidOCR lets the
+        // width follow the crop's aspect (48x1296 here). The line must now
+        // survive the default 0.60 confidence bar.
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/input/long-line.png");
+        let img = image::open(path).expect("test image").to_rgb8();
+        let engine = OcrEngine::new().expect("engine");
+        let lines = engine.recognize_image(&img).expect("ocr");
+        assert!(
+            lines.iter().any(|l| l.score >= 0.6 && l.text.contains("Kaju")),
+            "long line unread: {lines:?}"
+        );
     }
 }
