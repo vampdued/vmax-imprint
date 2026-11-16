@@ -1,0 +1,57 @@
+[package]
+name = "caption-studio"
+version = "1.0.0"
+edition = "2021"
+description = "Batch image caption extractor, translator and renderer — Rust port of caption_replacer.py"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "caption-studio"
+path = "src/main.rs"
+
+[dependencies]
+# GUI: eframe + egui (+ egui_extras for image textures)
+eframe = "0.37"
+egui = "0.37"
+egui_extras = { version = "0.37", features = ["image"] }
+
+# OCR: ort 2.0.0-rc.15 wraps ONNX Runtime 1.31.
+# Static linking, no DLL at runtime:
+#   - `download-binaries` makes ort-sys fetch the prebuilt ONNX Runtime
+#     distribution at build time and link it with
+#     `cargo:rustc-link-lib=static=onnxruntime`.
+#   - `copy-dylibs` is deliberately NOT enabled: it would copy the shared
+#     library next to the exe. Without it the exe is self-contained.
+#   - `tls-native` is needed so the build-time download can use HTTPS.
+#   - `load-dynamic` is NOT enabled (that would load onnxruntime.dll at
+#     runtime instead of linking it).
+# NOTE: the pyke ONNX Runtime static lib for Windows is built with /MD
+# (dynamic CRT), so do NOT add `-C target-feature=+crt-static` — it would
+# conflict at link time. The MSVC/UCRT runtime ships with Windows 10/11,
+# so the exe still needs no app DLLs of its own.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-native", "api-31"] }
+
+# Text shaping & wrapping (rustybuzz shaping, Indic + CJK ligatures)
+cosmic-text = "0.19"
+fontdb = "0.23"
+# 2D rendering (subpixel AA Bezier-rounded caption plates) + image I/O
+tiny-skia = "0.12"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "rayon"] }
+# Parallelism, dialogs, clipboard, (de)serialisation
+rayon = "1.12"
+rfd = "0.18"
+arboard = "3.7"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+crossbeam-channel = "0.5"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "unwind"
+
+[profile.dev]
+opt-level = 1

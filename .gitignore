@@ -1,0 +1,4 @@
+/target
+/vendor
+*.pdb
+ocr-test.json
