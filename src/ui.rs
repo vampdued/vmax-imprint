@@ -1124,8 +1124,11 @@ impl CaptionStudioApp {
             )
         });
         let selected = name == self.preview_file;
+        // 60px: the thumbnail (44px) + two text lines + padding. At 52px
+        // the status chip sat on the row's bottom edge and the selection
+        // stroke cut straight through it.
         let (rect, resp) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 52.0), egui::Sense::click());
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 60.0), egui::Sense::click());
         let resp = resp.accessible_name(format!(
             "{} · {} blocks{}",
             name,
@@ -1167,9 +1170,14 @@ impl CaptionStudioApp {
                 ui.painter().rect_filled(cell, 4.0, t.raised);
             }
             ui.vertical(|ui| {
+                // Tail-ellipsis: every file here shares the long
+                // "krithika___memes_40212569…" head, so a head-truncation
+                // makes all rows read identically — the tail keeps the
+                // distinguishing "_N.jpg" suffix visible.
+                let shown = tail_ellipsis(ui, name, ui.available_width());
                 ui.add(
                     egui::Label::new(
-                        egui::RichText::new(name)
+                        egui::RichText::new(shown)
                             .size(crate::theme::LABEL)
                             .color(t.text),
                     )
@@ -1393,41 +1401,53 @@ impl CaptionStudioApp {
                         .color(t.text_dim),
                 );
                 ui.add_space(4.0);
-                // The translation, editable. A local copy + write-back (the
-                // entry is a resolved snapshot, not `extracted` itself).
+                // The translation, editable — disabled while the block is
+                // filtered out (it won't render, so there is nothing to
+                // translate); the Keep button re-enables it.
                 let mut text = blk.new_text.clone();
-                let resp = egui::TextEdit::multiline(&mut text)
-                    .hint_text("Translation…")
-                    .font(mono.clone())
-                    .desired_rows(2)
-                    .desired_width(f32::INFINITY)
-                    .show(ui);
-                focus_ring(ui, &resp.response);
-                if resp.response.changed() {
-                    self.set_block_text(&file, blk.id, text);
-                }
-                if resp.response.has_focus() && self.selected_block != Some(blk.id) {
-                    self.selected_block = Some(blk.id);
-                    self.preview_key.clear();
-                }
+                ui.add_enabled_ui(blk.kept(), |ui| {
+                    let resp = egui::TextEdit::multiline(&mut text)
+                        .hint_text("Translation…")
+                        .font(mono.clone())
+                        .desired_rows(2)
+                        .desired_width(f32::INFINITY)
+                        .show(ui);
+                    focus_ring(ui, &resp.response);
+                    if resp.response.changed() {
+                        self.set_block_text(&file, blk.id, text);
+                    }
+                    if resp.response.has_focus() && self.selected_block != Some(blk.id) {
+                        self.selected_block = Some(blk.id);
+                        self.preview_key.clear();
+                    }
+                });
                 ui.add_space(4.0);
                 // Fit indicator: what the render will actually do with the
                 // effective text (the translation, or the original while
-                // untranslated).
-                let (fits, lines, size) = self.fit_for(&file, entry, blk);
-                let eff = if blk.new_text.trim().is_empty() {
-                    blk.original_text.trim()
+                // untranslated). A filtered block won't render, so it gets
+                // a dim note instead of a fit line.
+                if blk.kept() {
+                    let (fits, lines, size) = self.fit_for(&file, entry, blk);
+                    let eff = if blk.new_text.trim().is_empty() {
+                        blk.original_text.trim()
+                    } else {
+                        blk.new_text.trim()
+                    };
+                    let chars = eff.chars().count();
+                    let label = fit_label(fits, lines, chars, size);
+                    let col = if fits { t.ok } else { t.warning };
+                    ui.label(
+                        egui::RichText::new(label)
+                            .size(crate::theme::CAPTION)
+                            .color(col),
+                    );
                 } else {
-                    blk.new_text.trim()
-                };
-                let chars = eff.chars().count();
-                let label = fit_label(fits, lines, chars, size);
-                let col = if fits { t.ok } else { t.warning };
-                ui.label(
-                    egui::RichText::new(label)
-                        .size(crate::theme::CAPTION)
-                        .color(col),
-                );
+                    ui.label(
+                        egui::RichText::new("Filtered out — won't render")
+                            .size(crate::theme::CAPTION)
+                            .color(t.text_faint),
+                    );
+                }
             });
             ui.add_space(8.0);
         }
@@ -1791,7 +1811,7 @@ fn extract_worker(
                         let (blocks, dropped) =
                             group_lines_into_blocks(&raw_lines, min_conf, min_chars);
                         send(WorkerMsg::Log(format!(
-                            "OK   {name}: {} kept, {} filtered",
+                            "{name}: {} kept, {} filtered",
                             blocks.len(),
                             dropped.len()
                         )));
@@ -2015,7 +2035,7 @@ impl eframe::App for CaptionStudioApp {
             egui::Window::new("Paste Translated JSON")
                 .collapsible(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .resizable(true)
+                .resizable(false)
                 .default_size([700.0, 450.0])
                 .open(&mut open)
                 .show(&ctx, |ui| {
@@ -2076,33 +2096,47 @@ impl eframe::App for CaptionStudioApp {
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .resizable(true)
                 .default_size([900.0, 600.0])
+                // Capped, so the window can't span the full height and put
+                // the Done button on top of the status bar.
+                .max_size([900.0, 720.0])
                 .open(&mut open)
                 .show(&ctx, |ui| {
                     ui.label("The full compact map for every image. Edits apply immediately; the per-image view and the preview update from here.");
                     ui.add_space(8.0);
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        let t = crate::theme::Tokens::get(ui.ctx());
-                        let mut layouter =
-                            |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
-                                let mut job = json_highlight_job(buf.as_str(), &t);
-                                job.wrap.max_width = wrap_width;
-                                ui.fonts_mut(|f| f.layout_job(job))
-                            };
-                        let resp = ui.add(
-                            egui::TextEdit::multiline(&mut self.editor_text)
-                                .font(egui::TextStyle::Monospace)
-                                .desired_width(f32::INFINITY)
-                                .desired_rows(24)
-                                .layouter(&mut layouter)
-                                .hint_text("Scan images to fill this in, or paste translated JSON here."),
-                        )
-                        .accessible_name("Translation JSON");
-                        focus_ring(ui, &resp);
-                        if resp.changed() {
-                            self.preview_key.clear();
-                            self.resolve_preview_data();
-                        }
-                    });
+                    // Capped height, and the editor sits on an opaque
+                    // field fill — without it the JSON tab behind the
+                    // modal showed through the text edit as double text.
+                    let t = crate::theme::Tokens::get(ui.ctx());
+                    egui::Frame::new()
+                        .fill(t.field)
+                        .corner_radius(egui::CornerRadius::same(t.radius_sm as u8))
+                        .show(ui, |ui| {
+                            egui::ScrollArea::vertical()
+                                .max_height(480.0)
+                                .show(ui, |ui| {
+                                    let mut layouter = |ui: &egui::Ui,
+                                                        buf: &dyn egui::TextBuffer,
+                                                        wrap_width: f32| {
+                                        let mut job = json_highlight_job(buf.as_str(), &t);
+                                        job.wrap.max_width = wrap_width;
+                                        ui.fonts_mut(|f| f.layout_job(job))
+                                    };
+                                    let resp = ui.add(
+                                        egui::TextEdit::multiline(&mut self.editor_text)
+                                            .font(egui::TextStyle::Monospace)
+                                            .desired_width(f32::INFINITY)
+                                            .desired_rows(24)
+                                            .layouter(&mut layouter)
+                                            .hint_text("Scan images to fill this in, or paste translated JSON here."),
+                                    )
+                                    .accessible_name("Translation JSON");
+                                    focus_ring(ui, &resp);
+                                    if resp.changed() {
+                                        self.preview_key.clear();
+                                        self.resolve_preview_data();
+                                    }
+                                });
+                        });
                     ui.add_space(8.0);
                     let done = ui.button("Done");
                     focus_ring(ui, &done);
@@ -2123,7 +2157,7 @@ impl eframe::App for CaptionStudioApp {
             egui::Window::new("Import — some files skipped")
                 .collapsible(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .resizable(true)
+                .resizable(false)
                 .default_size([600.0, 300.0])
                 .open(&mut open)
                 .show(&ctx, |ui| {
@@ -2162,6 +2196,30 @@ impl eframe::App for CaptionStudioApp {
                 ui.add_enabled_ui(!modal_open, |ui| {
                     ui.horizontal(|ui| {
                         let t = crate::theme::Tokens::get(ui.ctx());
+                        // Right-aligned items FIRST: they claim their space
+                        // from the right, so the left-hand labels (counts,
+                        // save path, status) truncate to what is left
+                        // instead of running underneath the button.
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            // When the log panel is hidden, the bar offers it
+                            // back (the X in the log header hides it).
+                            if !self.show_log && ui.small_button("Show log").clicked() {
+                                self.show_log = true;
+                                self.save_settings();
+                            }
+                            // A solid accent fill, not the 17%-alpha wash (1.23:1
+                            // against its track — the bar read as empty at 100%),
+                            // and capped at ~220px so it reads as a bar instead of a
+                            // second status line. Only while a job runs.
+                            if self.busy {
+                                ui.add(
+                                    egui::ProgressBar::new(self.progress)
+                                        .fill(t.accent)
+                                        .desired_width(220.0)
+                                        .show_percentage(),
+                                );
+                            }
+                        });
                         // A JSON error replaces the counts (danger colour, full
                         // error on hover) so a broken paste is visible without
                         // switching tabs.
@@ -2186,10 +2244,17 @@ impl eframe::App for CaptionStudioApp {
                             ui.separator();
                         }
                         // The last save destination (the output folder after a
-                        // render, the file after Save captions).
+                        // render, the file after Save captions). Only the
+                        // folder/file name shows in the 32px bar — the full
+                        // path is the tooltip — so the useful part isn't the
+                        // part cut off at the window edge.
                         if let Some(path) = &self.last_save_path {
+                            let shown = std::path::Path::new(path)
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| path.clone());
                             ui.add(
-                                egui::Label::new(egui::RichText::new(path).color(t.text_dim))
+                                egui::Label::new(egui::RichText::new(shown).color(t.text_dim))
                                     .truncate(),
                             )
                             .on_hover_text(path.clone());
@@ -2205,26 +2270,6 @@ impl eframe::App for CaptionStudioApp {
                         });
                         ui.ctx().accesskit_node_builder(status_resp.id, |node| {
                             node.set_live(egui::accesskit::Live::Polite);
-                        });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            // When the log panel is hidden, the bar offers it
-                            // back (the X in the log header hides it).
-                            if !self.show_log && ui.small_button("Show log").clicked() {
-                                self.show_log = true;
-                                self.save_settings();
-                            }
-                            // A solid accent fill, not the 17%-alpha wash (1.23:1
-                            // against its track — the bar read as empty at 100%),
-                            // and capped at ~220px so it reads as a bar instead of a
-                            // second status line. Only while a job runs.
-                            if self.busy {
-                                ui.add(
-                                    egui::ProgressBar::new(self.progress)
-                                        .fill(t.accent)
-                                        .desired_width(220.0)
-                                        .show_percentage(),
-                                );
-                            }
                         });
                     });
                 });
@@ -2299,7 +2344,9 @@ impl eframe::App for CaptionStudioApp {
                                 .filter(|l| l.level != LogLevel::Info)
                                 .count();
                             let all_label = format!("All ({total})");
-                            let warn_label = format!("Warnings ({warnings})");
+                            // The count covers warnings AND errors, so the
+                            // label says so instead of "Warnings".
+                            let warn_label = format!("Warnings & errors ({warnings})");
                             if let Some(f) = segmented(
                                 ui,
                                 self.log_filter,
@@ -2576,10 +2623,19 @@ impl eframe::App for CaptionStudioApp {
                                         .close_behavior(
                                             egui::PopupCloseBehavior::CloseOnClickOutside,
                                         )
-                                        // The popup is exactly the button's width, so it
-                                        // stays inside the 316px sidebar instead of
-                                        // spilling into the workspace.
+                                        // The popup is exactly the button's
+                                        // width, so it stays inside the 316px
+                                        // sidebar instead of spilling into the
+                                        // workspace. `Popup::width` only sets
+                                        // the Area's *default* width — the
+                                        // Area still shrinks to its content
+                                        // (the longest item, ~215px) — so the
+                                        // width is also set on the content.
+                                        // The explicit opaque frame keeps the
+                                        // sidebar text from showing through
+                                        // on the first open frame.
                                         .width(sizing_btn.rect.width())
+                                        .frame(egui::Frame::popup(ui.style()).fill(t.card))
                                         // Defect 1: the old ComboBox opened downward and
                                         // covered the OCR Thresholds card. This popup opens
                                         // upward (its bottom edge at the button's top edge)
@@ -2588,6 +2644,13 @@ impl eframe::App for CaptionStudioApp {
                                         .align(egui::RectAlign::TOP_START)
                                         .align_alternatives(&[egui::RectAlign::BOTTOM_START])
                                         .show(|ui| {
+                                            // Match the button's width (less the
+                                            // popup frame's inner margin).
+                                            ui.set_width(
+                                                (sizing_btn.rect.width()
+                                                    - ui.style().spacing.menu_margin.sum().x)
+                                                    .max(0.0),
+                                            );
                                             for mode in crate::model::SizingMode::all() {
                                                 if ui
                                                     .selectable_value(
@@ -2825,6 +2888,16 @@ impl eframe::App for CaptionStudioApp {
                             self.load_translated_file();
                         }
                         if icon_text_button(ui, "file-json", "Bulk edit…").clicked() {
+                            // Regenerate the bulk map from the resolved
+                            // data so it matches the current scan — the raw
+                            // imported text can carry stale block ids that
+                            // "aren't in the scan", and the bulk map would
+                            // then disagree with the per-image JSON.
+                            if let Some(data) = self.resolve_preview_data() {
+                                self.editor_text =
+                                    serde_json::to_string_pretty(&compact_map_from_data(&data))
+                                        .unwrap_or_default();
+                            }
                             self.show_bulk_edit = true;
                         }
                         if icon_text_button(ui, "arrow-right", "Verify in Preview").clicked() {
@@ -2881,8 +2954,22 @@ impl eframe::App for CaptionStudioApp {
                             self.preview_key.clear();
                         }
                         // The mode + zoom controls ride at the right end.
+                        // Disabled until a preview exists — with zero images
+                        // the segmented groups lit up ("Rendered", "Fit")
+                        // over an empty stage.
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if let Some(fit) = segmented(ui, self.preview_zoom_fit, &[(true, "Fit"), (false, "100%")]) {
+                            ui.add_enabled_ui(!names.is_empty(), |ui| {
+                            // The manual-zoom button shows the LIVE zoom
+                            // (e.g. "200%"), not a fixed "100%" — the old
+                            // label lit up at any manual zoom and lied
+                            // about the level. Clicking it resets to 100%.
+                            let zoom_pct =
+                                format!("{}%", (self.preview_zoom * 100.0).round() as i32);
+                            if let Some(fit) = segmented(
+                                ui,
+                                self.preview_zoom_fit,
+                                &[(true, "Fit"), (false, zoom_pct.as_str())],
+                            ) {
                                 self.preview_zoom_fit = fit;
                                 self.preview_zoom = 1.0;
                                 self.preview_pan = egui::Vec2::ZERO;
@@ -2896,6 +2983,7 @@ impl eframe::App for CaptionStudioApp {
                                 self.preview_mode = mode;
                                 self.preview_key.clear();
                             }
+                            });
                         });
                     });
                     // --- Workspace: file list (230px) | stage. ---
@@ -2908,12 +2996,32 @@ impl eframe::App for CaptionStudioApp {
                                     egui::vec2(250.0, rest.y),
                                     egui::Layout::top_down(egui::Align::LEFT),
                                     |ui| {
-                                        let filter_resp = ui.add(
-                                            egui::TextEdit::singleline(&mut self.preview_filter)
-                                                .hint_text(format!("Filter {} images…", names.len()))
-                                                .desired_width(250.0),
-                                        );
-                                        focus_ring(ui, &filter_resp);
+                                        // Filter + a clear (×) button when
+                                        // there is text to clear.
+                                        let filter_resp = ui
+                                            .horizontal(|ui| {
+                                                let filter_resp = ui.add(
+                                                    egui::TextEdit::singleline(
+                                                        &mut self.preview_filter,
+                                                    )
+                                                    .hint_text(format!(
+                                                        "Filter {} images…",
+                                                        names.len()
+                                                    ))
+                                                    .desired_width(250.0 - 32.0),
+                                                );
+                                                focus_ring(ui, &filter_resp);
+                                                if !self.preview_filter.is_empty()
+                                                    && ui
+                                                        .small_button("×")
+                                                        .on_hover_text("Clear filter")
+                                                        .clicked()
+                                                {
+                                                    self.preview_filter.clear();
+                                                }
+                                                filter_resp
+                                            })
+                                            .inner;
                                         let filtered = filter_file_names(&names, &self.preview_filter);
                                         let mut budget = 4;
                                         let mut picked: Option<String> = None;
@@ -2928,7 +3036,16 @@ impl eframe::App for CaptionStudioApp {
                                             )
                                             .show(ui, |ui| {
                                             if filtered.is_empty() {
-                                                ui.label(crate::theme::label_text("No files match.", crate::theme::CAPTION));
+                                                // While a scan runs the list
+                                                // is empty because nothing has
+                                                // been found yet, not because
+                                                // the filter excluded it.
+                                                let msg = if self.busy {
+                                                    "Scanning…"
+                                                } else {
+                                                    "No files match."
+                                                };
+                                                ui.label(crate::theme::label_text(msg, crate::theme::CAPTION));
                                             }
                                             for n in filtered {
                                                 if self.file_list_row(ui, n, data.as_ref(), &mut budget) {

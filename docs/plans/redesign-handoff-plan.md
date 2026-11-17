@@ -762,3 +762,98 @@ the handle and do nothing). Rather than debug the persistence from here
 - A pixel-peep review of the 20 shot-test PNGs (design-critique /
   ux-copy / design-system, esp. the preview panel) is running in
   parallel; its findings land in the next build.
+
+## 19. Build record — pixel-peep fixes (2026-11-17, branch `feature/redesign-handoff`, uncommitted)
+
+The pixel-peep review of the 20 shot-test PNGs (design-critique /
+ux-copy / design-system; 19 findings F1–F19) plus the log-panel fix
+from §18. The review confirmed the log-panel complaint is the §18 fix
+(no grip bar visible in the shots, which predate it) and identified
+the "tags conflict" the user described: **F4** — the selected file-list
+row's blue border slices straight through the status chips (verified
+in a crop; the row was 52px, the chip sat on the row's bottom edge).
+The "list search runs on the terminal" phrase could not be mapped to a
+visible bug (the in-UI filter looks fine; likely the shot-test CLI
+run), and "lots of responsiveness" can't be judged from fixed
+1920×1080 shots at 100% — the alignment bugs below reproduce at 100%
+too, so they are fixed first and re-checked at 125%.
+
+**MAJOR, fixed:**
+- **F1** — the toolbar "100%" button lit up at any manual zoom (2.0×
+  in shot 07). The button now shows the LIVE zoom ("200%"); clicking
+  it resets to 100%. (`segmented` with a computed label.)
+- **F2** — OCR Boxes labels overlapped the text they annotate and each
+  other (kept labels over PHILOSOPHY/LITERATURE; the two DROP labels
+  stacked ~20px apart, ~10× wider than their boxes). Labels are now
+  collected while the boxes are drawn and placed together by pure
+  `place_diag_labels` (above the box, stacked upward on a collision,
+  below the box when there is no room above) — + test
+  `diag_labels_stack_instead_of_overlapping`. All tags keep their
+  solid opaque backing.
+- **F4** — file-list row 52 → 60px, so the thumbnail + two text lines +
+  padding fit and the selection stroke no longer cuts the chips.
+- **F5** — filenames used head-truncation, so all 18 rows read
+  "krithika___memes_40212569…". The row now uses `tail_ellipsis` (the
+  sidebar path helper), keeping the distinguishing "_N.jpg" suffix.
+- **F11** — sizing popup was narrower than its button (~215px vs
+  ~330px) and translucent on first open. `Popup::width` only sets the
+  Area's *default* width (the Area still shrinks to its content), so
+  the content width is now also set explicitly; the popup gets an
+  explicit opaque frame (`t.card`) so sidebar text can't show through.
+- **F15** — the "Show log" button overlapped the status-bar message
+  ("Saved to …" ran underneath it). The right-aligned block (Show log
+  + progress bar) is now added FIRST in the status bar, so the
+  left-hand labels truncate to the remaining width. This also fixes
+  **F17** (the "5%" badge overflowing its circle while scanning — the
+  progress bar had been squeezed by the long status text; it now claims
+  its 220px first).
+- **F18** — bulk-edit modal, four ways: (a) it spanned the full window
+  height → capped with `.max_size([900, 720])` and the ScrollArea
+  capped at 480px; (b) Done sat on the status bar → fixed by (a);
+  (c) the JSON tab bled through the editor as double text → the
+  editor now sits on an opaque field fill; (d) the bulk map carried
+  stale block ids (1, 4, 5, 6 for _1.jpg while the per-image JSON had
+  1, 2, 3) — `load_translated_file` sets `editor_text` to the RAW
+  imported text, so opening Bulk edit now regenerates it from the
+  resolved data (stale ids dropped, valid translations kept).
+
+**MINOR, fixed:**
+- **F6** — while scanning, the list said "No files match." (as if the
+  filter excluded everything). It now says "Scanning…" while `busy`.
+- **F7** — the filter box had no clear button. A "×" (Clear filter)
+  now appears when the filter has text.
+- **F8** — the toolbar mode/zoom groups stayed live with zero images
+  ("Rendered"/"Fit" lit over an empty stage). They are disabled until
+  a preview exists.
+- **F9** — a filtered block still showed a green fit line and an
+  editable translation. The translation field is disabled while
+  filtered, and the fit line is replaced by a dim "Filtered out —
+  won't render" note.
+- **F13** — the per-file log lines read "INFO OK …" (the "OK" repeats
+  the INFO tag). The "OK" is dropped.
+- **F14** — "Warnings (1)" counted an ERROR line. Renamed to
+  "Warnings & errors (N)" (the filter already counts warn + error).
+- **F16** — the save-path segment was truncated mid-path at the window
+  edge. The bar now shows only the folder/file name (full path in the
+  tooltip).
+- **F19** — the paste and import-report modals showed a resize grip on
+  a centred fixed modal. Both are now `.resizable(false)`.
+
+**Not changed / deferred:**
+- **F3** — at 100% the cropped image gives no position cue (no
+  scrollbar/minimap). Low priority; no change.
+- **F10** — the empty-image message shows a text caret. Investigated:
+  the inspector renders it with `ui.monospace` (a Label, no caret),
+  so the caret is a focus artifact from another TextEdit, not the
+  message itself. No change.
+- **F12** — "Warming up OCR engine…" pushes the PROJECT card off the
+  panel while warming up. Transient (a few seconds at startup); no
+  change.
+- `cargo test` green: **48/48** (was 47; +`diag_labels_stack_instead_of_overlapping`).
+  Same pre-existing warnings, no new ones. `rustfmt --edition 2021`
+  on `ui.rs` + `render.rs` only.
+- NOT pushed; push only on his word (a fresh token is needed).
+- His Windows run is the gate: rebuild from the branch, re-run the
+  shot-test, and confirm the log-panel drag/close, the row chips, the
+  toolbar zoom label, the OCR labels, the sizing popup, the status bar,
+  and the bulk-edit modal.

@@ -778,6 +778,70 @@ pub fn render_entry(
     out
 }
 
+/// One diagnostic tag to place: the box it annotates, its size, and its
+/// text/colours (kept in the caller). `place_diag_labels` returns each
+/// tag's top edge (y), in input order, so no two tags overlap: it prefers
+/// directly above the box, stacks upward on a collision, and falls back to
+/// below the box when there is no room above. Pure, so the placement is
+/// unit-tested.
+#[derive(Clone, Copy)]
+struct DiagLabel {
+    x: i32,
+    box_top: i32,
+    box_bottom: i32,
+    width: i32,
+    height: i32,
+}
+
+fn place_diag_labels(labels: &[DiagLabel], img_h: i32) -> Vec<i32> {
+    // Topmost first, so the highest tag claims its spot and the ones below
+    // stack under it.
+    let mut order: Vec<usize> = (0..labels.len()).collect();
+    order.sort_by_key(|&i| (labels[i].box_top, labels[i].x));
+    let mut placed: Vec<(i32, i32, i32, i32)> = Vec::new(); // (x, y, w, h)
+    let mut out = vec![0i32; labels.len()];
+    for &i in &order {
+        let l = &labels[i];
+        let overlaps = |ty: i32, placed: &[(i32, i32, i32, i32)]| {
+            placed.iter().any(|&(px, py, pw, ph)| {
+                l.x < px + pw && px < l.x + l.width && ty < py + ph && py < ty + l.height
+            })
+        };
+        // Preferred: directly above the box; stack upward on a collision.
+        let mut ty = l.box_top - l.height;
+        while overlaps(ty, &placed) && ty > 0 {
+            let top = placed
+                .iter()
+                .filter(|&&(px, py, pw, ph)| {
+                    l.x < px + pw && px < l.x + l.width && ty < py + ph && py < ty + l.height
+                })
+                .map(|&(_, py, _, _)| py)
+                .min()
+                .unwrap_or(ty);
+            ty = top - l.height - 2;
+        }
+        // No room above: below the box instead, stacking downward.
+        if ty < 0 {
+            ty = l.box_bottom + 2;
+            while overlaps(ty, &placed) && ty + l.height < img_h {
+                let bottom = placed
+                    .iter()
+                    .filter(|&&(px, py, pw, ph)| {
+                        l.x < px + pw && px < l.x + l.width && ty < py + ph && py < ty + l.height
+                    })
+                    .map(|&(_, py, _, ph)| py + ph)
+                    .max()
+                    .unwrap_or(ty);
+                ty = bottom + 2;
+            }
+        }
+        ty = ty.clamp(0, (img_h - l.height).max(0));
+        placed.push((l.x, ty, l.width, l.height));
+        out[i] = ty;
+    }
+    out
+}
+
 /// OCR diagnostic overlay — Python `render_ocr_diagnostic`.
 /// Kept blocks in green, dropped lines in orange, with `#id · conf · kept`
 /// labels outside the box top-left (SPEC §5: 11px at display scale — the
@@ -868,32 +932,45 @@ pub fn render_ocr_diagnostic(
         }
     };
 
-    let tag = |pixmap: &mut Pixmap, x: i32, y: i32, text: &str, bg: [u8; 4], ink: [u8; 3]| {
-        let tw = line_width(text, badge_size, None) as i32 + 10;
-        let th = badge_size + 4;
-        let ty = 0.max(y - th);
-        let mut paint = Paint::default();
-        paint.set_color_rgba8(bg[0], bg[1], bg[2], bg[3]);
-        paint.anti_alias = true;
-        if let Some(rect) = Rect::from_xywh(x as f32, ty as f32, tw as f32, th as f32) {
-            pixmap.fill_rect(rect, &paint, Transform::identity(), None);
-        }
-        draw_text(
-            pixmap,
-            text,
-            badge_size,
-            ink,
-            255,
-            x + 5,
-            ty + 1,
-            tw,
-            None,
-            None,
-        );
+    // Draw one tag at a given top edge. The placement (which top edge) is
+    // decided by `place_diag_labels` after all boxes are drawn, so tags
+    // never overlap each other or sit half inside their box.
+    let draw_tag_at =
+        |pixmap: &mut Pixmap, x: i32, ty: i32, text: &str, bg: [u8; 4], ink: [u8; 3]| {
+            let tw = line_width(text, badge_size, None) as i32 + 10;
+            let th = badge_size + 4;
+            let mut paint = Paint::default();
+            paint.set_color_rgba8(bg[0], bg[1], bg[2], bg[3]);
+            paint.anti_alias = true;
+            if let Some(rect) = Rect::from_xywh(x as f32, ty as f32, tw as f32, th as f32) {
+                pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+            }
+            draw_text(
+                pixmap,
+                text,
+                badge_size,
+                ink,
+                255,
+                x + 5,
+                ty + 1,
+                tw,
+                None,
+                None,
+            );
+        };
+
+    // Every tag, collected while the boxes are drawn and placed together
+    // at the end: (placement, text, bg, ink).
+    let mut labels: Vec<(DiagLabel, String, [u8; 4], [u8; 3])> = Vec::new();
+    let tag_size = |text: &str| -> (i32, i32) {
+        (
+            line_width(text, badge_size, None) as i32 + 10,
+            badge_size + 4,
+        )
     };
 
     for drop in &entry.dropped {
-        let [x1, y1, _, _] = clamp_box(drop.bbox, wi, hi);
+        let [x1, y1, _, y2] = clamp_box(drop.bbox, wi, hi);
         rect_outline(
             &mut pixmap,
             drop.bbox,
@@ -902,44 +979,60 @@ pub fn render_ocr_diagnostic(
             Some([249, 115, 22, 35]),
             true,
         );
-        tag(
-            &mut pixmap,
-            x1,
-            y1,
-            &format!("DROP ({})", drop.reason),
+        let text = format!("DROP ({})", drop.reason);
+        let (tw, th) = tag_size(&text);
+        labels.push((
+            DiagLabel {
+                x: x1,
+                box_top: y1,
+                box_bottom: y2,
+                width: tw,
+                height: th,
+            },
+            text,
             [194, 65, 12, 230],
             [255, 255, 255],
-        );
+        ));
     }
     // One block painter for both the kept green and the highlighted blue;
-    // the highlight is drawn last so its tag sits on top.
-    let draw_block = |pixmap: &mut Pixmap,
-                      blk: &crate::model::Block,
-                      stroke: [u8; 4],
-                      width_extra: f32,
-                      fill: [u8; 4],
-                      tag_bg: [u8; 4],
-                      ink: [u8; 3],
-                      label: &str,
-                      dashed: bool| {
-        let [x1, y1, _, _] = clamp_box(blk.bbox, wi, hi);
-        rect_outline(
-            pixmap,
-            blk.bbox,
-            stroke,
-            stroke_w + width_extra,
-            Some(fill),
-            dashed,
-        );
-        tag(
-            pixmap,
-            x1,
-            y1,
-            &format!("#{} · {:.2} · {}", blk.id, blk.confidence, label),
-            tag_bg,
-            ink,
-        );
-    };
+    // the highlight is drawn last so its tag sits on top. The tag is only
+    // collected here; all tags are placed (de-collided) and drawn together
+    // after every box, so a tag never covers another tag or its own box.
+    let mut draw_block =
+        |pixmap: &mut Pixmap,
+         blk: &crate::model::Block,
+         stroke: [u8; 4],
+         width_extra: f32,
+         fill: [u8; 4],
+         tag_bg: [u8; 4],
+         ink: [u8; 3],
+         label: &str,
+         dashed: bool,
+         labels: &mut Vec<(DiagLabel, String, [u8; 4], [u8; 3])>| {
+            let [x1, y1, _, y2] = clamp_box(blk.bbox, wi, hi);
+            rect_outline(
+                pixmap,
+                blk.bbox,
+                stroke,
+                stroke_w + width_extra,
+                Some(fill),
+                dashed,
+            );
+            let text = format!("#{} · {:.2} · {}", blk.id, blk.confidence, label);
+            let (tw, th) = tag_size(&text);
+            labels.push((
+                DiagLabel {
+                    x: x1,
+                    box_top: y1,
+                    box_bottom: y2,
+                    width: tw,
+                    height: th,
+                },
+                text,
+                tag_bg,
+                ink,
+            ));
+        };
     for blk in &entry.blocks {
         if Some(blk.id) == highlight {
             continue;
@@ -957,6 +1050,7 @@ pub fn render_ocr_diagnostic(
                 [0, 0, 0],
                 "kept",
                 false,
+                &mut labels,
             );
         } else {
             // Manually filtered out: drawn like a dropped item (dashed
@@ -972,6 +1066,7 @@ pub fn render_ocr_diagnostic(
                 [255, 255, 255],
                 "filtered",
                 true,
+                &mut labels,
             );
         }
     }
@@ -990,8 +1085,16 @@ pub fn render_ocr_diagnostic(
                 [255, 255, 255],
                 label,
                 false,
+                &mut labels,
             );
         }
+    }
+    // Place every tag together (de-collided: no two overlap, none sits
+    // half inside its box) and draw them on top of the boxes.
+    let specs: Vec<DiagLabel> = labels.iter().map(|(s, _, _, _)| *s).collect();
+    let tops = place_diag_labels(&specs, hi);
+    for (i, (_, text, bg, ink)) in labels.iter().enumerate() {
+        draw_tag_at(&mut pixmap, specs[i].x, tops[i], text, *bg, *ink);
     }
 
     let mut out = RgbImage::new(w, h);
@@ -1223,6 +1326,45 @@ mod tests {
         // An unknown id highlights nothing.
         let unknown = render_ocr_diagnostic(&img, &entry, Some(99));
         assert_eq!(plain.as_raw(), unknown.as_raw());
+    }
+
+    #[test]
+    fn diag_labels_stack_instead_of_overlapping() {
+        // Two clustered boxes (near-identical tops): the second tag stacks
+        // above the first instead of landing on top of it.
+        let labels = vec![
+            DiagLabel {
+                x: 10,
+                box_top: 100,
+                box_bottom: 120,
+                width: 80,
+                height: 17,
+            },
+            DiagLabel {
+                x: 12,
+                box_top: 102,
+                box_bottom: 122,
+                width: 80,
+                height: 17,
+            },
+        ];
+        let tops = place_diag_labels(&labels, 400);
+        // First tag directly above its box; second stacked above the first.
+        assert_eq!(tops[0], 100 - 17);
+        assert_eq!(tops[1], 100 - 17 - 17 - 2);
+        // No overlap: the second tag's bottom is above the first's top.
+        assert!(tops[1] + 17 <= tops[0]);
+        // A box at the top of the image has no room above — its tag goes
+        // below the box instead of overlapping it.
+        let top = vec![DiagLabel {
+            x: 10,
+            box_top: 5,
+            box_bottom: 25,
+            width: 80,
+            height: 17,
+        }];
+        let tops = place_diag_labels(&top, 400);
+        assert_eq!(tops[0], 25 + 2);
     }
 
     #[test]
