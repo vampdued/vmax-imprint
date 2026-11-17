@@ -227,8 +227,8 @@ impl OcrEngine {
         } else {
             1.0
         };
-        let mut dw = (((w as f32 * ratio) as usize as f32 / 32.0).round() as usize * 32).max(32);
-        let mut dh = (((h as f32 * ratio) as usize as f32 / 32.0).round() as usize * 32).max(32);
+        let dw = (((w as f32 * ratio) as usize as f32 / 32.0).round() as usize * 32).max(32);
+        let dh = (((h as f32 * ratio) as usize as f32 / 32.0).round() as usize * 32).max(32);
         let resized = image::imageops::resize(
             img,
             dw as u32,

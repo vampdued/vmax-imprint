@@ -72,6 +72,47 @@ impl ExtractedData {
     }
 }
 
+/// How the translation font size is chosen when rendering.
+///
+/// * `UniformGrow` (A, default): one size for every block in the image —
+///   the median of the blocks' `font_size_est` (the original text's size)
+///   — and each plate grows (wider/taller) to fit its translation at that
+///   size. The original meme uses one size for all its captions; the old
+///   per-block fit gave each block its own size (45/39/29 on the user's
+///   _13 image), which reads as "the font sizes are different".
+/// * `PerBlock` (B): the original behaviour — each block is fitted
+///   independently to its own footprint, so plates stay on the original
+///   footprint but sizes differ.
+/// * `UniformSmallest` (C): one size for every block, the smallest of the
+///   per-block fitted sizes, so all blocks fit their original footprints
+///   at one (smaller) size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SizingMode {
+    UniformGrow,
+    PerBlock,
+    UniformSmallest,
+}
+
+impl Default for SizingMode {
+    fn default() -> Self {
+        SizingMode::UniformGrow
+    }
+}
+
+impl SizingMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            SizingMode::UniformGrow => "Uniform — plates grow",
+            SizingMode::PerBlock => "Per-block — plates stay put",
+            SizingMode::UniformSmallest => "Uniform smallest",
+        }
+    }
+    pub fn all() -> [SizingMode; 3] {
+        [SizingMode::UniformGrow, SizingMode::PerBlock, SizingMode::UniformSmallest]
+    }
+}
+
 /// Persisted UI settings — same file and keys as the Python app
 /// (`~/.caption_replacer.json`) so settings carry over.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +127,8 @@ pub struct Settings {
     pub conf: f64,
     #[serde(default = "default_minchars")]
     pub minchars: i32,
+    #[serde(default)]
+    pub sizing: SizingMode,
 }
 
 pub fn default_conf() -> f64 {
@@ -103,6 +146,7 @@ impl Default for Settings {
             font: String::new(),
             conf: 0.6,
             minchars: 12,
+            sizing: SizingMode::UniformGrow,
         }
     }
 }

@@ -79,7 +79,7 @@ pub fn sample_colors(img_rgb: &RgbImage, bbox: [i32; 4]) -> ([u8; 3], [u8; 3], b
             let step = (inner.len() / 2000).max(1);
             inner = inner.into_iter().step_by(step).collect();
         }
-        let mut dists: Vec<f32> = inner
+        let dists: Vec<f32> = inner
             .iter()
             .map(|p| {
                 let d = [

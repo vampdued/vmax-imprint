@@ -37,7 +37,7 @@ pub fn save_image(img: &RgbImage, path: &Path) -> Result<()> {
     let (w, h) = (img.width(), img.height());
     match ext.as_str() {
         "jpg" | "jpeg" => {
-            let mut enc = JpegEncoder::new_with_quality(file, 95);
+            let enc = JpegEncoder::new_with_quality(file, 95);
             use image::ImageEncoder;
             enc.write_image(img.as_raw(), w, h, image::ExtendedColorType::Rgb8)
                 .context("JPEG encode failed")?;
@@ -45,13 +45,13 @@ pub fn save_image(img: &RgbImage, path: &Path) -> Result<()> {
         "webp" => {
             // image 0.25 only supports *lossless* WebP encoding (no q95
             // lossy path) — documented deviation from Python's q95 lossy.
-            let mut enc = image::codecs::webp::WebPEncoder::new_lossless(file);
+            let enc = image::codecs::webp::WebPEncoder::new_lossless(file);
             use image::ImageEncoder;
             enc.write_image(img.as_raw(), w, h, image::ExtendedColorType::Rgb8)
                 .context("WebP encode failed")?;
         }
         _ => {
-            let mut enc = PngEncoder::new(file);
+            let enc = PngEncoder::new(file);
             use image::ImageEncoder;
             enc.write_image(img.as_raw(), w, h, image::ExtendedColorType::Rgb8)
                 .context("PNG encode failed")?;

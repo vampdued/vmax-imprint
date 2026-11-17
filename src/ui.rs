@@ -57,6 +57,7 @@ pub struct CaptionStudioApp {
     font_path: String,
     conf: f64,
     minchars: i32,
+    sizing: crate::model::SizingMode,
 
     // Data
     extracted: Option<ExtractedData>,
@@ -96,6 +97,7 @@ impl CaptionStudioApp {
             font_path: settings.font,
             conf: settings.conf,
             minchars: settings.minchars,
+            sizing: settings.sizing,
             extracted: None,
             editor_text: String::new(),
             ocr: None,
@@ -146,6 +148,7 @@ impl CaptionStudioApp {
             font: self.font_path.clone(),
             conf: self.conf.clamp(0.0, 1.0),
             minchars: self.minchars.max(0),
+            sizing: self.sizing,
         }
         .save();
     }
@@ -444,8 +447,9 @@ impl CaptionStudioApp {
         } else {
             Some(self.font_path.trim().to_string())
         };
+        let sizing = self.sizing;
         std::thread::spawn(move || {
-            render_worker(in_dir, out_dir, data, font, tx, cancel);
+            render_worker(in_dir, out_dir, data, font, sizing, tx, cancel);
         });
     }
 
@@ -528,7 +532,7 @@ impl CaptionStudioApp {
                 } else {
                     Some(self.font_path.trim())
                 };
-                render_entry(&img, &entry, font)
+                render_entry(&img, &entry, font, self.sizing)
             }
         };
         let (w, h) = (rendered.width(), rendered.height());
@@ -711,6 +715,7 @@ fn render_worker(
     output_dir: PathBuf,
     data: ExtractedData,
     font: Option<String>,
+    sizing: crate::model::SizingMode,
     tx: Sender<WorkerMsg>,
     cancel: Arc<AtomicBool>,
 ) {
@@ -742,7 +747,7 @@ fn render_worker(
                 return Ok("copied");
             }
             let img = load_image(&src).map_err(|e| e.to_string())?;
-            let rendered = render_entry(&img, entry, font_ref);
+            let rendered = render_entry(&img, entry, font_ref, sizing);
             save_image(&rendered, &dst).map_err(|e| e.to_string())?;
             Ok("rendered")
         })();
@@ -874,6 +879,26 @@ impl eframe::App for CaptionStudioApp {
                     ui.horizontal(|ui| {
                         ui.label("Ignore unboxed text < chars:");
                         ui.add(egui::DragValue::new(&mut self.minchars).range(0..=60).speed(1));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Font sizing:");
+                        let mut changed = false;
+                        egui::ComboBox::from_id_salt("sizing_mode")
+                            .selected_text(self.sizing.label())
+                            .show_ui(ui, |ui| {
+                                for mode in crate::model::SizingMode::all() {
+                                    if ui
+                                        .selectable_value(&mut self.sizing, mode, mode.label())
+                                        .changed()
+                                    {
+                                        changed = true;
+                                    }
+                                }
+                            });
+                        if changed {
+                            self.save_settings();
+                            self.preview_key.clear();
+                        }
                     });
                     ui.horizontal(|ui| {
                         if ui.button("Apply Thresholds (Instant)").clicked() {

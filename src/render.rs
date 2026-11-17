@@ -357,13 +357,67 @@ struct RenderJob {
 /// Render one image entry with its translations — Python `render_entry`.
 /// Blocks without `new_text` are left untouched (their original text stays,
 /// because nothing is inpainted for them).
-pub fn render_entry(img: &RgbImage, entry: &ImageEntry, custom_font: Option<&str>) -> RgbImage {
+/// Per-block fit bounds (start size, max width, max height) for the
+/// original per-block behaviour — each block fitted independently to its
+/// own footprint.
+fn per_block_bounds(blk: &crate::model::Block, avg_h: f32, w: i32) -> (i32, i32, i32) {
+    let [x1, _, x2, y2] = blk.bbox;
+    let start_size = 16.max((avg_h * 1.05) as i32);
+    let raw_max_w = if (x2 - x1) as f32 > w as f32 * 0.6 {
+        (w as f32 * 0.86) as i32
+    } else {
+        x2 - x1
+    }
+    .max(x2 - x1);
+    let max_w = (w - 56).min(raw_max_w);
+    let max_h = ((y2 - blk.bbox[1]) as f32 * 1.3).max(avg_h * 1.5) as i32;
+    (start_size, max_w, max_h)
+}
+
+pub fn render_entry(
+    img: &RgbImage,
+    entry: &ImageEntry,
+    custom_font: Option<&str>,
+    sizing: crate::model::SizingMode,
+) -> RgbImage {
+    use crate::model::SizingMode;
     let custom_family = custom_font.and_then(load_custom_font);
     let (w, h) = (img.width(), img.height());
     let (wi, hi) = (w as i32, h as i32);
     let mut work = img.clone();
     let mut inpaint_mask = vec![0u8; (w * h) as usize];
     let mut jobs: Vec<RenderJob> = Vec::new();
+
+    // Uniform modes need one size for the whole image, computed up front
+    // from the blocks that actually have a translation.
+    let live: Vec<&crate::model::Block> = entry
+        .blocks
+        .iter()
+        .filter(|b| !b.new_text.trim().is_empty())
+        .collect();
+    // UniformGrow (A): the original's size — the median of the blocks'
+    // font_size_est. UniformSmallest (C): the smallest per-block fit.
+    let uniform_size = {
+        let mut ests: Vec<i32> = live.iter().map(|b| b.font_size_est.max(16)).collect();
+        ests.sort_unstable();
+        ests.get(ests.len() / 2).copied().unwrap_or(16)
+    };
+    let smallest_size = {
+        let mut sizes: Vec<i32> = Vec::new();
+        for blk in &live {
+            let line_bboxes = if blk.line_bboxes.is_empty() {
+                vec![blk.bbox]
+            } else {
+                blk.line_bboxes.clone()
+            };
+            let avg_h = line_bboxes.iter().map(|b| (b[3] - b[1]) as f32).sum::<f32>()
+                / line_bboxes.len() as f32;
+            let (start_size, max_w, max_h) = per_block_bounds(blk, avg_h, wi);
+            let fitted = fit_text_to_box(blk.new_text.trim(), max_w, max_h, start_size, custom_family);
+            sizes.push(fitted.size);
+        }
+        sizes.into_iter().min().unwrap_or(16)
+    };
 
     for blk in &entry.blocks {
         let new_text = blk.new_text.trim();
@@ -379,15 +433,38 @@ pub fn render_entry(img: &RgbImage, entry: &ImageEntry, custom_font: Option<&str
         let avg_h = line_bboxes.iter().map(|b| (b[3] - b[1]) as f32).sum::<f32>()
             / line_bboxes.len() as f32;
 
-        let start_size = 16.max((avg_h * 1.05) as i32);
-        let raw_max_w = if (x2 - x1) as f32 > w as f32 * 0.6 {
-            (w as f32 * 0.86) as i32
-        } else {
-            x2 - x1
-        }
-        .max(x2 - x1);
-        let max_w = (w as i32 - 56).min(raw_max_w);
-        let max_h = ((y2 - y1) as f32 * 1.3).max(avg_h * 1.5) as i32;
+        // Fit bounds per sizing mode. PerBlock is the original behaviour.
+        // UniformGrow uses one size for all blocks and lets the plate grow:
+        // full image width and the vertical space available from the
+        // block's anchor, so the fit only shrinks if the plate would run
+        // off the image. UniformSmallest uses one (small) size for all
+        // blocks inside their original footprints.
+        let (start_size, max_w, max_h) = match sizing {
+            SizingMode::PerBlock => per_block_bounds(blk, avg_h, wi),
+            SizingMode::UniformGrow => {
+                // Full image width: the plate grows to the very edge, so a
+                // long line at the uniform size stays on one line instead
+                // of wrapping at the w-56 margin and colliding with the
+                // block above (the Python scan's median font_size_est is
+                // 53 vs Rust's 51, and b3's line at 53 is 1395px — just
+                // over w-56=1384 — so the margin alone flips it to 2
+                // lines and its plate grows up into the block above).
+                let max_w = wi;
+                // Plate grows downward from y1 (top/middle blocks) or
+                // upward from y2 (bottom blocks); the fit must keep the
+                // plate inside the image.
+                let max_h = if y2 > (h as f32 * 0.65) as i32 {
+                    y2.max(16)
+                } else {
+                    (hi - y1).max(16)
+                };
+                (uniform_size, max_w, max_h)
+            }
+            SizingMode::UniformSmallest => {
+                let (_, max_w, max_h) = per_block_bounds(blk, avg_h, wi);
+                (smallest_size, max_w, max_h)
+            }
+        };
 
         let fitted = fit_text_to_box(new_text, max_w, max_h, start_size, custom_family);
         let chosen_size = fitted.size;
@@ -767,12 +844,61 @@ mod tests {
             }
         }
         let entry = test_entry();
-        let out = render_entry(&img, &entry, None);
+        let out = render_entry(&img, &entry, None, crate::model::SizingMode::PerBlock);
         assert_eq!(out.dimensions(), (400, 200));
         // The plate area should be dark-ish (bg 18,18,18 at alpha 232 over
         // the inpainted background), not the original mid-grey.
         let p = out.get_pixel(30, 30);
         assert!(p[0] < 120, "plate pixel too bright: {p:?}");
+    }
+
+    /// UniformGrow renders every block at ONE size (the median
+    /// font_size_est) and lets the plate grow: the long-translation block
+    /// that used to shrink to 29 and wrap to 2 lines now stays at the
+    /// uniform size on one line.
+    #[test]
+    fn uniform_grow_keeps_one_size_and_grows_plate() {
+        use crate::model::{Block, ImageEntry};
+        // Two blocks whose originals share one size (font_size_est 50)
+        // but whose translations differ in length: the narrow block's
+        // translation is much longer than its original.
+        let mk = |id: usize, bbox: [i32; 4], new_text: &str| Block {
+            id,
+            bbox,
+            line_bboxes: vec![bbox],
+            original_text: String::new(),
+            new_text: new_text.to_string(),
+            confidence: 0.9,
+            text_color: [245, 225, 131],
+            bg_color: [18, 18, 18],
+            is_boxed: true,
+            font_size_est: 50,
+        };
+        let entry = ImageEntry {
+            file: "u.jpg".to_string(),
+            width: 1440,
+            height: 1800,
+            raw_lines: vec![],
+            blocks: vec![
+                mk(1, [24, 36, 1368, 196], "Short line here"),
+                mk(2, [26, 1729, 707, 1777], "Andha group la Siddhu msg vandhurundhudhu"),
+            ],
+            dropped: vec![],
+        };
+        let img = RgbImage::new(1440, 1800);
+        let out = render_entry(&img, &entry, None, crate::model::SizingMode::UniformGrow);
+        assert_eq!(out.dimensions(), (1440, 1800));
+        // The narrow block's plate must have grown wider than its
+        // original 681px footprint to hold the 42-char line at size ~50
+        // (at size 50 the line is ~920px wide): check a pixel well right
+        // of the original bbox is plate-dark, not background.
+        let p = out.get_pixel(850, 1750);
+        assert!(p[0] < 120, "uniform plate did not grow past the footprint: {p:?}");
+        // And the wide block must NOT have shrunk: its text is still at
+        // the uniform size, so its plate is a single line tall (~50px),
+        // not a shrunken multi-line stack.
+        let p2 = out.get_pixel(700, 60);
+        assert!(p2[0] < 120, "wide block plate missing: {p2:?}");
     }
 
     #[test]
