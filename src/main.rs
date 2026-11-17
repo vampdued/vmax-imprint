@@ -9,6 +9,10 @@
 //!   caption-studio --version
 //!   caption-studio --ocr-test <image>   (prints raw OCR lines as JSON to
 //!                                        stdout and writes ocr-test.json)
+//!   caption-studio --shot-test <input> <output> [--json <file>]
+//!                                        (drives the app through every
+//!                                        reviewable state, saving a PNG per
+//!                                        state into <output>)
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -43,6 +47,8 @@ fn main() -> anyhow::Result<()> {
             println!("Usage:");
             println!("  caption-studio                 Launch the GUI");
             println!("  caption-studio --ocr-test <image>  Run OCR on one image, print raw lines as JSON");
+            println!("  caption-studio --shot-test <input> <output> [--json <file>]");
+            println!("      Drive the app through every reviewable state, saving a PNG per state into <output>");
             println!("  caption-studio --version       Print version");
             Ok(())
         }
@@ -60,6 +66,33 @@ fn main() -> anyhow::Result<()> {
             std::fs::write(&out, &json)?;
             eprintln!("wrote {}", out.display());
             Ok(())
+        }
+        Some("--shot-test") => {
+            let input = args
+                .get(2)
+                .map(PathBuf::from)
+                .ok_or_else(|| anyhow::anyhow!("--shot-test needs an input folder"))?;
+            let output = args
+                .get(3)
+                .map(PathBuf::from)
+                .ok_or_else(|| anyhow::anyhow!("--shot-test needs an output folder"))?;
+            let mut json = None;
+            let mut i = 4;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--json" => {
+                        json = args.get(i + 1).map(PathBuf::from);
+                        i += 2;
+                    }
+                    other => {
+                        anyhow::bail!("--shot-test: unknown argument: {other}");
+                    }
+                }
+            }
+            if json.is_none() && args.len() > 4 {
+                anyhow::bail!("--shot-test: --json needs a file");
+            }
+            ui::run_shot_test(input, output, json)
         }
         Some(other) => {
             eprintln!("unknown argument: {other} (see --help)");

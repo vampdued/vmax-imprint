@@ -280,6 +280,11 @@ pub struct CaptionStudioApp {
     log_follow: bool,
     /// How many log lines the last frame saw (new lines = a follow scroll).
     log_len_seen: usize,
+    /// Whether the activity log panel is shown (the X in its header hides
+    /// it; the status bar brings it back).
+    show_log: bool,
+    /// The screenshot test mode (`--shot-test`), if this run is one.
+    shot_test: Option<ShotTest>,
     /// The last save destination (the output folder after a render, the
     /// file after Save captions), shown in the status bar.
     last_save_path: Option<String>,
@@ -369,6 +374,8 @@ impl CaptionStudioApp {
             log_filter: LogFilter::All,
             log_follow: true,
             log_len_seen: 0,
+            show_log: true,
+            shot_test: None,
             last_save_path: None,
             status: "Choose an input folder, then click Scan & Extract Text.".to_string(),
             progress: 0.0,
@@ -1902,6 +1909,10 @@ impl eframe::App for CaptionStudioApp {
             }
         }
 
+        // Shot-test mode: drive the state machine before the modals and
+        // panels are drawn, so this frame renders the new state.
+        self.shot_test_step(&ctx);
+
         // --- Confirm-copy-originals modal (Python askYesNo) ---
         // While it is open the panels behind it are disabled (a focus trap:
         // egui windows are non-modal, so without this Tab and clicks escape
@@ -2172,6 +2183,11 @@ impl eframe::App for CaptionStudioApp {
                             node.set_live(egui::accesskit::Live::Polite);
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            // When the log panel is hidden, the bar offers it
+                            // back (the X in the log header hides it).
+                            if !self.show_log && ui.small_button("Show log").clicked() {
+                                self.show_log = true;
+                            }
                             // A solid accent fill, not the 17%-alpha wash (1.23:1
                             // against its track — the bar read as empty at 100%),
                             // and capped at ~220px so it reads as a bar instead of a
@@ -2193,118 +2209,135 @@ impl eframe::App for CaptionStudioApp {
         // Structured table (Phase 5, item 15): newest first, zebra rows,
         // filters All / Warnings with counts, Copy log, Stop (disabled at
         // idle). Auto-scroll follows the newest line until the user scrolls
-        // away from the top.
-        egui::Panel::bottom("activity_log")
-            .exact_size(188.0)
-            .show(ui, |ui| {
-                ui.add_enabled_ui(!modal_open, |ui| {
-                    let t = crate::theme::Tokens::get(ui.ctx());
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("ACTIVITY")
-                                .font(crate::theme::display(13.0))
-                                .color(t.accent_ink),
-                        );
-                        // Filters with counts (warnings = warn + error lines).
-                        let total = self.log_lines.len();
-                        let warnings = self
-                            .log_lines
-                            .iter()
-                            .filter(|l| l.level != LogLevel::Info)
-                            .count();
-                        let all_label = format!("All ({total})");
-                        let warn_label = format!("Warnings ({warnings})");
-                        if let Some(f) = segmented(
-                            ui,
-                            self.log_filter,
-                            &[
-                                (LogFilter::All, all_label.as_str()),
-                                (LogFilter::Warnings, warn_label.as_str()),
-                            ],
-                        ) {
-                            self.log_filter = f;
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            // Stop is only meaningful while a job runs — it stays
-                            // disabled at idle so its state tells the truth.
-                            ui.add_enabled_ui(self.busy, |ui| {
-                                if icon_text_button(ui, "octagon-x", "Stop").clicked() {
-                                    self.cancel.store(true, Ordering::SeqCst);
+        // away from the top. The panel is resizable (drag its top edge) and
+        // closable (the X in its header); the status bar brings it back.
+        if self.show_log {
+            egui::Panel::bottom("activity_log")
+                .resizable(true)
+                .default_size(188.0)
+                .min_size(64.0)
+                .max_size(480.0)
+                .show(ui, |ui| {
+                    ui.add_enabled_ui(!modal_open, |ui| {
+                        let t = crate::theme::Tokens::get(ui.ctx());
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new("ACTIVITY")
+                                    .font(crate::theme::display(13.0))
+                                    .color(t.accent_ink),
+                            );
+                            // Filters with counts (warnings = warn + error lines).
+                            let total = self.log_lines.len();
+                            let warnings = self
+                                .log_lines
+                                .iter()
+                                .filter(|l| l.level != LogLevel::Info)
+                                .count();
+                            let all_label = format!("All ({total})");
+                            let warn_label = format!("Warnings ({warnings})");
+                            if let Some(f) = segmented(
+                                ui,
+                                self.log_filter,
+                                &[
+                                    (LogFilter::All, all_label.as_str()),
+                                    (LogFilter::Warnings, warn_label.as_str()),
+                                ],
+                            ) {
+                                self.log_filter = f;
+                            }
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    // Close hides the panel (the status bar brings
+                                    // it back); first in a right-to-left row, so it
+                                    // sits at the far right.
+                                    if icon_text_button(ui, "x", "Close").clicked() {
+                                        self.show_log = false;
+                                    }
+                                    // Stop is only meaningful while a job runs — it stays
+                                    // disabled at idle so its state tells the truth.
+                                    ui.add_enabled_ui(self.busy, |ui| {
+                                        if icon_text_button(ui, "octagon-x", "Stop").clicked() {
+                                            self.cancel.store(true, Ordering::SeqCst);
+                                        }
+                                    });
+                                    if icon_text_button(ui, "copy", "Copy log").clicked() {
+                                        self.copy_log();
+                                    }
+                                },
+                            );
+                        });
+                        ui.separator();
+                        let visible = log_visible(&self.log_lines, self.log_filter);
+                        let new_lines = self.log_lines.len() != self.log_len_seen;
+                        let out = egui::ScrollArea::vertical().show(ui, |ui| {
+                            for (i, line) in visible.iter().enumerate() {
+                                // Zebra rows: alternate the card fill against the
+                                // panel background so adjacent lines stay distinct.
+                                let frame = egui::Frame::new()
+                                    .fill(if i % 2 == 0 {
+                                        t.card
+                                    } else {
+                                        egui::Color32::TRANSPARENT
+                                    })
+                                    .inner_margin(egui::Margin::symmetric(6, 2));
+                                let row = frame.show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.horizontal(|ui| {
+                                        ui.monospace(
+                                            egui::RichText::new(&line.time).color(t.text_faint),
+                                        );
+                                        // The level is a short coloured tag (colour
+                                        // is not the only cue — the tag text names
+                                        // it); the result itself stays plain so the
+                                        // log reads quietly instead of shouting.
+                                        match line.level {
+                                            LogLevel::Warn => {
+                                                ui.colored_label(
+                                                    t.warning,
+                                                    egui::RichText::new("WARN").monospace().small(),
+                                                );
+                                            }
+                                            LogLevel::Error => {
+                                                ui.colored_label(
+                                                    t.danger,
+                                                    egui::RichText::new("ERROR")
+                                                        .monospace()
+                                                        .small(),
+                                                );
+                                            }
+                                            LogLevel::Info => {
+                                                ui.colored_label(
+                                                    t.ok,
+                                                    egui::RichText::new("INFO").monospace().small(),
+                                                );
+                                            }
+                                        }
+                                        if let Some(f) = &line.file {
+                                            ui.monospace(egui::RichText::new(f).color(t.text_dim));
+                                        }
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(&line.result).monospace(),
+                                            )
+                                            .wrap(),
+                                        );
+                                    });
+                                });
+                                // Follow the newest line (the first row) while the
+                                // user hasn't scrolled away from the top.
+                                if i == 0 && new_lines && self.log_follow {
+                                    row.response.scroll_to_me(Some(egui::Align::TOP));
                                 }
-                            });
-                            if icon_text_button(ui, "copy", "Copy log").clicked() {
-                                self.copy_log();
                             }
                         });
+                        // The user scrolled away from the top (the newest lines):
+                        // stop following until they come back to the top.
+                        self.log_follow = out.state.clamped_offset().y <= 1.0;
+                        self.log_len_seen = self.log_lines.len();
                     });
-                    ui.separator();
-                    let visible = log_visible(&self.log_lines, self.log_filter);
-                    let new_lines = self.log_lines.len() != self.log_len_seen;
-                    let out = egui::ScrollArea::vertical().show(ui, |ui| {
-                        for (i, line) in visible.iter().enumerate() {
-                            // Zebra rows: alternate the card fill against the
-                            // panel background so adjacent lines stay distinct.
-                            let frame = egui::Frame::new()
-                                .fill(if i % 2 == 0 {
-                                    t.card
-                                } else {
-                                    egui::Color32::TRANSPARENT
-                                })
-                                .inner_margin(egui::Margin::symmetric(6, 2));
-                            let row = frame.show(ui, |ui| {
-                                ui.set_width(ui.available_width());
-                                ui.horizontal(|ui| {
-                                    ui.monospace(
-                                        egui::RichText::new(&line.time).color(t.text_faint),
-                                    );
-                                    // The level is a short coloured tag (colour
-                                    // is not the only cue — the tag text names
-                                    // it); the result itself stays plain so the
-                                    // log reads quietly instead of shouting.
-                                    match line.level {
-                                        LogLevel::Warn => {
-                                            ui.colored_label(
-                                                t.warning,
-                                                egui::RichText::new("WARN").monospace().small(),
-                                            );
-                                        }
-                                        LogLevel::Error => {
-                                            ui.colored_label(
-                                                t.danger,
-                                                egui::RichText::new("ERROR").monospace().small(),
-                                            );
-                                        }
-                                        LogLevel::Info => {
-                                            ui.colored_label(
-                                                t.ok,
-                                                egui::RichText::new("INFO").monospace().small(),
-                                            );
-                                        }
-                                    }
-                                    if let Some(f) = &line.file {
-                                        ui.monospace(egui::RichText::new(f).color(t.text_dim));
-                                    }
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(&line.result).monospace(),
-                                        )
-                                        .wrap(),
-                                    );
-                                });
-                            });
-                            // Follow the newest line (the first row) while the
-                            // user hasn't scrolled away from the top.
-                            if i == 0 && new_lines && self.log_follow {
-                                row.response.scroll_to_me(Some(egui::Align::TOP));
-                            }
-                        }
-                    });
-                    // The user scrolled away from the top (the newest lines):
-                    // stop following until they come back to the top.
-                    self.log_follow = out.state.clamped_offset().y <= 1.0;
-                    self.log_len_seen = self.log_lines.len();
                 });
-            });
+        }
 
         // --- Header (SPEC §3: 60px) ---
         // Brand (316px, aligned with the sidebar) | the 4-step stepper |
@@ -2388,205 +2421,268 @@ impl eframe::App for CaptionStudioApp {
                     }
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        // Source & Output card (SPEC §2): path rows with the tail
-                        // shown + full path on hover, 36px browse buttons; the font
-                        // field stays editable (short values, placeholder for the
-                        // accepted extensions); the sizing select's popup opens
-                        // UPWARD so it never covers the OCR card below (defect 1).
-                        sidebar_card(ui, "SOURCE & OUTPUT", |ui| {
-                            if path_row(ui, "Input folder", &self.input_dir).clicked() {
-                                self.browse_input();
-                            }
-                            ui.add_space(8.0);
-                            if path_row(ui, "Output folder", &self.output_dir).clicked() {
-                                self.browse_output();
-                            }
-                            ui.add_space(8.0);
-                            let font_label = ui
-                                .label(crate::theme::label_text(
-                                    "Custom font (optional)",
-                                    crate::theme::LABEL,
-                                ))
-                                .id;
-                            ui.horizontal(|ui| {
-                                let resp = ui
-                                    .add(
-                                        egui::TextEdit::singleline(&mut self.font_path)
-                                            .hint_text(".ttf  .otf  .ttc")
-                                            .desired_width(
-                                                ui.available_width()
-                                                    - 36.0
-                                                    - ui.spacing().item_spacing.x,
-                                            ),
-                                    )
-                                    .labelled_by(font_label);
-                                focus_ring(ui, &resp);
-                                let path = self.font_path.clone();
-                                if !path.is_empty() {
-                                    resp.on_hover_text(path);
-                                }
-                                let browse = crate::icons::button_box(
-                                    ui,
-                                    "folder",
-                                    36.0,
-                                    false,
-                                    "Browse for font file",
-                                );
-                                focus_ring(ui, &browse);
-                                if browse.clicked() {
-                                    self.browse_font();
-                                }
-                            });
-                            ui.add_space(8.0);
-                            ui.label(crate::theme::label_text("Font sizing", crate::theme::LABEL));
-                            let sizing_btn = ui.add_sized(
-                                egui::vec2(ui.available_width(), 36.0),
-                                egui::Button::new(format!("{} ▾", self.sizing.label())),
-                            );
-                            focus_ring(ui, &sizing_btn);
-                            let mut picked: Option<crate::model::SizingMode> = None;
-                            egui::Popup::menu(&sizing_btn)
-                                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                                // The popup is exactly the button's width, so it
-                                // stays inside the 316px sidebar instead of
-                                // spilling into the workspace.
-                                .width(sizing_btn.rect.width())
-                                // Defect 1: the old ComboBox opened downward and
-                                // covered the OCR Thresholds card. This popup opens
-                                // upward (its bottom edge at the button's top edge)
-                                // on the top layer, falling back to downward only
-                                // when it doesn't fit above.
-                                .align(egui::RectAlign::TOP_START)
-                                .align_alternatives(&[egui::RectAlign::BOTTOM_START])
-                                .show(|ui| {
-                                    for mode in crate::model::SizingMode::all() {
-                                        if ui
-                                            .selectable_value(&mut self.sizing, mode, mode.label())
-                                            .clicked()
-                                        {
-                                            picked = Some(mode);
-                                            egui::Popup::close_id(
-                                                ui.ctx(),
-                                                egui::Popup::default_response_id(&sizing_btn),
-                                            );
-                                        }
+                        // One unified container for the whole sidebar: the
+                        // three sections share a single frame and one inner
+                        // width, separated by hairlines — the separate boxes
+                        // made the layout feel fragmented.
+                        let t = crate::theme::Tokens::get(ui.ctx());
+                        egui::Frame::new()
+                            .fill(t.card)
+                            .stroke(egui::Stroke::new(1.0, t.card_border))
+                            .corner_radius(egui::CornerRadius::same(t.radius_sm as u8))
+                            .inner_margin(egui::Margin::same(12))
+                            .show(ui, |ui| {
+                                // Source & Output section (SPEC §2): path rows with the tail
+                                // shown + full path on hover, 36px browse buttons; the font
+                                // field stays editable (short values, placeholder for the
+                                // accepted extensions); the sizing select's popup opens
+                                // UPWARD so it never covers the OCR section below (defect 1).
+                                sidebar_section(ui, "SOURCE & OUTPUT", |ui| {
+                                    if path_row(ui, "Input folder", &self.input_dir).clicked() {
+                                        self.browse_input();
                                     }
-                                });
-                            if let Some(mode) = picked {
-                                self.sizing = mode;
-                                self.save_settings();
-                                self.preview_key.clear();
-                            }
-                        });
-                        ui.add_space(12.0);
-
-                        // OCR Thresholds card (SPEC §2): always visible; two
-                        // sliders with mono value outputs; dragging schedules a
-                        // debounced (50 ms) instant re-filter — no Apply button
-                        // anymore. Reset restores .60/12; Inspect boxes switches
-                        // the stage to OCR mode.
-                        sidebar_card(ui, "OCR THRESHOLDS", |ui| {
-                            ui.label(crate::theme::label_text(
-                                "Minimum confidence",
-                                crate::theme::LABEL,
-                            ));
-                            ui.horizontal(|ui| {
-                                let slider_w = (ui.available_width() - 52.0).max(60.0);
-                                let conf_resp = ui.add_sized(
-                                    egui::vec2(slider_w, 28.0),
-                                    egui::Slider::new(&mut self.conf, 0.0..=1.0)
-                                        .step_by(0.01)
-                                        .show_value(false),
-                                );
-                                focus_ring(ui, &conf_resp);
-                                ui.monospace(format!("{:.2}", self.conf));
-                                if conf_resp.changed() && self.extracted.is_some() {
-                                    self.thresholds_changed_at = Some(std::time::Instant::now());
-                                    ui.ctx().request_repaint_after(
-                                        std::time::Duration::from_millis(60),
+                                    ui.add_space(8.0);
+                                    if path_row(ui, "Output folder", &self.output_dir).clicked() {
+                                        self.browse_output();
+                                    }
+                                    ui.add_space(8.0);
+                                    let font_label = ui
+                                        .label(crate::theme::label_text(
+                                            "Custom font (optional)",
+                                            crate::theme::LABEL,
+                                        ))
+                                        .id;
+                                    ui.horizontal(|ui| {
+                                        let resp = ui
+                                            .add(
+                                                egui::TextEdit::singleline(&mut self.font_path)
+                                                    .hint_text(".ttf  .otf  .ttc")
+                                                    .desired_width(
+                                                        ui.available_width()
+                                                            - 36.0
+                                                            - ui.spacing().item_spacing.x,
+                                                    ),
+                                            )
+                                            .labelled_by(font_label);
+                                        focus_ring(ui, &resp);
+                                        let path = self.font_path.clone();
+                                        if !path.is_empty() {
+                                            resp.on_hover_text(path);
+                                        }
+                                        let browse = crate::icons::button_box(
+                                            ui,
+                                            "folder",
+                                            36.0,
+                                            false,
+                                            "Browse for font file",
+                                        );
+                                        focus_ring(ui, &browse);
+                                        if browse.clicked() {
+                                            self.browse_font();
+                                        }
+                                    });
+                                    ui.add_space(8.0);
+                                    ui.label(crate::theme::label_text(
+                                        "Font sizing",
+                                        crate::theme::LABEL,
+                                    ));
+                                    let sizing_btn = ui.add_sized(
+                                        egui::vec2(ui.available_width(), 36.0),
+                                        egui::Button::new(format!("{} ▾", self.sizing.label())),
                                     );
-                                }
-                            });
-                            ui.add_space(4.0);
-                            ui.label(crate::theme::label_text(
-                                "Minimum text length",
-                                crate::theme::LABEL,
-                            ));
-                            ui.horizontal(|ui| {
-                                let slider_w = (ui.available_width() - 52.0).max(60.0);
-                                let min_resp = ui.add_sized(
-                                    egui::vec2(slider_w, 28.0),
-                                    egui::Slider::new(&mut self.minchars, 1..=40).show_value(false),
-                                );
-                                focus_ring(ui, &min_resp);
-                                ui.monospace(format!("{}", self.minchars));
-                                if min_resp.changed() && self.extracted.is_some() {
-                                    self.thresholds_changed_at = Some(std::time::Instant::now());
-                                    ui.ctx().request_repaint_after(
-                                        std::time::Duration::from_millis(60),
-                                    );
-                                }
-                            });
-                            ui.add_space(4.0);
-                            ui.label(crate::theme::label_text(
-                                "Changes apply instantly to the preview.",
-                                crate::theme::CAPTION,
-                            ));
-                            ui.add_space(8.0);
-                            ui.horizontal(|ui| {
-                                if icon_text_button(ui, "rotate-ccw", "Reset").clicked() {
-                                    self.conf = crate::model::default_conf();
-                                    self.minchars = crate::model::default_minchars();
-                                    self.save_settings();
-                                    if self.extracted.is_some() {
-                                        self.thresholds_changed_at =
-                                            Some(std::time::Instant::now());
-                                        ui.ctx().request_repaint_after(
-                                            std::time::Duration::from_millis(60),
+                                    focus_ring(ui, &sizing_btn);
+                                    let mut picked: Option<crate::model::SizingMode> = None;
+                                    // Shot-test: force the popup open for the sizing
+                                    // shot (it needs the button's response id, which
+                                    // only exists while the sidebar is drawn).
+                                    if self
+                                        .shot_test
+                                        .as_ref()
+                                        .map(|st| st.is_current(ShotKind::SizingPopup))
+                                        .unwrap_or(false)
+                                    {
+                                        egui::Popup::open_id(
+                                            ui.ctx(),
+                                            egui::Popup::default_response_id(&sizing_btn),
                                         );
                                     }
-                                }
-                                if icon_text_button(ui, "search", "Inspect boxes").clicked() {
-                                    self.preview_mode = PreviewMode::Ocr;
-                                    self.tab = Tab::Preview;
-                                    self.preview_key.clear();
-                                }
-                            });
-                        });
-                        ui.add_space(12.0);
-
-                        // Project card (SPEC §2): the 2×2 grid, now complete —
-                        // Scan again joins Save / Load / Open output. Scan again
-                        // with edits asks first (confirm modal, §9 copy); without
-                        // edits it scans straight away.
-                        sidebar_card(ui, "PROJECT", |ui| {
-                            egui::Grid::new("project_grid")
-                                .num_columns(2)
-                                .spacing([8.0, 8.0])
-                                .show(ui, |ui| {
-                                    if icon_text_button(ui, "save", "Save captions").clicked() {
-                                        self.save_full_json();
+                                    egui::Popup::menu(&sizing_btn)
+                                        .close_behavior(
+                                            egui::PopupCloseBehavior::CloseOnClickOutside,
+                                        )
+                                        // The popup is exactly the button's width, so it
+                                        // stays inside the 316px sidebar instead of
+                                        // spilling into the workspace.
+                                        .width(sizing_btn.rect.width())
+                                        // Defect 1: the old ComboBox opened downward and
+                                        // covered the OCR Thresholds card. This popup opens
+                                        // upward (its bottom edge at the button's top edge)
+                                        // on the top layer, falling back to downward only
+                                        // when it doesn't fit above.
+                                        .align(egui::RectAlign::TOP_START)
+                                        .align_alternatives(&[egui::RectAlign::BOTTOM_START])
+                                        .show(|ui| {
+                                            for mode in crate::model::SizingMode::all() {
+                                                if ui
+                                                    .selectable_value(
+                                                        &mut self.sizing,
+                                                        mode,
+                                                        mode.label(),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    picked = Some(mode);
+                                                    egui::Popup::close_id(
+                                                        ui.ctx(),
+                                                        egui::Popup::default_response_id(
+                                                            &sizing_btn,
+                                                        ),
+                                                    );
+                                                }
+                                            }
+                                        });
+                                    if let Some(mode) = picked {
+                                        self.sizing = mode;
+                                        self.save_settings();
+                                        self.preview_key.clear();
                                     }
-                                    if icon_text_button(ui, "folder-open", "Load captions")
-                                        .clicked()
-                                    {
-                                        self.load_full_json();
-                                    }
-                                    ui.end_row();
-                                    if icon_text_button(ui, "scan", "Scan again").clicked() {
-                                        if self.has_translations() {
-                                            self.confirm_rescan = true;
-                                        } else {
-                                            self.start_extract();
-                                        }
-                                    }
-                                    if icon_text_button(ui, "folder-open", "Open output").clicked()
-                                    {
-                                        self.open_output_folder();
-                                    }
-                                    ui.end_row();
                                 });
-                        });
+                                ui.add_space(12.0);
+                                ui.separator();
+                                ui.add_space(12.0);
+
+                                // OCR Thresholds section (SPEC §2): always visible; two
+                                // sliders with mono value outputs; dragging schedules a
+                                // debounced (50 ms) instant re-filter — no Apply button
+                                // anymore. Reset restores .60/12; Inspect boxes switches
+                                // the stage to OCR mode.
+                                sidebar_section(ui, "OCR THRESHOLDS", |ui| {
+                                    ui.label(crate::theme::label_text(
+                                        "Minimum confidence",
+                                        crate::theme::LABEL,
+                                    ));
+                                    ui.horizontal(|ui| {
+                                        let slider_w = (ui.available_width() - 52.0).max(60.0);
+                                        let conf_resp = ui.add_sized(
+                                            egui::vec2(slider_w, 28.0),
+                                            egui::Slider::new(&mut self.conf, 0.0..=1.0)
+                                                .step_by(0.01)
+                                                .show_value(false),
+                                        );
+                                        focus_ring(ui, &conf_resp);
+                                        ui.monospace(format!("{:.2}", self.conf));
+                                        if conf_resp.changed() && self.extracted.is_some() {
+                                            self.thresholds_changed_at =
+                                                Some(std::time::Instant::now());
+                                            ui.ctx().request_repaint_after(
+                                                std::time::Duration::from_millis(60),
+                                            );
+                                        }
+                                    });
+                                    ui.add_space(4.0);
+                                    ui.label(crate::theme::label_text(
+                                        "Minimum text length",
+                                        crate::theme::LABEL,
+                                    ));
+                                    ui.horizontal(|ui| {
+                                        let slider_w = (ui.available_width() - 52.0).max(60.0);
+                                        let min_resp = ui.add_sized(
+                                            egui::vec2(slider_w, 28.0),
+                                            egui::Slider::new(&mut self.minchars, 1..=40)
+                                                .show_value(false),
+                                        );
+                                        focus_ring(ui, &min_resp);
+                                        ui.monospace(format!("{}", self.minchars));
+                                        if min_resp.changed() && self.extracted.is_some() {
+                                            self.thresholds_changed_at =
+                                                Some(std::time::Instant::now());
+                                            ui.ctx().request_repaint_after(
+                                                std::time::Duration::from_millis(60),
+                                            );
+                                        }
+                                    });
+                                    ui.add_space(4.0);
+                                    ui.label(crate::theme::label_text(
+                                        "Changes apply instantly to the preview.",
+                                        crate::theme::CAPTION,
+                                    ));
+                                    ui.add_space(8.0);
+                                    ui.horizontal(|ui| {
+                                        if icon_text_button(ui, "rotate-ccw", "Reset").clicked() {
+                                            self.conf = crate::model::default_conf();
+                                            self.minchars = crate::model::default_minchars();
+                                            self.save_settings();
+                                            if self.extracted.is_some() {
+                                                self.thresholds_changed_at =
+                                                    Some(std::time::Instant::now());
+                                                ui.ctx().request_repaint_after(
+                                                    std::time::Duration::from_millis(60),
+                                                );
+                                            }
+                                        }
+                                        if icon_text_button(ui, "search", "Inspect boxes").clicked()
+                                        {
+                                            self.preview_mode = PreviewMode::Ocr;
+                                            self.tab = Tab::Preview;
+                                            self.preview_key.clear();
+                                        }
+                                    });
+                                });
+                                ui.add_space(12.0);
+                                ui.separator();
+                                ui.add_space(12.0);
+
+                                // Project section (SPEC §2): the 2×2 grid, now complete —
+                                // Scan again joins Save / Load / Open output. Scan again
+                                // with edits asks first (confirm modal, §9 copy); without
+                                // edits it scans straight away.
+                                sidebar_section(ui, "PROJECT", |ui| {
+                                    // Two rows of two buttons, each exactly half the
+                                    // inner width — the grid sized buttons to their
+                                    // labels, so the columns drifted apart.
+                                    let gap = ui.spacing().item_spacing.x;
+                                    let half = ((ui.available_width() - gap) / 2.0).max(40.0);
+                                    ui.horizontal(|ui| {
+                                        if icon_text_button_sized(ui, "save", "Save captions", half)
+                                            .clicked()
+                                        {
+                                            self.save_full_json();
+                                        }
+                                        if icon_text_button_sized(
+                                            ui,
+                                            "folder-open",
+                                            "Load captions",
+                                            half,
+                                        )
+                                        .clicked()
+                                        {
+                                            self.load_full_json();
+                                        }
+                                    });
+                                    ui.add_space(8.0);
+                                    ui.horizontal(|ui| {
+                                        if icon_text_button_sized(ui, "scan", "Scan again", half)
+                                            .clicked()
+                                        {
+                                            if self.has_translations() {
+                                                self.confirm_rescan = true;
+                                            } else {
+                                                self.start_extract();
+                                            }
+                                        }
+                                        if icon_text_button_sized(
+                                            ui,
+                                            "folder-open",
+                                            "Open output",
+                                            half,
+                                        )
+                                        .clicked()
+                                        {
+                                            self.open_output_folder();
+                                        }
+                                    });
+                                });
+                            });
                     });
                 });
             });
@@ -2755,7 +2851,16 @@ impl eframe::App for CaptionStudioApp {
                                         let filtered = filter_file_names(&names, &self.preview_filter);
                                         let mut budget = 4;
                                         let mut picked: Option<String> = None;
-                                        egui::ScrollArea::vertical().show(ui, |ui| {
+                                        // No visible scrollbar in the
+                                        // preview area — the list still
+                                        // scrolls with the wheel and the
+                                        // Up/Down keys; the "N of M"
+                                        // counter shows the position.
+                                        egui::ScrollArea::vertical()
+                                            .scroll_bar_visibility(
+                                                egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                                            )
+                                            .show(ui, |ui| {
                                             if filtered.is_empty() {
                                                 ui.label(crate::theme::label_text("No files match.", crate::theme::CAPTION));
                                             }
@@ -2823,7 +2928,7 @@ impl eframe::App for CaptionStudioApp {
                                                         self.preview_zoom_fit = false;
                                                     }
                                                     let old_scale = self.preview_zoom;
-                                                    let new_scale = (old_scale * (-scroll.y * 0.002).exp()).clamp(0.05, 8.0);
+                                                    let new_scale = (old_scale * (-scroll.y * 0.002).exp()).clamp(0.05, 4.0);
                                                     if let (Some(cursor), true) = (stage_resp.hover_pos(), self.preview_image_rect.is_positive()) {
                                                         let img_pt = (cursor - self.preview_image_rect.min) / old_scale;
                                                         let new_size = egui::vec2(iw * new_scale, ih * new_scale);
@@ -2849,10 +2954,21 @@ impl eframe::App for CaptionStudioApp {
                                             }
                                             let scale = if self.preview_zoom_fit { fit_scale } else { self.preview_zoom };
                                             let size = egui::vec2(iw * scale, ih * scale);
+                                            // Keep the pan in bounds every
+                                            // frame, not only while dragging
+                                            // or zooming, so a stale or
+                                            // programmatically set pan can
+                                            // never leave the image off-stage.
+                                            self.preview_pan =
+                                                clamp_pan(self.preview_pan, size, stage_rect.size());
                                             let image_rect = egui::Rect::from_center_size(stage_rect.center() + self.preview_pan, size);
                                             self.preview_image_rect = image_rect;
                                             self.preview_image_scale = scale;
-                                            ui.painter().image(
+                                            // The image is clipped to the
+                                            // stage rect, so even at max
+                                            // zoom it can never draw over the
+                                            // file list or the toolbar.
+                                            ui.painter().with_clip_rect(stage_rect).image(
                                                 tex.id(),
                                                 image_rect,
                                                 egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
@@ -2928,10 +3044,24 @@ fn step_in_names(current: &mut String, names: &[&String], delta: i32) {
 
 /// Clamp a stage pan so at least 40px of the image stays visible (and
 /// grabbable) in the stage.
+/// Clamp the stage pan so the image stays inside the stage: when the
+/// image is smaller than the stage it is centred (no pan); when it is
+/// larger, the pan is limited so the image's edge can't cross the stage's
+/// opposite edge — the image always covers the stage, never slides off it
+/// (and never spills over the file list / toolbar). The pan is the offset
+/// of the image's centre from the stage's centre.
 fn clamp_pan(pan: egui::Vec2, size: egui::Vec2, stage: egui::Vec2) -> egui::Vec2 {
-    let max_x = (size.x / 2.0 + stage.x / 2.0 - 40.0).max(0.0);
-    let max_y = (size.y / 2.0 + stage.y / 2.0 - 40.0).max(0.0);
-    egui::vec2(pan.x.clamp(-max_x, max_x), pan.y.clamp(-max_y, max_y))
+    let clamp_axis = |p: f32, img: f32, stg: f32| -> f32 {
+        if img <= stg {
+            0.0
+        } else {
+            p.clamp(-(img - stg) / 2.0, (img - stg) / 2.0)
+        }
+    };
+    egui::vec2(
+        clamp_axis(pan.x, size.x, stage.x),
+        clamp_axis(pan.y, size.y, stage.y),
+    )
 }
 
 fn step_preview(current: &mut String, names: &[String], delta: i32) {
@@ -3365,22 +3495,19 @@ fn step_button(
 /// A sidebar card (SPEC §3): p2 fill, hairline border, 8px radius, the
 /// section title in Chakra 600 13px accent_ink, 12px inner padding and a
 /// 12px gap to the next card (the caller adds the gap).
-fn sidebar_card(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
+/// One section of the unified sidebar: a heading + contents, no frame of
+/// its own — the sidebar is a single container, so sections are separated
+/// by hairlines, not boxes (the separate cards made the layout feel
+/// fragmented, and their inner widths drifted apart).
+fn sidebar_section(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
     let t = crate::theme::Tokens::get(ui.ctx());
-    egui::Frame::new()
-        .fill(t.card)
-        .stroke(egui::Stroke::new(1.0, t.card_border))
-        .corner_radius(egui::CornerRadius::same(t.radius_sm as u8))
-        .inner_margin(egui::Margin::same(12))
-        .show(ui, |ui| {
-            ui.label(
-                egui::RichText::new(title)
-                    .font(crate::theme::display(13.0))
-                    .color(t.accent_ink),
-            );
-            ui.add_space(8.0);
-            add_contents(ui);
-        });
+    ui.label(
+        egui::RichText::new(title)
+            .font(crate::theme::display(13.0))
+            .color(t.accent_ink),
+    );
+    ui.add_space(8.0);
+    add_contents(ui);
 }
 
 /// The width of `text` in the body font, from per-glyph advances (memoized
@@ -3486,6 +3613,31 @@ fn icon_text_button(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Respons
     };
     let image = crate::icons::image(icon, crate::theme::ControlSize::Small.icon(), tint);
     let resp = ui.add(egui::Button::image_and_text(image, label));
+    focus_ring(ui, &resp);
+    resp
+}
+
+/// `icon_text_button` at a fixed width and the standard 36px control
+/// height — the Project section's two columns are exactly half the inner
+/// width each, so the four buttons line up instead of sizing to their
+/// labels.
+fn icon_text_button_sized(
+    ui: &mut egui::Ui,
+    icon: &str,
+    label: &str,
+    width: f32,
+) -> egui::Response {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let tint = if ui.is_enabled() {
+        t.text
+    } else {
+        t.text_faint
+    };
+    let image = crate::icons::image(icon, crate::theme::ControlSize::Small.icon(), tint);
+    let resp = ui.add_sized(
+        egui::vec2(width, 36.0),
+        egui::Button::image_and_text(image, label),
+    );
     focus_ring(ui, &resp);
     resp
 }
@@ -3672,6 +3824,639 @@ fn json_highlight_job(text: &str, t: &crate::theme::Tokens) -> egui::text::Layou
 /// ever fails to decode, the app still starts, just without an icon.
 static VMAX_ICON_PNG: &[u8] = include_bytes!("../assets/icons/vmax-icon-1024.png");
 
+// --- Shot-test mode ---
+// A CLI test mode (`caption-studio --shot-test <input> <output>
+// [--json <file>]`) that drives the app through every reviewable state
+// on the user's PC and saves a PNG per state into the output folder, so
+// the screenshots can be uploaded for review. It runs the REAL scan (real
+// OCR) on the given folder and imports the REAL translated JSON (if
+// given); the render summaries and the import report are staged (the mode
+// captures UI states, it does not run a render). It exits with
+// `std::process::exit(0)` after writing a summary — a graceful close would
+// call `save_settings()` and overwrite the user's saved input/output
+// folders with the test folders.
+
+/// One screenshot the mode captures, in capture order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShotKind {
+    Idle,
+    Scanning,
+    PreviewRenderedFit,
+    PreviewOcrBoxes,
+    PreviewOriginal,
+    Preview100Pct,
+    PreviewZoomedPan,
+    JsonTab,
+    InspectorBlocks,
+    InspectorFiltered,
+    ModalPaste,
+    ModalBulkEdit,
+    ModalImportReport,
+    ModalRescan,
+    ModalNothingTranslated,
+    SizingPopup,
+    RenderDone,
+    RenderFailed,
+    LogClosed,
+    EmptyImage,
+}
+
+impl ShotKind {
+    /// The shots in capture order.
+    const ALL: [ShotKind; 20] = [
+        ShotKind::Idle,
+        ShotKind::Scanning,
+        ShotKind::PreviewRenderedFit,
+        ShotKind::PreviewOcrBoxes,
+        ShotKind::PreviewOriginal,
+        ShotKind::Preview100Pct,
+        ShotKind::PreviewZoomedPan,
+        ShotKind::JsonTab,
+        ShotKind::InspectorBlocks,
+        ShotKind::InspectorFiltered,
+        ShotKind::ModalPaste,
+        ShotKind::ModalBulkEdit,
+        ShotKind::ModalImportReport,
+        ShotKind::ModalRescan,
+        ShotKind::ModalNothingTranslated,
+        ShotKind::SizingPopup,
+        ShotKind::RenderDone,
+        ShotKind::RenderFailed,
+        ShotKind::LogClosed,
+        ShotKind::EmptyImage,
+    ];
+
+    fn file_name(self) -> &'static str {
+        match self {
+            ShotKind::Idle => "01-idle.png",
+            ShotKind::Scanning => "02-scanning.png",
+            ShotKind::PreviewRenderedFit => "03-preview-rendered-fit.png",
+            ShotKind::PreviewOcrBoxes => "04-preview-ocr-boxes.png",
+            ShotKind::PreviewOriginal => "05-preview-original.png",
+            ShotKind::Preview100Pct => "06-preview-100pct.png",
+            ShotKind::PreviewZoomedPan => "07-preview-zoomed-pan.png",
+            ShotKind::JsonTab => "08-json-tab.png",
+            ShotKind::InspectorBlocks => "09-inspector-blocks.png",
+            ShotKind::InspectorFiltered => "10-inspector-filtered.png",
+            ShotKind::ModalPaste => "11-modal-paste.png",
+            ShotKind::ModalBulkEdit => "12-modal-bulk-edit.png",
+            ShotKind::ModalImportReport => "13-modal-import-report.png",
+            ShotKind::ModalRescan => "14-modal-rescan.png",
+            ShotKind::ModalNothingTranslated => "15-modal-nothing-translated.png",
+            ShotKind::SizingPopup => "16-sizing-popup.png",
+            ShotKind::RenderDone => "17-render-done.png",
+            ShotKind::RenderFailed => "18-render-failed.png",
+            ShotKind::LogClosed => "19-log-closed.png",
+            ShotKind::EmptyImage => "20-empty-image.png",
+        }
+    }
+
+    /// Whether the shot needs at least one file with at least one block.
+    fn needs_blocks(self) -> bool {
+        matches!(
+            self,
+            ShotKind::InspectorBlocks | ShotKind::InspectorFiltered
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShotPhase {
+    /// The shot's state is applied; waiting for textures/thumbnails to
+    /// settle before requesting the screenshot.
+    Settling,
+    /// The screenshot was requested; waiting for the callback.
+    Waiting,
+    /// Waiting for the OCR engine to warm up before starting the scan.
+    WaitingForOcr,
+    /// The scan is running; waiting for it to finish.
+    WaitingForScan,
+}
+
+struct ShotTest {
+    input: std::path::PathBuf,
+    out_dir: std::path::PathBuf,
+    json: Option<std::path::PathBuf>,
+    current: usize,
+    phase: ShotPhase,
+    settle_frames: u32,
+    frames_waited: u32,
+    /// Set by the screenshot callback when the PNG is written.
+    shot_done: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The capture record, written to `shots.txt` at the end.
+    log: Vec<String>,
+    /// Warnings from the real JSON import (for the import-report shot).
+    import_warnings: Vec<String>,
+    /// The user's input/output folders, restored before exit so the test
+    /// folders never land in the saved settings.
+    orig_input: String,
+    orig_output: String,
+    /// The (file, block id) whose `kept_override` the filtered shot set.
+    filtered_override: Option<(String, usize)>,
+    /// Whether the synthetic empty-image entry is in the data.
+    synthetic_empty: bool,
+}
+
+impl ShotTest {
+    fn new(
+        input: std::path::PathBuf,
+        out_dir: std::path::PathBuf,
+        json: Option<std::path::PathBuf>,
+        orig_input: String,
+        orig_output: String,
+    ) -> Self {
+        Self {
+            input,
+            out_dir,
+            json,
+            current: 0,
+            phase: ShotPhase::Settling,
+            settle_frames: 10,
+            frames_waited: 0,
+            shot_done: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            log: Vec::new(),
+            import_warnings: Vec::new(),
+            orig_input,
+            orig_output,
+            filtered_override: None,
+            synthetic_empty: false,
+        }
+    }
+
+    fn current_shot(&self) -> ShotKind {
+        ShotKind::ALL[self.current]
+    }
+
+    fn is_current(&self, kind: ShotKind) -> bool {
+        self.current_shot() == kind
+    }
+}
+
+impl CaptionStudioApp {
+    /// One step of the shot-test state machine. Called from `ui()` before
+    /// the panels are drawn, so the frame renders the new state.
+    fn shot_test_step(&mut self, ctx: &egui::Context) {
+        let Some(mut st) = self.shot_test.take() else {
+            return;
+        };
+        match st.phase {
+            ShotPhase::Settling => {
+                if st.settle_frames > 0 {
+                    st.settle_frames -= 1;
+                }
+                if st.settle_frames == 0 {
+                    self.shot_request_screenshot(ctx, &st);
+                    st.phase = ShotPhase::Waiting;
+                    st.frames_waited = 0;
+                }
+                ctx.request_repaint();
+            }
+            ShotPhase::Waiting => {
+                if st.shot_done.load(std::sync::atomic::Ordering::SeqCst) {
+                    if self.shot_advance(&mut st, true) {
+                        self.shot_finish(st);
+                    }
+                } else {
+                    st.frames_waited += 1;
+                    if st.frames_waited > 180 {
+                        // The screenshot never arrived (the backend may not
+                        // support it) — don't hang; record the miss and move on.
+                        if self.shot_advance(&mut st, false) {
+                            self.shot_finish(st);
+                        }
+                    } else {
+                        ctx.request_repaint();
+                    }
+                }
+            }
+            ShotPhase::WaitingForOcr => {
+                if self.ocr_ready {
+                    self.shot_apply(&mut st, ShotKind::Scanning);
+                    st.phase = ShotPhase::Settling;
+                    st.settle_frames = 10;
+                } else if self.ocr_error.is_some() {
+                    st.log.push(
+                        "FAILED: the OCR engine did not start — no shots after the idle one."
+                            .into(),
+                    );
+                    self.shot_finish(st);
+                }
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
+            ShotPhase::WaitingForScan => {
+                if self.extracted.is_some() && !self.busy {
+                    if self.file_names().is_empty() {
+                        st.log
+                            .push("FAILED: the scan found no images — no data shots.".into());
+                        self.shot_finish(st);
+                    }
+                    self.shot_import_json(&mut st);
+                    let kind = st.current_shot();
+                    self.shot_apply(&mut st, kind);
+                    st.phase = ShotPhase::Settling;
+                    st.settle_frames = 10;
+                } else if self.ocr_error.is_some() {
+                    st.log
+                        .push("FAILED: the scan errored — no data shots.".into());
+                    self.shot_finish(st);
+                }
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
+        }
+        // `shot_finish` exits the process, so reaching here means the mode
+        // is still running.
+        if self.shot_test.is_none() {
+            self.shot_test = Some(st);
+        }
+    }
+
+    /// Record the just-captured shot and move to the next one (skipping
+    /// shots that can't be staged). Returns true when every shot is done.
+    fn shot_advance(&mut self, st: &mut ShotTest, captured: bool) -> bool {
+        let kind = st.current_shot();
+        st.log.push(format!(
+            "{} {}",
+            kind.file_name(),
+            if captured {
+                "captured"
+            } else {
+                "MISSED (screenshot timed out)"
+            }
+        ));
+        // The next shot, skipping ones that can't be staged (no blocks in
+        // the scan for the inspector shots).
+        let mut guard = 0;
+        loop {
+            st.current += 1;
+            guard += 1;
+            if st.current >= ShotKind::ALL.len() || guard > ShotKind::ALL.len() {
+                return true;
+            }
+            let next = st.current_shot();
+            if next == ShotKind::Scanning {
+                st.phase = ShotPhase::WaitingForOcr;
+                return false;
+            }
+            if kind == ShotKind::Scanning {
+                // The scan is still running; wait for it before the data shots.
+                st.phase = ShotPhase::WaitingForScan;
+                return false;
+            }
+            if next.needs_blocks() && !self.has_blocks() {
+                st.log.push(format!(
+                    "{} skipped (no blocks in the scan)",
+                    next.file_name()
+                ));
+                continue;
+            }
+            self.shot_apply(st, next);
+            st.phase = ShotPhase::Settling;
+            st.settle_frames = 10;
+            return false;
+        }
+    }
+
+    fn has_blocks(&self) -> bool {
+        self.extracted
+            .as_ref()
+            .map(|d| d.images.iter().any(|e| !e.blocks.is_empty()))
+            .unwrap_or(false)
+    }
+
+    /// Set the app's state for one shot. Returns nothing; shots that can't
+    /// be staged are skipped by `shot_advance` before this is called.
+    fn shot_apply(&mut self, st: &mut ShotTest, kind: ShotKind) {
+        self.shot_cleanup_synthetic(st);
+        // Every shot starts from a clean slate: no modal open, the log
+        // shown, the preview at Fit.
+        self.confirm_copy_originals = false;
+        self.confirm_rescan = false;
+        self.show_paste_modal = false;
+        self.show_bulk_edit = false;
+        self.import_report = None;
+        self.show_log = true;
+        self.preview_zoom_fit = true;
+        self.preview_pan = egui::Vec2::ZERO;
+        self.selected_block = None;
+        st.shot_done
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        match kind {
+            ShotKind::Idle => {
+                self.tab = Tab::Json;
+            }
+            ShotKind::Scanning => {
+                self.input_dir = st.input.to_string_lossy().to_string();
+                self.output_dir = st.out_dir.to_string_lossy().to_string();
+                self.tab = Tab::Preview;
+                self.start_extract();
+            }
+            ShotKind::PreviewRenderedFit => {
+                self.tab = Tab::Preview;
+                self.preview_mode = PreviewMode::Rendered;
+                self.preview_file = self.file_names().first().cloned().unwrap_or_default();
+                self.preview_key.clear();
+            }
+            ShotKind::PreviewOcrBoxes => {
+                self.tab = Tab::Preview;
+                self.preview_mode = PreviewMode::Ocr;
+                self.preview_file = self.file_names().first().cloned().unwrap_or_default();
+                self.preview_key.clear();
+            }
+            ShotKind::PreviewOriginal => {
+                self.tab = Tab::Preview;
+                self.preview_mode = PreviewMode::Original;
+                self.preview_file = self.file_names().first().cloned().unwrap_or_default();
+                self.preview_key.clear();
+            }
+            ShotKind::Preview100Pct => {
+                self.tab = Tab::Preview;
+                self.preview_mode = PreviewMode::Rendered;
+                self.preview_zoom_fit = false;
+                self.preview_zoom = 1.0;
+                self.preview_file = self.file_names().first().cloned().unwrap_or_default();
+                self.preview_key.clear();
+            }
+            ShotKind::PreviewZoomedPan => {
+                self.tab = Tab::Preview;
+                self.preview_mode = PreviewMode::Rendered;
+                self.preview_zoom_fit = false;
+                self.preview_zoom = 2.0;
+                // Deliberately far off-stage; the per-frame clamp pulls it
+                // back to the stage edge, which is what this shot verifies.
+                self.preview_pan = egui::vec2(5000.0, 5000.0);
+                self.preview_file = self.file_names().first().cloned().unwrap_or_default();
+                self.preview_key.clear();
+            }
+            ShotKind::JsonTab => {
+                self.tab = Tab::Json;
+            }
+            ShotKind::InspectorBlocks => {
+                self.tab = Tab::Preview;
+                self.preview_mode = PreviewMode::Rendered;
+                if let Some((file, id)) = self.first_block() {
+                    self.preview_file = file;
+                    self.selected_block = Some(id);
+                    self.preview_key.clear();
+                }
+            }
+            ShotKind::InspectorFiltered => {
+                self.tab = Tab::Preview;
+                self.preview_mode = PreviewMode::Rendered;
+                if let Some((file, id)) = self.first_block() {
+                    // Filter out the first block so its card (and the dashed
+                    // orange diagnostic) show; restored in cleanup.
+                    if let Some(data) = self.extracted.as_mut() {
+                        if let Some(entry) = data.images.iter_mut().find(|e| e.file == file) {
+                            if let Some(blk) = entry.blocks.iter_mut().find(|b| b.id == id) {
+                                blk.kept_override = Some(false);
+                                st.filtered_override = Some((file.clone(), id));
+                            }
+                        }
+                    }
+                    self.preview_file = file;
+                    self.selected_block = Some(id);
+                    self.preview_key.clear();
+                }
+            }
+            ShotKind::ModalPaste => {
+                self.tab = Tab::Json;
+                self.paste_text = "{\n  \"example.jpg\": {\n    \"1\": \"Translated caption here\",\n    \"2\": \"\"\n  }\n}"
+                    .to_string();
+                self.show_paste_modal = true;
+            }
+            ShotKind::ModalBulkEdit => {
+                self.tab = Tab::Json;
+                self.show_bulk_edit = true;
+            }
+            ShotKind::ModalImportReport => {
+                self.tab = Tab::Json;
+                let report = if st.import_warnings.is_empty() {
+                    vec![
+                        "Skipped \"block 4\" in meme_1.jpg — isn't in the scan.".to_string(),
+                        "Skipped \"block 3\" in meme_10.jpg — isn't in the scan.".to_string(),
+                    ]
+                } else {
+                    st.import_warnings.clone()
+                };
+                self.import_report = Some(report);
+            }
+            ShotKind::ModalRescan => {
+                self.tab = Tab::Preview;
+                self.confirm_rescan = true;
+            }
+            ShotKind::ModalNothingTranslated => {
+                self.tab = Tab::Preview;
+                self.confirm_copy_originals = true;
+            }
+            ShotKind::SizingPopup => {
+                // The popup is opened by the sidebar hook (it needs the
+                // sizing button's response id, which only exists while the
+                // sidebar is drawn).
+                self.tab = Tab::Preview;
+            }
+            ShotKind::RenderDone => {
+                self.tab = Tab::Preview;
+                self.preview_mode = PreviewMode::Rendered;
+                self.stage_render_summary(false);
+            }
+            ShotKind::RenderFailed => {
+                self.tab = Tab::Preview;
+                self.preview_mode = PreviewMode::Rendered;
+                self.stage_render_summary(true);
+            }
+            ShotKind::LogClosed => {
+                self.tab = Tab::Preview;
+                self.show_log = false;
+            }
+            ShotKind::EmptyImage => {
+                self.tab = Tab::Preview;
+                self.preview_mode = PreviewMode::Rendered;
+                self.stage_empty_image(st);
+            }
+        }
+    }
+
+    /// The first (file, block id) in the scan, for the inspector shots.
+    fn first_block(&self) -> Option<(String, usize)> {
+        let data = self.extracted.as_ref()?;
+        for entry in &data.images {
+            if let Some(blk) = entry.blocks.first() {
+                return Some((entry.file.clone(), blk.id));
+            }
+        }
+        None
+    }
+
+    /// Stage a render summary (the mode captures UI states; it does not run
+    /// a render). `failed` stages one failed file instead of a clean run.
+    fn stage_render_summary(&mut self, failed: bool) {
+        let names = self.file_names();
+        let empty = self
+            .extracted
+            .as_ref()
+            .map(|d| d.images.iter().filter(|e| e.blocks.is_empty()).count())
+            .unwrap_or(0);
+        let rendered = names.len().saturating_sub(empty);
+        let failed_count = if failed && !names.is_empty() { 1 } else { 0 };
+        let rendered = rendered.saturating_sub(failed_count);
+        self.render_summary = Some((rendered, empty, failed_count));
+        self.rendered_files = names.iter().take(rendered).cloned().collect();
+        self.failed_files = if failed_count > 0 {
+            names.iter().skip(rendered).take(1).cloned().collect()
+        } else {
+            std::collections::HashSet::new()
+        };
+        self.last_save_path = Some(self.output_dir.clone());
+        let summary = format!(
+            "Complete — rendered {rendered}, copied {empty} unchanged, failed {failed_count}"
+        );
+        self.log(summary.clone());
+        self.status = format!("{summary}. Saved to {}.", self.output_dir);
+        if failed_count > 0 {
+            if let Some(f) = self.failed_files.iter().next().cloned() {
+                self.log_file(LogLevel::Error, f, "failed: render error (staged)".into());
+            }
+        }
+    }
+
+    /// Stage the empty-image state: a real blank PNG in the output folder,
+    /// a synthetic entry for it, and the input folder briefly pointed at
+    /// the output folder so the preview can load it. Undone by cleanup.
+    fn stage_empty_image(&mut self, st: &mut ShotTest) {
+        let blank = st.out_dir.join("blank-test.png");
+        if !blank.exists() {
+            let img = image::RgbaImage::from_pixel(800, 600, image::Rgba([255, 255, 255, 255]));
+            let _ = img.save(&blank);
+        }
+        if let Some(data) = self.extracted.as_mut() {
+            if data.entry("blank-test.png").is_none() {
+                data.images.push(crate::model::ImageEntry {
+                    file: "blank-test.png".into(),
+                    width: 800,
+                    height: 600,
+                    raw_lines: Vec::new(),
+                    blocks: Vec::new(),
+                    dropped: Vec::new(),
+                });
+                st.synthetic_empty = true;
+            }
+        }
+        self.input_dir = st.out_dir.to_string_lossy().to_string();
+        self.preview_file = "blank-test.png".into();
+        self.preview_key.clear();
+    }
+
+    /// Undo the synthetic state a shot staged (the empty-image entry, the
+    /// filtered override, the temporary input-folder switch).
+    fn shot_cleanup_synthetic(&mut self, st: &mut ShotTest) {
+        if st.synthetic_empty {
+            if let Some(data) = self.extracted.as_mut() {
+                data.images.retain(|e| e.file != "blank-test.png");
+            }
+            self.input_dir = st.input.to_string_lossy().to_string();
+            st.synthetic_empty = false;
+        }
+        if let Some((file, id)) = st.filtered_override.take() {
+            if let Some(data) = self.extracted.as_mut() {
+                if let Some(entry) = data.images.iter_mut().find(|e| e.file == file) {
+                    if let Some(blk) = entry.blocks.iter_mut().find(|b| b.id == id) {
+                        blk.kept_override = None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Import the translated JSON given on the command line (same
+    /// trial-merge as the file-picker import, but from a path). The
+    /// warnings are kept for the import-report shot.
+    fn shot_import_json(&mut self, st: &mut ShotTest) {
+        let Some(path) = st.json.clone() else {
+            return;
+        };
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                let mut report: Vec<String> = Vec::new();
+                match parse_flexible_json_or_dict(text.trim()) {
+                    Ok(parsed) => {
+                        if let Some(data) = self.extracted.clone() {
+                            let (_, warnings, _) = merge_translations(&parsed, &data);
+                            report = warnings;
+                        }
+                    }
+                    Err(_) => {
+                        report.push("The file isn't valid JSON — nothing was imported.".into());
+                    }
+                }
+                st.import_warnings = report.clone();
+                self.editor_text = text;
+                self.clear_render_state();
+                self.preview_key.clear();
+                if report.is_empty() {
+                    self.status = "Imported translations from the shot-test JSON".into();
+                } else {
+                    self.import_report = Some(report);
+                    self.status =
+                        "Imported translations — some files were skipped, see the report.".into();
+                }
+            }
+            Err(e) => {
+                st.log.push(format!(
+                    "NOTE: couldn't read the --json file ({e}) — skipped."
+                ));
+            }
+        }
+    }
+
+    /// Ask egui for a screenshot of this frame and save it as the shot's
+    /// PNG. The callback sets `shot_done` so the state machine advances.
+    fn shot_request_screenshot(&self, ctx: &egui::Context, st: &ShotTest) {
+        let name = st.current_shot().file_name().to_string();
+        let path = st.out_dir.join(&name);
+        let done = st.shot_done.clone();
+        ctx.request_screenshot(move |image| {
+            let rgba = image::RgbaImage::from_raw(
+                image.width() as u32,
+                image.height() as u32,
+                image.as_raw().to_vec(),
+            );
+            match rgba {
+                Some(rgba) => {
+                    let _ = rgba.save(&path);
+                }
+                None => {
+                    eprintln!("shot-test: couldn't convert the screenshot for {name}");
+                }
+            }
+            done.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+    }
+
+    /// Write the capture record, restore the user's folders, and exit.
+    /// `std::process::exit` (not a graceful close) so `save_settings()`
+    /// never runs with the test folders.
+    fn shot_finish(&mut self, mut st: ShotTest) -> ! {
+        self.shot_cleanup_synthetic(&mut st);
+        self.input_dir = st.orig_input.clone();
+        self.output_dir = st.orig_output.clone();
+        let mut record = String::from("Caption Studio shot-test\n");
+        record.push_str(&format!("input: {}\n", st.input.display()));
+        record.push_str(&format!("output: {}\n", st.out_dir.display()));
+        record.push('\n');
+        for line in &st.log {
+            record.push_str(line);
+            record.push('\n');
+        }
+        let _ = std::fs::write(st.out_dir.join("shots.txt"), record);
+        println!(
+            "shot-test: done — {} shots in {}",
+            st.log.len(),
+            st.out_dir.display()
+        );
+        std::process::exit(0);
+    }
+}
+
 pub fn run_app() -> eframe::Result<()> {
     let icon = eframe::icon_data::from_png_bytes(VMAX_ICON_PNG).unwrap_or_default();
     let options = eframe::NativeOptions {
@@ -3689,6 +4474,59 @@ pub fn run_app() -> eframe::Result<()> {
         options,
         Box::new(|cc| Ok(Box::new(CaptionStudioApp::new(cc)))),
     )
+}
+
+/// The shot-test mode: the same app at a fixed 1920×1080 window, driving
+/// itself through every reviewable state and saving a PNG per state into
+/// `output`. Validates the folders first so a typo fails fast on the
+/// command line instead of opening a window that does nothing.
+pub fn run_shot_test(
+    input: std::path::PathBuf,
+    output: std::path::PathBuf,
+    json: Option<std::path::PathBuf>,
+) -> anyhow::Result<()> {
+    if !input.is_dir() {
+        anyhow::bail!(
+            "--shot-test: input folder doesn't exist: {}",
+            input.display()
+        );
+    }
+    if let Some(j) = &json {
+        if !j.is_file() {
+            anyhow::bail!("--shot-test: --json file doesn't exist: {}", j.display());
+        }
+    }
+    std::fs::create_dir_all(&output)?;
+    let icon = eframe::icon_data::from_png_bytes(VMAX_ICON_PNG).unwrap_or_default();
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            // Fixed at the eyeball size so every shot is the same size.
+            .with_inner_size([1920.0, 1080.0])
+            .with_min_inner_size([1280.0, 720.0])
+            .with_icon(icon)
+            .with_title("Caption Studio — Shot Test"),
+        ..Default::default()
+    };
+    let input_clone = input.clone();
+    let output_clone = output.clone();
+    eframe::run_native(
+        "Caption Studio — Shot Test",
+        options,
+        Box::new(move |cc| {
+            let mut app = CaptionStudioApp::new(cc);
+            let st = ShotTest::new(
+                input_clone,
+                output_clone,
+                json,
+                app.input_dir.clone(),
+                app.output_dir.clone(),
+            );
+            // The first shot (idle) settles, then the machine runs.
+            app.shot_test = Some(st);
+            Ok(Box::new(app))
+        }),
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -3824,15 +4662,38 @@ mod tests {
     }
 
     #[test]
-    fn clamp_pan_keeps_forty_pixels_visible() {
+    fn clamp_pan_keeps_the_image_inside_the_stage() {
         let stage = egui::vec2(800.0, 600.0);
-        // A 100px image dragged far right: at most 40px may leave the stage.
+        // A small image is centred — no pan, however far it is dragged.
         let pan = clamp_pan(egui::vec2(1000.0, 0.0), egui::vec2(100.0, 100.0), stage);
-        assert_eq!(pan.x, 410.0);
-        // A huge image may pan far (its centre can leave the stage).
-        let pan = clamp_pan(egui::vec2(1000.0, 0.0), egui::vec2(2000.0, 1000.0), stage);
-        assert_eq!(pan.x, 1000.0);
+        assert_eq!(pan.x, 0.0);
         assert_eq!(pan.y, 0.0);
+        // A huge image may pan only until its edge meets the stage's edge.
+        let pan = clamp_pan(
+            egui::vec2(1000.0, 1000.0),
+            egui::vec2(2000.0, 1000.0),
+            stage,
+        );
+        assert_eq!(pan.x, 600.0);
+        assert_eq!(pan.y, 200.0);
+    }
+
+    #[test]
+    fn shot_test_covers_twenty_named_shots_in_order() {
+        assert_eq!(ShotKind::ALL.len(), 20);
+        assert_eq!(ShotKind::ALL[0].file_name(), "01-idle.png");
+        assert_eq!(ShotKind::ALL[1].file_name(), "02-scanning.png");
+        assert_eq!(ShotKind::ALL[19].file_name(), "20-empty-image.png");
+        // The file names are unique (no shot overwrites another).
+        let mut names: Vec<&str> = ShotKind::ALL.iter().map(|s| s.file_name()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), 20);
+        // Only the inspector shots need blocks; the rest stage without them.
+        assert!(ShotKind::InspectorBlocks.needs_blocks());
+        assert!(ShotKind::InspectorFiltered.needs_blocks());
+        assert!(!ShotKind::ModalPaste.needs_blocks());
+        assert!(!ShotKind::EmptyImage.needs_blocks());
     }
 
     #[test]

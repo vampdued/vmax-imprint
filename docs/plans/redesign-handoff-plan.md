@@ -643,3 +643,84 @@ stepper badge ink), so the issues are layout and copy, not tokens.
   fully visible; modals opening centred; the sizing popup inside the
   sidebar; the inspector showing guidance at launch; "1 line" in the fit
   indicator; the Review subtitle reading "will copy unchanged".
+
+## 17. Build record — screenshot-1 follow-ups + shot-test mode (2026-11-17, branch `feature/redesign-handoff`, uncommitted)
+
+His three follow-ups after the Phase 8 review, plus the test mode he
+asked for ("yes to all" to the shot-test MCQs: real folder, CLI command,
+full set).
+
+**Screenshot 1, explained by him:** the image could cover the entire
+preview area because zooming and dragging weren't restricted to the
+preview bounds. Fix 1:
+- `clamp_pan` rewritten — the image now stays inside the stage: when it
+  is smaller than the stage it is centred (no pan); when larger, the pan
+  is limited so the image's edge can't cross the stage's opposite edge
+  (the old rule let it slide until only 40px was visible). The pan is
+  also re-clamped every frame in the stage draw, so a stale or
+  programmatically set pan can never leave the image off-stage.
+- The stage image is drawn with `painter.with_clip_rect(stage_rect)`,
+  so even at max zoom it can never draw over the file list or toolbar.
+- Manual zoom capped at 4.0× (was 8.0×).
+- The file-list scrollbar is hidden (`ScrollBarVisibility::AlwaysHidden`)
+  — the list still scrolls with the wheel and the Up/Down keys, and the
+  "N of M" counter shows the position. (The stage itself has no
+  ScrollArea; the file list's bar was the only scrollbar in the preview
+  area.)
+
+**Fix 2 — unified sidebar:** the three `sidebar_card` frames are gone;
+the sidebar is one container (a single Frame) with the three sections
+(SOURCE & OUTPUT / OCR THRESHOLDS / PROJECT) separated by hairlines, so
+they share one inner width. `sidebar_card` became `sidebar_section`
+(heading + contents, no frame). The Project grid became two rows of two
+buttons, each exactly half the inner width (`icon_text_button_sized`,
+36px tall) — the grid had sized buttons to their labels, so the columns
+drifted apart. Path rows, font field, sizing button, sliders and project
+buttons now all span the same inner width.
+
+**Fix 3 — log panel expandable + closable:** the activity-log panel is
+now `.resizable(true)` (drag its top edge; default 188px, 64–480px) and
+has a Close (X) button in its header; the status bar shows a "Show log"
+button while the panel is hidden. New field `show_log: bool` (default
+true).
+
+**Shot-test mode** (`--shot-test <input> <output> [--json <file>]`,
+`scripts/shot-test.bat` to double-click): the app opens at a fixed
+1920×1080 window, runs the REAL scan (real OCR) on the given folder,
+imports the REAL translated JSON (if given), then drives itself through
+20 states and saves a PNG per state into the output folder, plus
+`shots.txt` (the capture record). The shots: idle, scanning, Preview
+Rendered/OCR Boxes/Original at Fit, 100%, zoomed+panned (2×, pan
+clamped to the stage edge), JSON tab, inspector block cards, inspector
+with a filtered block, the five modals (paste, bulk edit, import report,
+re-scan confirm, nothing-translated), the sizing popup (forced open via
+`Popup::open_id`), a staged clean render, a staged failed render, the
+log closed, and an empty image (a generated blank PNG + a synthetic
+entry, cleaned up after). The render summaries and the import report are
+staged (the mode captures UI states; it does not run a render); the
+import-report shot uses the real import warnings when there are any,
+else sample warnings. Each shot settles 10 frames (thumbnails/preview)
+before the screenshot; a screenshot that doesn't arrive in 180 frames
+is recorded as MISSED and the mode moves on. It exits with
+`std::process::exit(0)` after writing the summary — a graceful close
+would call `save_settings()` and overwrite the user's saved input/output
+folders with the test folders; the original folders are also restored
+before exit. The screenshots use egui's `Context::request_screenshot`
+(the glow/wgpu backends implement `ViewportCommand::Screenshot` in
+eframe 0.37; the `__screenshot` feature is only for eframe's own
+`EFRAME_SCREENSHOT_TO` mechanism and is not needed).
+
+- `cargo test` green: **46/46** (was 45; +`shot_test_covers_twenty_named_shots_in_order`).
+  The `clamp_pan` test was rewritten for the new bounds rule. Same 5
+  pre-existing warnings, no new ones (a duplicated `#[test]` from the
+  edit was caught and removed — it had inflated the count to 47).
+- `rustfmt` note: `rustfmt src/main.rs` follows the crate-root mod tree
+  and reformats the WHOLE crate (same trap as Phase 7's `cargo fmt`).
+  The unintended reformat of `fonts.rs` / `image_io.rs` / `inpaint.rs` /
+  `ocr.rs` was reverted with `git checkout`; only `ui.rs` + `main.rs`
+  carry changes. Format single non-root files only.
+- NOT pushed; push only on his word (a fresh token is needed).
+- His Windows run: rebuild from the branch, then
+  `scripts\shot-test.bat <his images folder> [output] [translated JSON]`
+  (or the `caption-studio.exe --shot-test ...` command). Upload the
+  output folder; the 20 PNGs + `shots.txt` are the review set.
