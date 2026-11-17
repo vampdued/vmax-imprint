@@ -34,6 +34,7 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("chevron-left", include_bytes!("../assets/icons/chevron-left.svg")),
     ("chevron-right", include_bytes!("../assets/icons/chevron-right.svg")),
     ("check", include_bytes!("../assets/icons/check.svg")),
+    ("rotate-ccw", include_bytes!("../assets/icons/rotate-ccw.svg")),
     ("x", include_bytes!("../assets/icons/x.svg")),
     ("square", include_bytes!("../assets/icons/square.svg")),
     // VMAX interlock mark (brand kit v1.1, white on transparent). Not a
@@ -62,6 +63,7 @@ pub const USED_ICONS: &[&str] = &[
     "chevron-left",
     "chevron-right",
     "check",
+    "rotate-ccw",
     "square",
     "vmax-mark",
 ];
