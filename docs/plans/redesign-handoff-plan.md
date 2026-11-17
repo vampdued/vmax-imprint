@@ -596,3 +596,50 @@ Verified against local main `cebd449` (files: `src/ui.rs`, `src/theme.rs`,
   and whose apt mirror is unreachable, so only the headless paths were
   verified on Linux (see the README's Linux GUI note). No screenshot in
   this repo is claimed as a visual verification.
+
+## 15. Screenshot review — design-critique / UX-copy / design-system (2026-11-17)
+
+He ran the redesign build on Windows (1920×1080, 125% scaling) and sent
+7 screenshots; 3 carry his green annotations. The three skills ran over
+the screenshots with the code as ground truth. Scores: design-critique —
+the layout is sound (dark theme, stepper, three columns read clearly; the
+preview image correctly draws the eye first) but four defects break it;
+UX-copy — mostly good (modals have action-labelled buttons, errors name
+the fix) with three wording slips; design-system — tokens are clean
+(VMAX brand, SPEC surface scale, a consistent 4/8/12 spacing scale,
+hardcoded colours only where correct — image tints, zebra transparency,
+stepper badge ink), so the issues are layout and copy, not tokens.
+
+### Findings (all fixed in Phase 8, commit `28e7beb`, except the last)
+
+| # | Finding | Severity | Fix |
+|---|---------|----------|-----|
+| 1 | Sidebar overflows: the three cards don't fit the ~800px panel (at 125% scaling only ~584 logical px), so the PROJECT card — Save / Load / Scan again / Open output — was entirely unreachable, and the thresholds hint ("Changes apply instantly…") was clipped mid-line. The P2 comment "No outer ScrollArea: the fixed sections fit" was wrong at the default size. | 🔴 Critical | The cards now live in a vertical ScrollArea (OCR status + separator stay pinned above it). |
+| 2 | File-list status chips clip at the list's right edge ("untranslated" / "ready" cut mid-chip). The row content is ~2px over the 230px list once the scrollbar is counted. | 🔴 Critical | File list 230 → **250px** (SPEC deviation — the SPEC's 230 was drawn at 100%; at 125% the rows don't fit) + row inner padding 6 → 4. Thumbnails stay 44px (SPEC). |
+| 3 | All five modals open top-left, covering the "Caption Studio" brand and the stepper (egui `Window` with no anchor defaults there). | 🟡 Moderate | `.anchor(Align2::CENTER_CENTER, [0, 0])` on every modal (copy-originals, re-scan, paste, bulk edit, import report). |
+| 4 | The sizing popup is wider than the 316px sidebar and spills ~195px into the workspace, covering the output-folder row. | 🟡 Moderate | `.width(sizing_btn.rect.width())` — the popup is exactly the button's width. |
+| 5 | Inspector empty state is blank black at launch: `verify_text` was initialised to `""`, and `refresh_preview` (which sets it) only runs on the Preview tab. | 🟡 Moderate | Initialised to the same guidance as the JSON tab's hint ("Scan images to fill this in, or paste translated JSON here."). |
+| 6 | Fit line always plural: "Fits plate · 1 lines · 59 chars". | 🟡 Minor (copy) | New pure `fit_label()` with agreement ("1 line", "1 char") + test. |
+| 7 | Review subtitle "N unchanged" is jargon — it counts images with no kept blocks. | 🟡 Minor (copy) | "N will copy unchanged" (matches the render outcome language). |
+| 8 | Import warning "blocks 4, 5, 6 have no matching text" misleads — it reads as if the *text* didn't match, when the block id doesn't exist in the OCR data. | 🟡 Minor (copy) | "blocks 4, 5, 6 aren't in the scan". |
+| 9 | Screenshot 1 (bare preview image, no tabs/toolbar/file list) does NOT reproduce from the current code: the Preview tab always draws tabs + toolbar + file list + stage, and the stage painter is clipped to the stage rect, so the image can't cover the file list. It matches the Phase-1 layout (central panel = preview image only, before the file list existed in P3) but carries Phase-4/5 features (block cards, structured log), which no single commit has. Most likely a stale exe. **Not fixed — needs his steps / a confirm that the exe is from the current branch.** | Unreproduced | Ask him. |
+
+### Also noted, not changed
+- The scan log line "OK <name>: N kept, M filtered" repeats the INFO tag's "OK" — left as-is (it's the scan-success marker, and the log format is his to read).
+- The import modal's long filenames wrap to two lines — acceptable once the modal is centred.
+- The "1 of 18" toolbar nav and the mode/zoom segmented groups are correctly aligned; the green boxes there were about the file-list chips (finding 2), not the toolbar itself.
+
+## 16. Build record — Phase 8 (2026-11-17, branch `feature/redesign-handoff`, commits `28e7beb` + record)
+
+- `cargo test --offline` green: **45/45** (was 44; +`fit_label_agrees_in_number`).
+- `rustfmt --edition 2021` on `src/ui.rs` + `src/parser.rs` (the sidebar
+  re-nest re-indents ~180 lines; the non-whitespace diff is 66 + / 31 −
+  in ui.rs, 4 lines in parser.rs). Same pre-existing warnings, no new ones.
+- NOT pushed; push only on his word (a fresh token is needed).
+- The gate is still his Windows eyeball — these fixes are verified by
+  tests + code inspection only, not by a visual pass here (Linux GUI
+  needs `libxkbcommon-x11`, missing on this VM). He should re-check: the
+  Project card reachable by scrolling the sidebar; the file-list chips
+  fully visible; modals opening centred; the sizing popup inside the
+  sidebar; the inspector showing guidance at launch; "1 line" in the fit
+  indicator; the Review subtitle reading "will copy unchanged".
