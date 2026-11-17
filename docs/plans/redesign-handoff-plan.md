@@ -1166,3 +1166,39 @@ commit each). The spec's line numbers matched this branch's `ui.rs`.
   sits clear of the window controls, and the file rows show the new
   badges without clipping.
 - F10 caret: still open (see §22).
+
+## 25. Build record — render button unreachable, header primary ungated (2026-11-17, branch `feature/redesign-handoff`, commit `5285cf5`)
+
+He reported the main flaw: he could not render at all and could not
+find the final render button.
+
+- **Root cause:** the header primary only offered "Render N Images"
+  when the workflow's current step was Review or Render, which required
+  `translate_done` — 100% of kept blocks translated (`translated ==
+  total_blocks` in `derive_workflow_state`). With 0 of 47 translated
+  the primary read "Review in Preview", and there was no other render
+  button anywhere (not in the sidebar PROJECT section, not in the
+  Preview tab), so a user who had scanned but not yet translated could
+  not render at all. The smoking gun: `start_render` already asks
+  "Render anyway?" when nothing differs — that confirm was unreachable
+  behind the same gate.
+- **Fix:** the primary is now: no scan → "Scan Images"; scanned data →
+  "Render N Images"; all done → "Open Output Folder". Rendering with
+  untranslated blocks is safe (they keep their original text,
+  render.rs), and the "Render anyway?" confirm now actually guards the
+  0-translated case. The stepper still shows the true workflow status
+  (Translate current, "N of M translated"); the primary is the action,
+  not the status. The old Translate branch (jump to Preview + first
+  untranslated file) is gone; the "Live Preview & OCR Check" tab and
+  the file list's "Needs Text" chips cover getting to untranslated
+  blocks. No new button was added — one primary, no duplicate.
+- `cargo test` green: **48/48** (the workflow-derivation tests are
+  untouched; the fix is to `header_primary` / `run_header_primary`
+  only). `rustfmt --edition 2021` on `ui.rs`.
+- NOT pushed — branch is 1 ahead of origin (`5285cf5` on top of
+  `e12b32b`); push on his word + a fresh token.
+- His Windows run is the gate: rebuild from the branch, scan, and the
+  header primary should read "Render N Images" right after the scan —
+  before any translation. Clicking it with nothing translated should
+  show the "Nothing translated / Render anyway?" confirm.
+- F10 caret: still open (see §22).
