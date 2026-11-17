@@ -2,38 +2,53 @@
 REM Caption Studio shot-test: drives the app through every reviewable
 REM state and saves a PNG per state into the output folder.
 REM
-REM Usage: scripts\shot-test.bat <input-folder> [output-folder] [translated-json]
-REM   input-folder    Folder of images to scan (your real folder).
+REM Usage: scripts\shot-test.bat [input-folder] [output-folder] [translated-json]
+REM   input-folder    Folder of images to scan (default: C:\Users\VampDued\Downloads\!!!!!!!).
 REM   output-folder   Where the PNGs go (default: .\shot-test-output).
-REM   translated-json Optional translated JSON to import first.
-REM
-REM Example:
-REM   scripts\shot-test.bat "C:\Users\VampDued\Pictures\krithika-memes"
-REM   scripts\shot-test.bat "C:\Users\VampDued\Pictures\krithika-memes" "C:\Users\VampDued\Desktop\shots" "C:\Users\VampDued\Downloads\Translated texts.json"
+REM   translated-json Optional translated JSON to import (default: C:\Users\VampDued\Downloads\!!!!!!!\Translated texts.json).
 setlocal
 cd /d "%~dp0.."
 
-if not exist "target\release\caption-studio.exe" (
-  echo Build the exe first:  .\scripts\build-windows.ps1
+set "EXE=D:\cargo-target\release\caption-studio.exe"
+if not exist "%EXE%" if exist "%CARGO_TARGET_DIR%\release\caption-studio.exe" set "EXE=%CARGO_TARGET_DIR%\release\caption-studio.exe"
+if not exist "%EXE%" if exist "target\release\caption-studio.exe" set "EXE=target\release\caption-studio.exe"
+
+if not exist "%EXE%" (
+  echo Could not find caption-studio.exe at:
+  echo   D:\cargo-target\release\caption-studio.exe
+  echo   or target\release\caption-studio.exe
   pause
   exit /b 2
 )
 
 set "INPUT=%~1"
-if "%INPUT%"=="" (
-  echo Usage: shot-test.bat ^<input-folder^> [output-folder] [translated-json]
-  echo   Example: scripts\shot-test.bat "C:\Users\VampDued\Pictures\krithika-memes"
-  pause
-  exit /b 2
-)
+if "%INPUT%"=="" set "INPUT=C:\Users\VampDued\Downloads\!!!!!!!"
+
 set "OUTPUT=%~2"
 if "%OUTPUT%"=="" set "OUTPUT=%~dp0..\shot-test-output"
+
 set "JSON=%~3"
+if "%JSON%"=="" (
+  if exist "%INPUT%\Translated texts.json" (
+    set "JSON=%INPUT%\Translated texts.json"
+  ) else if exist "C:\Users\VampDued\Downloads\!!!!!!!\Translated texts.json" (
+    set "JSON=C:\Users\VampDued\Downloads\!!!!!!!\Translated texts.json"
+  )
+)
+
+echo ========================================================
+echo Caption Studio Shot Test
+echo   EXE:    %EXE%
+echo   INPUT:  %INPUT%
+echo   OUTPUT: %OUTPUT%
+echo   JSON:   %JSON%
+echo ========================================================
+echo.
 
 if "%JSON%"=="" (
-  target\release\caption-studio.exe --shot-test "%INPUT%" "%OUTPUT%"
+  "%EXE%" --shot-test "%INPUT%" "%OUTPUT%"
 ) else (
-  target\release\caption-studio.exe --shot-test "%INPUT%" "%OUTPUT%" --json "%JSON%"
+  "%EXE%" --shot-test "%INPUT%" "%OUTPUT%" --json "%JSON%"
 )
 
 echo.

@@ -1,6 +1,6 @@
 [package]
 name = "caption-studio"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 description = "Batch image caption extractor, translator and renderer — Rust port of caption_replacer.py"
 license = "MIT OR Apache-2.0"
@@ -52,8 +52,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 
 [profile.release]
 opt-level = 3
-lto = "fat"
-codegen-units = 1
+lto = "thin"
+codegen-units = 12
 strip = true
 panic = "unwind"
 

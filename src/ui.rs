@@ -62,12 +62,13 @@ impl WorkflowStep {
     }
 }
 
-/// A step's state in the header stepper: done (✓), current (blue), or
-/// still to do (numbered).
+/// A step's state in the header stepper: done (✓), current (blue), failed (!),
+/// or still to do (numbered).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StepState {
     Todo,
     Current,
+    Failed,
     Done,
 }
 
@@ -371,7 +372,7 @@ impl CaptionStudioApp {
             fit_cache: std::collections::HashMap::new(),
             preview_texture: None,
             preview_size: [0.0, 0.0],
-            verify_text: "Scan images to fill this in, or paste translated JSON here.".to_string(),
+            verify_text: "Click 'Scan images' to extract captions, or 'Paste translated JSON…' to load translations.".to_string(),
             selected_block: None,
             blocks_scroll_to_selected: false,
             preview_entry: None,
@@ -396,7 +397,7 @@ impl CaptionStudioApp {
             log_height: settings.log_height.clamp(64.0, 480.0),
             shot_test: None,
             last_save_path: None,
-            status: "Choose an input folder, then click Scan & Extract Text.".to_string(),
+            status: "Choose an input folder, then click 'Scan images'.".to_string(),
             progress: 0.0,
             busy: false,
             cancel: Arc::new(AtomicBool::new(false)),
@@ -536,12 +537,13 @@ impl CaptionStudioApp {
     fn header_primary(&self) -> (&'static str, String) {
         let wf = self.workflow_state();
         if wf.states.iter().all(|s| matches!(s, StepState::Done)) {
-            return ("folder-open", "Open Output Folder".to_string());
+            return ("folder-open", "Open output folder".to_string());
         }
         match wf.current {
-            WorkflowStep::Scan => ("scan", "Scan Images".to_string()),
+            WorkflowStep::Scan => ("scan", "Scan images".to_string()),
             WorkflowStep::Translate | WorkflowStep::Review | WorkflowStep::Render => {
-                ("play", format!("Render {} Images", wf.images))
+                let noun = if wf.images == 1 { "image" } else { "images" };
+                ("play", format!("Render {} {noun}", wf.images))
             }
         }
     }
@@ -592,11 +594,10 @@ impl CaptionStudioApp {
             .set_title("Select Input Images Folder")
             .pick_folder()
         {
-            self.input_dir = folder.to_string_lossy().to_string();
-            self.output_dir = folder
-                .join("translated_output")
-                .to_string_lossy()
-                .to_string();
+            self.input_dir = normalize_display_path(&folder.to_string_lossy());
+            self.output_dir = normalize_display_path(
+                &folder.join("translated_output").to_string_lossy(),
+            );
             self.extracted = None;
             self.clear_render_state();
             self.preview_texture = None;
@@ -610,7 +611,7 @@ impl CaptionStudioApp {
             .set_title("Select Output Folder")
             .pick_folder()
         {
-            self.output_dir = folder.to_string_lossy().to_string();
+            self.output_dir = normalize_display_path(&folder.to_string_lossy());
             self.save_settings();
         }
     }
@@ -632,12 +633,12 @@ impl CaptionStudioApp {
     /// preserved by matching on the old block's original text.
     fn reapply_thresholds(&mut self) {
         let Some(data) = self.extracted.clone() else {
-            self.status = "Run 'Scan & Extract Text' first, then adjust thresholds anytime.".into();
+            self.status = "Click 'Scan images' first, then adjust thresholds anytime.".into();
             return;
         };
         self.clear_render_state();
         if !data.images.iter().any(|img| !img.raw_lines.is_empty()) {
-            self.status = "This captions.json predates raw OCR storage. Click 'Scan & Extract Text' once to enable instant tuning.".into();
+            self.status = "This captions.json predates raw OCR storage. Click 'Scan images' once to enable instant tuning.".into();
             return;
         }
         // Preserve translations from the editor, keyed by original text.
@@ -767,12 +768,12 @@ impl CaptionStudioApp {
 
     fn copy_compact_for_ai(&mut self) {
         if self.editor_text.trim().is_empty() {
-            self.status = "Nothing to copy — Scan & Extract Text first or load a JSON file.".into();
+            self.status = "Nothing to copy — click 'Scan images' first or load a captions file.".into();
             return;
         }
         match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(self.editor_text.clone())) {
             Ok(()) => {
-                self.status = "Copied JSON to clipboard — paste it into your AI translator.".into()
+                self.status = "Copied all images' JSON to clipboard — paste it into your AI translator.".into()
             }
             Err(e) => self.status = format!("Couldn't copy to the clipboard ({e}) — try again."),
         }
@@ -780,7 +781,7 @@ impl CaptionStudioApp {
 
     fn save_full_json(&mut self) {
         let Some(data) = self.extracted.clone() else {
-            self.status = "No data — run 'Scan & Extract Text' first.".into();
+            self.status = "No data — click 'Scan images' first.".into();
             return;
         };
         if let Some(path) = rfd::FileDialog::new()
@@ -1218,7 +1219,7 @@ impl CaptionStudioApp {
                 Some(e) => {
                     format!("Couldn't preview the JSON — {e}. Fix the marked spot and try again.")
                 }
-                None => "Scan & Extract Text or paste translated JSON to preview.".into(),
+                None => "Click 'Scan images' or 'Paste translated JSON…' to preview.".into(),
             };
             return;
         };
@@ -1365,9 +1366,9 @@ impl CaptionStudioApp {
                         self.preview_key.clear();
                     }
                     let (chip, col) = if blk.kept() {
-                        ("kept", t.ok)
+                        ("Kept", t.ok)
                     } else {
-                        ("filtered", t.warning)
+                        ("Filtered", t.warning)
                     };
                     status_chip(ui, chip, col);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1446,7 +1447,7 @@ impl CaptionStudioApp {
             });
             ui.add_space(8.0);
         }
-        for drop in &dropped {
+        for (drop_idx, drop) in dropped.iter().enumerate() {
             let frame = egui::Frame::new()
                 .fill(t.card)
                 .stroke(egui::Stroke::new(1.0, t.card_border))
@@ -1456,11 +1457,11 @@ impl CaptionStudioApp {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new("Filtered")
+                        egui::RichText::new(format!("Filtered #{}", drop_idx + 1))
                             .font(egui::FontId::proportional(crate::theme::CARD))
-                            .color(t.text_faint),
+                            .color(t.text_dim),
                     );
-                    status_chip(ui, "filtered", t.warning);
+                    status_chip(ui, "Filtered", t.warning);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Keep needs the raw lines to rebuild the block; an
                         // old captions.json without them disables it.
@@ -1683,7 +1684,7 @@ impl CaptionStudioApp {
                     self.tab = Tab::Json;
                     let prefix = if cancelled { "Stopped. " } else { "" };
                     self.status = format!(
-                        "{prefix}Extracted {n} images. Click 'Inspect OCR Boxes' to verify or 'Copy JSON for AI'."
+                        "{prefix}Scanned {n} images. Switch to 'Live Preview & OCR Check' or click 'Copy all JSON for AI'."
                     );
                 }
                 WorkerMsg::FileRendered { file, outcome } => match outcome {
@@ -1968,30 +1969,56 @@ impl eframe::App for CaptionStudioApp {
         // panels are drawn, so this frame renders the new state.
         self.shot_test_step(&ctx);
 
+        let modal_open = self.confirm_copy_originals
+            || self.show_paste_modal
+            || self.show_bulk_edit
+            || self.import_report.is_some();
+
+        // Draw a full-viewport dim scrim behind any active modal so background
+        // logs, JSON, and inspector cards never bleed through modal text.
+        if modal_open {
+            egui::Area::new(egui::Id::new("modal_scrim"))
+                .order(egui::Order::Middle)
+                .fixed_pos(egui::Pos2::ZERO)
+                .show(&ctx, |ui| {
+                    let screen = ui
+                        .ctx()
+                        .input(|i| i.raw.screen_rect.unwrap_or_else(|| ui.max_rect()));
+                    ui.painter().rect_filled(
+                        screen,
+                        0.0,
+                        egui::Color32::from_black_alpha(196),
+                    );
+                });
+        }
+
         // --- Confirm-copy-originals modal (Python askYesNo) ---
         // While it is open the panels behind it are disabled (a focus trap:
         // egui windows are non-modal, so without this Tab and clicks escape
         // to the panels) and Escape dismisses it.
         if self.confirm_copy_originals {
             let mut open = true;
-            egui::Window::new("Nothing translated")
+            let t = crate::theme::Tokens::get(&ctx);
+            egui::Window::new("No translated captions yet")
                 .collapsible(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .resizable(false)
+                .order(egui::Order::Foreground)
+                .frame(modal_frame(&t))
                 .open(&mut open)
                 .show(&ctx, |ui| {
-                    ui.label("Every caption matches the original, so rendering would just put the original text back on the images. Render them anyway?");
-                    ui.horizontal(|ui| {
-                        let yes = ui.button("Render anyway");
-                        focus_ring(ui, &yes);
+                    ui.set_max_width(440.0);
+                    ui.label("Every caption still matches the original OCR text, so rendering now will write the original captions back onto your images.");
+                    ui.add_space(16.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let yes = primary_modal_button(ui, "Render anyway");
                         if yes.clicked() {
                             self.confirm_copy_originals = false;
                             if let Some(data) = self.pending_render.take() {
                                 self.launch_render(data);
                             }
                         }
-                        let cancel = ui.button("Go back");
-                        focus_ring(ui, &cancel);
+                        let cancel = secondary_modal_button(ui, "Go back");
                         if cancel.clicked() {
                             self.confirm_copy_originals = false;
                             self.pending_render = None;
@@ -2004,32 +2031,46 @@ impl eframe::App for CaptionStudioApp {
             }
         }
 
-        // --- Paste Translated JSON modal (JSON tab, Phase 4 item 14) ---
+        // --- Paste translated JSON modal (JSON tab, Phase 4 item 14) ---
         // The pasted text goes into the editor on Apply; "Paste from
         // clipboard" fills the textarea from the clipboard first.
         if self.show_paste_modal {
             let mut open = true;
-            egui::Window::new("Paste Translated JSON")
+            let t = crate::theme::Tokens::get(&ctx);
+            egui::Window::new("Paste translated JSON")
                 .collapsible(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .resizable(false)
                 .default_size([700.0, 450.0])
+                .order(egui::Order::Foreground)
+                .frame(modal_frame(&t))
                 .open(&mut open)
                 .show(&ctx, |ui| {
-                    ui.label("Paste the translated JSON (the compact map from the AI) below, then Apply.");
+                    ui.label("Paste the translated JSON map from your AI translator below, then click Apply.");
                     ui.add_space(8.0);
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut self.paste_text)
-                                .font(egui::TextStyle::Monospace)
-                                .desired_width(f32::INFINITY)
-                                .desired_rows(20)
-                                .hint_text("{\"_1.jpg\": {\"1\": \"translation\"}}"),
-                        );
-                    });
-                    ui.add_space(8.0);
+                    egui::Frame::new()
+                        .fill(t.field)
+                        .stroke(egui::Stroke::new(1.0, t.field_border))
+                        .corner_radius(t.r_sm())
+                        .inner_margin(egui::Margin::same(8))
+                        .show(ui, |ui| {
+                            egui::ScrollArea::vertical()
+                                .max_height(320.0)
+                                .show(ui, |ui| {
+                                    let resp = ui.add(
+                                        egui::TextEdit::multiline(&mut self.paste_text)
+                                            .font(egui::TextStyle::Monospace)
+                                            .desired_width(f32::INFINITY)
+                                            .desired_rows(16)
+                                            .frame(egui::Frame::NONE)
+                                            .hint_text("{\n  \"example.jpg\": {\n    \"1\": \"Translated caption here\"\n  }\n}"),
+                                    );
+                                    focus_ring(ui, &resp);
+                                });
+                        });
+                    ui.add_space(12.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Paste from clipboard").clicked() {
+                        if secondary_modal_button(ui, "Paste from clipboard").clicked() {
                             match arboard::Clipboard::new()
                                 .and_then(|mut cb| cb.get_text())
                             {
@@ -2040,32 +2081,26 @@ impl eframe::App for CaptionStudioApp {
                                 }
                             }
                         }
-                        // The file import lives here, not as a second
-                        // top-level button: it loads the same compact map
-                        // as Paste, only from a file. A picked file closes
-                        // the dialog (the import already landed in the
-                        // editor); cancelling the picker leaves it open so
-                        // the pasted text isn't lost.
-                        if ui.button("Import from file…").clicked()
+                        if secondary_modal_button(ui, "Import from file…").clicked()
                             && self.load_translated_file()
                         {
                             self.show_paste_modal = false;
                         }
-                        let apply = ui.button("Apply");
-                        focus_ring(ui, &apply);
-                        if apply.clicked() {
-                            self.editor_text = self.paste_text.clone();
-                            self.clear_render_state();
-                            self.preview_key.clear();
-                            self.show_paste_modal = false;
-                            self.status =
-                                "Pasted translated JSON. Switch to Live Preview or Render.".into();
-                        }
-                        let cancel = ui.button("Cancel");
-                        focus_ring(ui, &cancel);
-                        if cancel.clicked() {
-                            self.show_paste_modal = false;
-                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let apply = primary_modal_button(ui, "Apply");
+                            if apply.clicked() {
+                                self.editor_text = self.paste_text.clone();
+                                self.clear_render_state();
+                                self.preview_key.clear();
+                                self.show_paste_modal = false;
+                                self.status =
+                                    "Applied translated JSON. Switch to 'Live Preview & OCR Check' or click Render.".into();
+                            }
+                            let cancel = secondary_modal_button(ui, "Cancel");
+                            if cancel.clicked() {
+                                self.show_paste_modal = false;
+                            }
+                        });
                     });
                 });
             if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -2079,28 +2114,27 @@ impl eframe::App for CaptionStudioApp {
         // typed; Done just closes the modal.
         if self.show_bulk_edit {
             let mut open = true;
-            egui::Window::new("Bulk edit — Translation JSON")
+            let t = crate::theme::Tokens::get(&ctx);
+            egui::Window::new("Bulk edit all JSON")
                 .collapsible(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .resizable(true)
-                .default_size([900.0, 600.0])
-                // Capped, so the window can't span the full height and put
-                // the Done button on top of the status bar.
-                .max_size([900.0, 720.0])
+                .default_size([860.0, 580.0])
+                .max_size([860.0, 680.0])
+                .order(egui::Order::Foreground)
+                .frame(modal_frame(&t))
                 .open(&mut open)
                 .show(&ctx, |ui| {
-                    ui.label("The full compact map for every image. Edits apply immediately; the per-image view and the preview update from here.");
+                    ui.label("Full translation map across all scanned images. Edits apply immediately to the per-image view and live preview.");
                     ui.add_space(8.0);
-                    // Capped height, and the editor sits on an opaque
-                    // field fill — without it the JSON tab behind the
-                    // modal showed through the text edit as double text.
-                    let t = crate::theme::Tokens::get(ui.ctx());
                     egui::Frame::new()
                         .fill(t.field)
-                        .corner_radius(egui::CornerRadius::same(t.radius_sm as u8))
+                        .stroke(egui::Stroke::new(1.0, t.field_border))
+                        .corner_radius(t.r_sm())
+                        .inner_margin(egui::Margin::same(8))
                         .show(ui, |ui| {
                             egui::ScrollArea::vertical()
-                                .max_height(480.0)
+                                .max_height(440.0)
                                 .show(ui, |ui| {
                                     let mut layouter = |ui: &egui::Ui,
                                                         buf: &dyn egui::TextBuffer,
@@ -2113,9 +2147,10 @@ impl eframe::App for CaptionStudioApp {
                                         egui::TextEdit::multiline(&mut self.editor_text)
                                             .font(egui::TextStyle::Monospace)
                                             .desired_width(f32::INFINITY)
-                                            .desired_rows(24)
+                                            .desired_rows(22)
+                                            .frame(egui::Frame::NONE)
                                             .layouter(&mut layouter)
-                                            .hint_text("Scan images to fill this in, or paste translated JSON here."),
+                                            .hint_text("Click 'Scan images' to extract captions, or 'Paste translated JSON…' to load translations."),
                                     )
                                     .accessible_name("Translation JSON");
                                     focus_ring(ui, &resp);
@@ -2125,12 +2160,13 @@ impl eframe::App for CaptionStudioApp {
                                     }
                                 });
                         });
-                    ui.add_space(8.0);
-                    let done = ui.button("Done");
-                    focus_ring(ui, &done);
-                    if done.clicked() {
-                        self.show_bulk_edit = false;
-                    }
+                    ui.add_space(12.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let done = primary_modal_button(ui, "Done");
+                        if done.clicked() {
+                            self.show_bulk_edit = false;
+                        }
+                    });
                 });
             if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.show_bulk_edit = false;
@@ -2138,40 +2174,53 @@ impl eframe::App for CaptionStudioApp {
         }
 
         // --- Import report modal (JSON tab, Phase 4 item 14) ---
-        // After an import that skipped files, the per-file errors are
-        // listed here; the valid files were already imported.
+        // After an import that skipped items, the per-item notices are
+        // listed here; all matching translations were already imported.
         if let Some(report) = self.import_report.clone() {
             let mut open = true;
-            egui::Window::new("Import — some files skipped")
+            let t = crate::theme::Tokens::get(&ctx);
+            egui::Window::new("Import summary — unmatched entries skipped")
                 .collapsible(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .resizable(false)
-                .default_size([600.0, 300.0])
+                .default_size([620.0, 300.0])
+                .order(egui::Order::Foreground)
+                .frame(modal_frame(&t))
                 .open(&mut open)
                 .show(&ctx, |ui| {
-                    ui.label("The valid files were imported. These were skipped:");
+                    ui.label("All matching translations were imported. These entries did not match the current scan:");
                     ui.add_space(8.0);
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        for line in &report {
-                            ui.label(line);
+                    egui::Frame::new()
+                        .fill(t.field)
+                        .stroke(egui::Stroke::new(1.0, t.card_border))
+                        .corner_radius(t.r_sm())
+                        .inner_margin(egui::Margin::same(10))
+                        .show(ui, |ui| {
+                            egui::ScrollArea::vertical()
+                                .max_height(180.0)
+                                .show(ui, |ui| {
+                                    for line in &report {
+                                        ui.label(
+                                            egui::RichText::new(line)
+                                                .font(egui::FontId::monospace(crate::theme::CODE))
+                                                .color(t.text_dim),
+                                        );
+                                        ui.add_space(4.0);
+                                    }
+                                });
+                        });
+                    ui.add_space(12.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let ok = primary_modal_button(ui, "OK");
+                        if ok.clicked() {
+                            self.import_report = None;
                         }
                     });
-                    ui.add_space(8.0);
-                    let ok = ui.button("OK");
-                    focus_ring(ui, &ok);
-                    if ok.clicked() {
-                        self.import_report = None;
-                    }
                 });
             if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.import_report = None;
             }
         }
-
-        let modal_open = self.confirm_copy_originals
-            || self.show_paste_modal
-            || self.show_bulk_edit
-            || self.import_report.is_some();
 
         // --- Status bar (SPEC §3: exact 32px) ---
         // Counts + last save path + the status message (the accesskit live
@@ -2287,9 +2336,10 @@ impl eframe::App for CaptionStudioApp {
                     ui.add_enabled_ui(!modal_open, |ui| {
                         let t = crate::theme::Tokens::get(ui.ctx());
                         let handle = ui.allocate_response(
-                            egui::vec2(ui.available_width(), 8.0),
+                            egui::vec2(ui.available_width(), 12.0),
                             egui::Sense::click_and_drag(),
-                        );
+                        )
+                        .on_hover_text("Drag to resize activity log (double-click to reset)");
                         if handle.hovered() || handle.dragged() {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
                         }
@@ -2613,19 +2663,17 @@ impl eframe::App for CaptionStudioApp {
                                     );
                                     focus_ring(ui, &sizing_btn);
                                     let mut picked: Option<crate::model::SizingMode> = None;
-                                    // Shot-test: force the popup open for the sizing
-                                    // shot (it needs the button's response id, which
-                                    // only exists while the sidebar is drawn).
-                                    if self
-                                        .shot_test
-                                        .as_ref()
-                                        .map(|st| st.is_current(ShotKind::SizingPopup))
-                                        .unwrap_or(false)
-                                    {
-                                        egui::Popup::open_id(
-                                            ui.ctx(),
-                                            egui::Popup::default_response_id(&sizing_btn),
-                                        );
+                                    let popup_id = egui::Popup::default_response_id(&sizing_btn);
+                                    // Shot-test: open the popup only during SizingPopup, and
+                                    // explicitly close it on all other shots or while busy/modal.
+                                    if let Some(st) = self.shot_test.as_ref() {
+                                        if st.is_current(ShotKind::SizingPopup) {
+                                            egui::Popup::open_id(ui.ctx(), popup_id);
+                                        } else {
+                                            egui::Popup::close_id(ui.ctx(), popup_id);
+                                        }
+                                    } else if self.busy || modal_open {
+                                        egui::Popup::close_id(ui.ctx(), popup_id);
                                     }
                                     egui::Popup::menu(&sizing_btn)
                                         .close_behavior(
@@ -2735,9 +2783,10 @@ impl eframe::App for CaptionStudioApp {
                                     });
                                     ui.add_space(4.0);
                                     ui.label(crate::theme::label_text(
-                                        "Minimum text length",
+                                        "Min. unboxed text length (chars)",
                                         crate::theme::LABEL,
-                                    ));
+                                    ))
+                                    .on_hover_text("Unboxed text shorter than this character count is filtered out as background noise; boxed captions are kept regardless of length.");
                                     ui.horizontal(|ui| {
                                         let slider_w = (ui.available_width() - 52.0).max(60.0);
                                         let min_resp = ui.add_sized(
@@ -2845,19 +2894,31 @@ impl eframe::App for CaptionStudioApp {
             .resizable(false)
             .show(ui, |ui| {
                 ui.add_enabled_ui(!modal_open, |ui| {
-                    ui.label(crate::theme::heading("Detected Blocks", crate::theme::CARD));
-                    let copy_resp = ui.small_button("Copy block list");
-                    focus_ring(ui, &copy_resp);
-                    if copy_resp.clicked() {
-                        match arboard::Clipboard::new()
-                            .and_then(|mut cb| cb.set_text(self.verify_text.clone()))
-                        {
-                            Ok(()) => self.status = "Block list copied to clipboard.".into(),
-                            Err(_) => {
-                                self.status = "Couldn't copy the block list — try again.".into()
+                    let t = crate::theme::Tokens::get(ui.ctx());
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("DETECTED BLOCKS")
+                                .font(crate::theme::display(13.0))
+                                .color(t.accent_ink),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let copy_resp = icon_text_button(ui, "copy", "Copy block list");
+                            if copy_resp.clicked() {
+                                match arboard::Clipboard::new()
+                                    .and_then(|mut cb| cb.set_text(self.verify_text.clone()))
+                                {
+                                    Ok(()) => self.status = "Block list copied to clipboard.".into(),
+                                    Err(_) => {
+                                        self.status = "Couldn't copy the block list — try again.".into()
+                                    }
+                                }
                             }
-                        }
-                    }
+                        });
+                    });
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.add_space(4.0);
                     // Block cards (editable translations, Keep/Filter toggles,
                     // fit indicator), so a card can be clicked to highlight its
                     // box. When there is no entry yet (no scan, no JSON), the
@@ -2868,15 +2929,16 @@ impl eframe::App for CaptionStudioApp {
                             self.show_block_cards(ui, entry);
                         }
                         _ => {
-                            // A plain label, not monospace: the empty-state
-                            // message is a sentence ("No text found…"), and
-                            // the mono font read as an editable code field
-                            // (a caret showed after "copied").
-                            let t = crate::theme::Tokens::get(ui.ctx());
-                            ui.label(
-                                egui::RichText::new(&self.verify_text)
-                                    .size(crate::theme::BODY)
-                                    .color(t.text_dim),
+                            // Non-selectable plain label so egui never paints a text caret
+                            // at the end of the empty-state sentence.
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&self.verify_text)
+                                        .size(crate::theme::BODY)
+                                        .color(t.text_dim),
+                                )
+                                .selectable(false)
+                                .wrap(),
                             );
                         }
                     });
@@ -2905,24 +2967,23 @@ impl eframe::App for CaptionStudioApp {
                     // map for the AI; Paste opens a modal; Bulk edit opens
                     // the full-document editor as a modal.
                     ui.horizontal(|ui| {
-                        if icon_text_button(ui, "copy", "Copy JSON for AI").clicked() {
+                        if icon_text_button(ui, "copy", "Copy all JSON for AI")
+                            .on_hover_text("Copy the compact translation map for all scanned images")
+                            .clicked()
+                        {
                             self.copy_compact_for_ai();
                         }
-                        if icon_text_button(ui, "clipboard-paste", "Paste Translated JSON…").clicked() {
+                        if icon_text_button(ui, "clipboard-paste", "Paste translated JSON…")
+                            .on_hover_text("Paste translated JSON from clipboard or import a .json file")
+                            .clicked()
+                        {
                             self.show_paste_modal = true;
                             self.paste_text.clear();
                         }
-                        // No "Import Translated JSON…" button here: it
-                        // loads the same compact map as Paste, only from a
-                        // file instead of the clipboard, so the file import
-                        // lives inside the paste dialog as "Import from
-                        // file…" — one door for loading translations.
-                        if icon_text_button(ui, "file-json", "Bulk edit…").clicked() {
-                            // Regenerate the bulk map from the resolved
-                            // data so it matches the current scan — the raw
-                            // imported text can carry stale block ids that
-                            // "aren't in the scan", and the bulk map would
-                            // then disagree with the per-image JSON.
+                        if icon_text_button(ui, "file-json", "Bulk edit all JSON…")
+                            .on_hover_text("View and edit the combined translation JSON for every image")
+                            .clicked()
+                        {
                             if let Some(data) = self.resolve_preview_data() {
                                 self.editor_text =
                                     serde_json::to_string_pretty(&compact_map_from_data(&data))
@@ -2930,11 +2991,15 @@ impl eframe::App for CaptionStudioApp {
                             }
                             self.show_bulk_edit = true;
                         }
-                        // No "Verify in Preview" button here: the header
-                        // primary "Review" already jumps to the preview
-                        // (and to the first untranslated block), and the
-                        // "Live Preview & OCR Check" tab is the same
-                        // navigation — three ways to one place.
+                        if !self.preview_file.is_empty() {
+                            let t = crate::theme::Tokens::get(ui.ctx());
+                            ui.separator();
+                            ui.label(
+                                egui::RichText::new(format!("Showing: {}", self.preview_file))
+                                    .size(crate::theme::CAPTION)
+                                    .color(t.text_dim),
+                            );
+                        }
                     });
                     let data = self.resolve_preview_data();
                     let text = per_image_json(data.as_ref(), &self.preview_file);
@@ -2957,7 +3022,7 @@ impl eframe::App for CaptionStudioApp {
                             .desired_width(f32::INFINITY)
                             .layouter(&mut layouter)
                             .interactive(false)
-                            .hint_text("Scan images to fill this in, or paste translated JSON here."),
+                            .hint_text("Click 'Scan images' to extract captions, or 'Paste translated JSON…' above to load translations."),
                     )
                     .accessible_name("Translation JSON for this image");
                     focus_ring(ui, &resp);
@@ -3008,17 +3073,18 @@ impl eframe::App for CaptionStudioApp {
                                 );
                                 let mode_w = segmented_button_width(
                                     ui,
-                                    &["Original", "Detected Boxes", "Rendered"],
+                                    &["Original", "Detected boxes", "Rendered"],
                                 ) * 3.0;
                                 let zoom_w = segmented_button_width(
                                     ui,
-                                    &["Fit View", zoom_pct.as_str()],
-                                ) * 2.0;
+                                    &["Fit view", zoom_pct.as_str()],
+                                ) * 2.0
+                                    + 56.0;
                                 let right_reserve = mode_w
                                     + zoom_w
                                     + 1.0
                                     + 12.0
-                                    + ui.spacing().item_spacing.x * 4.0;
+                                    + ui.spacing().item_spacing.x * 6.0;
                                 let name_w = (ui.available_width() - right_reserve).max(0.0);
                                 ui.add_sized(
                                     egui::vec2(name_w, 32.0),
@@ -3048,16 +3114,32 @@ impl eframe::App for CaptionStudioApp {
                                 // (e.g. "200%"), not a fixed "100%" — the old
                                 // label lit up at any manual zoom and lied
                                 // about the level. Clicking it resets to 100%.
+                                if ui
+                                    .add_sized(egui::vec2(28.0, 32.0), egui::Button::new("+"))
+                                    .on_hover_text("Zoom in")
+                                    .clicked()
+                                {
+                                    self.preview_zoom_fit = false;
+                                    self.preview_zoom = (self.preview_zoom * 1.25).clamp(0.25, 4.0);
+                                }
                                 let zoom_pct =
                                     format!("{}%", (self.preview_zoom * 100.0).round() as i32);
                                 if let Some(fit) = segmented(
                                     ui,
                                     self.preview_zoom_fit,
-                                    &[(true, "Fit View"), (false, zoom_pct.as_str())],
+                                    &[(true, "Fit view"), (false, zoom_pct.as_str())],
                                 ) {
                                     self.preview_zoom_fit = fit;
                                     self.preview_zoom = 1.0;
                                     self.preview_pan = egui::Vec2::ZERO;
+                                }
+                                if ui
+                                    .add_sized(egui::vec2(28.0, 32.0), egui::Button::new("−"))
+                                    .on_hover_text("Zoom out")
+                                    .clicked()
+                                {
+                                    self.preview_zoom_fit = false;
+                                    self.preview_zoom = (self.preview_zoom / 1.25).clamp(0.25, 4.0);
                                 }
                                 // 16px vertical divider between the mode
                                 // and zoom groups.
@@ -3068,7 +3150,7 @@ impl eframe::App for CaptionStudioApp {
                                 ui.painter().rect_filled(div, 0.0, t.card_border);
                                 if let Some(mode) = segmented(ui, self.preview_mode, &[
                                     (PreviewMode::Rendered, "Rendered"),
-                                    (PreviewMode::Ocr, "Detected Boxes"),
+                                    (PreviewMode::Ocr, "Detected boxes"),
                                     (PreviewMode::Original, "Original"),
                                 ]) {
                                     self.preview_mode = mode;
@@ -3155,6 +3237,7 @@ impl eframe::App for CaptionStudioApp {
                                                 };
                                                 ui.label(crate::theme::label_text(msg, crate::theme::CAPTION));
                                             }
+                                            ui.set_min_width((ui.available_width() - 6.0).max(0.0));
                                             for n in filtered {
                                                 if self.file_list_row(ui, n, data.as_ref(), &mut budget) {
                                                     picked = Some(n.clone());
@@ -3177,7 +3260,29 @@ impl eframe::App for CaptionStudioApp {
                                     egui::Layout::top_down(egui::Align::LEFT),
                                     |ui| {
                                         if matches!(self.preview_mode, PreviewMode::Ocr) {
-                                            ui.label(crate::theme::label_text("Green boxes = kept · Orange boxes = filtered out", crate::theme::CAPTION));
+                                            egui::Frame::new()
+                                                .fill(t.card)
+                                                .stroke(egui::Stroke::new(1.0, t.card_border))
+                                                .inner_margin(egui::Margin::symmetric(12, 6))
+                                                .show(ui, |ui| {
+                                                    ui.set_width(ui.available_width());
+                                                    ui.horizontal(|ui| {
+                                                        ui.colored_label(
+                                                            t.ok,
+                                                            egui::RichText::new("■ Solid green = Kept").size(crate::theme::CAPTION),
+                                                        );
+                                                        ui.separator();
+                                                        ui.colored_label(
+                                                            t.warning,
+                                                            egui::RichText::new("▨ Dashed orange = Filtered out").size(crate::theme::CAPTION),
+                                                        );
+                                                        ui.separator();
+                                                        ui.colored_label(
+                                                            t.accent_ink,
+                                                            egui::RichText::new("Click a box to inspect").size(crate::theme::CAPTION),
+                                                        );
+                                                    });
+                                                });
                                         }
                                         let stage_size = ui.available_size();
                                         let (stage_rect, stage_resp) = ui.allocate_exact_size(stage_size, egui::Sense::click_and_drag());
@@ -3301,8 +3406,14 @@ impl eframe::App for CaptionStudioApp {
                                                     ui.painter().with_clip_rect(stage_rect);
                                                 painter.rect_filled(
                                                     bg_rect,
-                                                    egui::CornerRadius::same(4),
-                                                    egui::Color32::from_black_alpha(160),
+                                                    egui::CornerRadius::same(6),
+                                                    egui::Color32::from_black_alpha(220),
+                                                );
+                                                painter.rect_stroke(
+                                                    bg_rect,
+                                                    egui::CornerRadius::same(6),
+                                                    egui::Stroke::new(1.0, t.card_border),
+                                                    egui::StrokeKind::Inside,
                                                 );
                                                 painter.text(
                                                     bg_rect.center(),
@@ -3330,7 +3441,7 @@ impl eframe::App for CaptionStudioApp {
                                             ui.painter().text(
                                                 stage_rect.center(),
                                                 egui::Align2::CENTER_CENTER,
-                                                "Scan & Extract Text or paste translated JSON to preview.",
+                                                "Click 'Scan images' or 'Paste translated JSON…' to preview.",
                                                 egui::FontId::proportional(crate::theme::BODY),
                                                 t.text_dim,
                                             );
@@ -3563,9 +3674,9 @@ fn file_status(entry: &crate::model::ImageEntry, rendered: bool, failed: bool) -
 fn file_status_label(status: FileStatus) -> &'static str {
     match status {
         FileStatus::Rendered => "Rendered",
-        FileStatus::NoText => "No Captions",
+        FileStatus::NoText => "No captions",
         FileStatus::Failed => "Failed",
-        FileStatus::Untranslated => "Needs Text",
+        FileStatus::Untranslated => "Needs text",
         FileStatus::Ready => "Ready",
     }
 }
@@ -3620,7 +3731,7 @@ fn fit_label(fits: bool, lines: usize, chars: usize, size: i32) -> String {
     let line_word = if lines == 1 { "line" } else { "lines" };
     let char_word = if chars == 1 { "char" } else { "chars" };
     if fits {
-        format!("Fits plate · {lines} {line_word} · {chars} {char_word}")
+        format!("Fits box · {lines} {line_word} · {chars} {char_word}")
     } else {
         format!("Shrinks to {size}px · {lines} {line_word} · {chars} {char_word}")
     }
@@ -3674,9 +3785,12 @@ fn derive_workflow_state(
     let render_done = render_summary.map(|(_, _, f)| f == 0).unwrap_or(false);
     let done = [scan_done, translate_done, review_done, render_done];
     let current_idx = done.iter().position(|d| !d).unwrap_or(3);
+    let render_failed = render_summary.map(|(_, _, f)| f > 0).unwrap_or(false);
     let mut states = [StepState::Todo; 4];
     for (i, s) in states.iter_mut().enumerate() {
-        *s = if done[i] {
+        *s = if i == 3 && render_failed {
+            StepState::Failed
+        } else if done[i] {
             StepState::Done
         } else if i == current_idx {
             StepState::Current
@@ -3823,6 +3937,7 @@ fn step_button(
     let bg = t.card;
     let border = match state {
         StepState::Current => t.accent,
+        StepState::Failed => t.danger,
         _ => t.card_border,
     };
     painter.rect(
@@ -3836,16 +3951,17 @@ fn step_button(
     let (circle_fill, circle_text) = match state {
         StepState::Done => (t.ok, egui::Color32::BLACK),
         StepState::Current => (t.accent, egui::Color32::WHITE),
+        StepState::Failed => (t.danger, egui::Color32::BLACK),
         StepState::Todo => (egui::Color32::TRANSPARENT, t.text_faint),
     };
     painter.circle_filled(circle_center, 11.0, circle_fill);
     if matches!(state, StepState::Todo) {
         painter.circle_stroke(circle_center, 11.0, egui::Stroke::new(1.0, t.text_faint));
     }
-    let mark = if matches!(state, StepState::Done) {
-        "✓".to_string()
-    } else {
-        number.to_string()
+    let mark = match state {
+        StepState::Done => "✓".to_string(),
+        StepState::Failed => "!".to_string(),
+        StepState::Current | StepState::Todo => number.to_string(),
     };
     painter.text(
         circle_center,
@@ -3940,16 +4056,84 @@ fn tail_ellipsis(ui: &egui::Ui, text: &str, max_width: f32) -> String {
 /// and a 36px browse button. The path is set via Browse, not typed — a
 /// singleline TextEdit shows the start of a long path and can't show a
 /// leading ellipsis. Returns the browse button's response.
+/// Normalize `..` and `.` segments in a display path so paths like
+/// `C:\repo\scripts\..\shot-test-output` display cleanly as
+/// `C:\repo\shot-test-output`.
+fn normalize_display_path(raw: &str) -> String {
+    if raw.trim().is_empty() {
+        return String::new();
+    }
+    let sep = if raw.contains('\\') { '\\' } else { '/' };
+    let mut parts: Vec<&str> = Vec::new();
+    for part in raw.split(|c| c == '/' || c == '\\') {
+        match part {
+            "." => {}
+            ".." => {
+                if parts.last().map(|p| !p.ends_with(':')).unwrap_or(false) {
+                    parts.pop();
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.join(&sep.to_string())
+}
+
+fn modal_frame(t: &crate::theme::Tokens) -> egui::Frame {
+    egui::Frame::new()
+        .fill(t.card)
+        .stroke(egui::Stroke::new(1.0, t.field_border))
+        .corner_radius(t.r_lg())
+        .inner_margin(crate::theme::pad::ROOMY)
+        .shadow(egui::Shadow {
+            offset: [0, 14],
+            blur: 32,
+            spread: 4,
+            color: egui::Color32::from_black_alpha(200),
+        })
+}
+
+fn primary_modal_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let btn = egui::Button::new(
+        egui::RichText::new(label)
+            .font(crate::theme::medium(crate::theme::BODY))
+            .color(egui::Color32::WHITE),
+    )
+    .fill(t.accent)
+    .stroke(egui::Stroke::NONE)
+    .min_size(egui::vec2(88.0, 32.0));
+    let resp = ui.add(btn);
+    focus_ring(ui, &resp);
+    resp
+}
+
+fn secondary_modal_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let btn = egui::Button::new(
+        egui::RichText::new(label)
+            .font(crate::theme::medium(crate::theme::BODY))
+            .color(t.text),
+    )
+    .fill(t.raised)
+    .stroke(egui::Stroke::new(1.0, t.field_border))
+    .min_size(egui::vec2(88.0, 32.0));
+    let resp = ui.add(btn);
+    focus_ring(ui, &resp);
+    resp
+}
+
 fn path_row(ui: &mut egui::Ui, label: &str, path: &str) -> egui::Response {
     let t = crate::theme::Tokens::get(ui.ctx());
+    let clean_path = normalize_display_path(path);
     ui.label(crate::theme::label_text(label, crate::theme::LABEL));
     ui.horizontal(|ui| {
         let gap = ui.spacing().item_spacing.x;
         let field_w = (ui.available_width() - 36.0 - gap).max(40.0);
-        let shown = if path.is_empty() {
+        let shown = if clean_path.is_empty() {
             "(none)".to_string()
         } else {
-            tail_ellipsis(ui, path, field_w - 16.0)
+            tail_ellipsis(ui, &clean_path, field_w - 16.0)
         };
         let field_resp = egui::Frame::new()
             .fill(t.field)
@@ -3983,10 +4167,16 @@ fn path_row(ui: &mut egui::Ui, label: &str, path: &str) -> egui::Response {
                 );
             })
             .response;
-        if !path.is_empty() {
-            field_resp.on_hover_text(path);
+        if !clean_path.is_empty() {
+            field_resp.on_hover_text(&clean_path);
         }
-        let browse = crate::icons::button_box(ui, "folder", 36.0, false, "Browse");
+        let browse = crate::icons::button_box(
+            ui,
+            "folder",
+            36.0,
+            false,
+            &format!("Browse for {}", label.to_lowercase()),
+        );
         focus_ring(ui, &browse);
         browse
     })
@@ -4623,8 +4813,8 @@ impl CaptionStudioApp {
                 self.tab = Tab::Json;
                 let report = if st.import_warnings.is_empty() {
                     vec![
-                        "Skipped \"block 4\" in meme_1.jpg — isn't in the scan.".to_string(),
-                        "Skipped \"block 3\" in meme_10.jpg — isn't in the scan.".to_string(),
+                        "meme_1.jpg: skipped block #4 (not in scan).".to_string(),
+                        "meme_10.jpg: skipped block #3 (not in scan).".to_string(),
                     ]
                 } else {
                     st.import_warnings.clone()
@@ -4694,6 +4884,12 @@ impl CaptionStudioApp {
             std::collections::HashSet::new()
         };
         self.last_save_path = Some(self.output_dir.clone());
+        // Remove any previous staged run summary/failure so consecutive
+        // render shots never stack duplicate "Complete —" lines in the log.
+        self.log_lines.retain(|l| {
+            !l.result.starts_with("Complete — rendered ")
+                && !l.result.starts_with("failed: could not write output image")
+        });
         let summary = format!(
             "Complete — rendered {rendered}, copied {empty} unchanged, failed {failed_count}"
         );
@@ -4701,7 +4897,12 @@ impl CaptionStudioApp {
         self.status = format!("{summary}. Saved to {}.", self.output_dir);
         if failed_count > 0 {
             if let Some(f) = self.failed_files.iter().next().cloned() {
-                self.log_file(LogLevel::Error, f, "failed: render error (staged)".into());
+                self.log_file(
+                    LogLevel::Error,
+                    f,
+                    "failed: could not write output image (check disk space or file permissions)"
+                        .into(),
+                );
             }
         }
     }
@@ -4728,6 +4929,9 @@ impl CaptionStudioApp {
                 st.synthetic_empty = true;
             }
         }
+        // Clear stale 18-image render summary when adding the 19th image so
+        // Step 1 (19 images) and Step 4 never show mismatched totals.
+        self.clear_render_state();
         self.input_dir = st.out_dir.to_string_lossy().to_string();
         self.preview_file = "blank-test.png".into();
         self.preview_key.clear();
@@ -5124,12 +5328,12 @@ mod tests {
 
     #[test]
     fn fit_label_agrees_in_number() {
-        assert_eq!(fit_label(true, 1, 59, 20), "Fits plate · 1 line · 59 chars");
+        assert_eq!(fit_label(true, 1, 59, 20), "Fits box · 1 line · 59 chars");
         assert_eq!(
             fit_label(true, 3, 157, 20),
-            "Fits plate · 3 lines · 157 chars"
+            "Fits box · 3 lines · 157 chars"
         );
-        assert_eq!(fit_label(true, 1, 1, 20), "Fits plate · 1 line · 1 char");
+        assert_eq!(fit_label(true, 1, 1, 20), "Fits box · 1 line · 1 char");
         assert_eq!(
             fit_label(false, 2, 40, 14),
             "Shrinks to 14px · 2 lines · 40 chars"
@@ -5212,8 +5416,8 @@ mod tests {
         assert_eq!(wf.current, WorkflowStep::Render);
         assert_eq!(wf.states, [StepState::Done; 4]);
         assert_eq!(wf.subtitles[3], "2 rendered");
-        // A run with failures: Review is done (it was reviewed), but Render
-        // stays current with the failed count in its subtitle.
+        // A run with failures: Review is done (it was reviewed), and Render
+        // shows StepState::Failed with the failed count in its subtitle.
         let wf = derive_workflow_state(Some(&data), Some((1, 0, 1)));
         assert_eq!(wf.current, WorkflowStep::Render);
         assert_eq!(
@@ -5222,7 +5426,7 @@ mod tests {
                 StepState::Done,
                 StepState::Done,
                 StepState::Done,
-                StepState::Current
+                StepState::Failed
             ]
         );
         assert_eq!(wf.subtitles[3], "1 rendered · 1 failed");

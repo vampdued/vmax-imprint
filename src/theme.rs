@@ -126,10 +126,10 @@ impl Tokens {
                 pressed: LN,
                 text: Color32::WHITE,
                 text_dim: STEEL,
-                // Faint is canvas/chrome-only: 5.13:1 on canvas, 5.5:1 on
-                // chrome (measured) — the contrast test pins this. Text on
-                // field uses text_dim instead (8.08:1).
-                text_faint: mix(STEEL, P1, 0.20),
+                // Faint text (#8A919E, 5.75:1 on card, 6.22:1 on canvas, 6.67:1 on
+                // chrome) passes WCAG AA across every surface including card rows,
+                // inspector cards, and disabled controls.
+                text_faint: mix(STEEL, P1, 0.10),
                 icon_rest: STEEL,
                 accent: BRAND,
                 accent_ink: BLUE_TEXT_ON_DARK,
@@ -346,7 +346,7 @@ pub mod pad {
     use egui::Margin;
 
     /// Around the rows of a menu or a dropdown's list.
-    pub const MENU: Margin = Margin::same(4);
+    pub const MENU: Margin = Margin::symmetric(8, 6);
     /// Code blocks and dense workbench boxes.
     pub const TIGHT: Margin = Margin::same(8);
     pub const PANEL: Margin = Margin::same(12);
@@ -458,13 +458,14 @@ pub fn label_text(text: &str, size: f32) -> egui::RichText {
 /// Scroll bars that can always be seen and grabbed. egui's thin preset paints the thumb in the
 /// button fill and its track in the field colour, which here are the same, and narrows it to 2 px
 /// at rest, so it showed only on hover. The thumb is the text colour, see-through enough to stay
-/// quiet but 3:1 against the surfaces it sits on (WCAG 1.4.11), 6 px at rest and 10 px on hover.
+/// quiet but 3:1 against the surfaces it sits on (WCAG 1.4.11), 6 px at rest and 8 px on hover,
+/// with a non-floating 10 px allocated track so the thumb never collides with selection borders.
 pub fn scroll_style() -> egui::style::ScrollStyle {
     egui::style::ScrollStyle {
-        floating: true,
+        floating: false,
         bar_width: 8.0,
         floating_width: 6.0,
-        floating_allocated_width: 8.0,
+        floating_allocated_width: 10.0,
         handle_min_length: space::XXL,
         foreground_color: true,
         // No track: only the thumb shows, a pill that thickens a little under the pointer.
@@ -472,8 +473,8 @@ pub fn scroll_style() -> egui::style::ScrollStyle {
         active_background_opacity: 0.0,
         interact_background_opacity: 0.0,
         dormant_handle_opacity: SCROLL_THUMB_AT_REST,
-        active_handle_opacity: 0.6,
-        interact_handle_opacity: 0.8,
+        active_handle_opacity: 0.65,
+        interact_handle_opacity: 0.85,
         ..egui::style::ScrollStyle::solid()
     }
 }
@@ -510,6 +511,8 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind, roomy: bool) {
     v.faint_bg_color = t.raised;
     v.code_bg_color = t.code_bg;
     v.override_text_color = Some(t.text);
+    // Keep disabled controls legible (WCAG AA >= 4.5:1 instead of stock 0.5x alpha = 4.28:1).
+    v.disabled_alpha = 0.65;
     v.hyperlink_color = t.accent_ink;
     v.warn_fg_color = t.warning;
     v.error_fg_color = t.danger;
@@ -534,7 +537,8 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind, roomy: bool) {
     v.striped = false;
     v.indent_has_left_vline = false;
 
-    // egui's own buttons, combo boxes and fields share the corner of ours.
+    // egui's own buttons, combo boxes and fields share the corner of ours: 6px (`r`),
+    // never 999px pills on `small_button()`.
     let r = t.r();
     let w = &mut v.widgets;
 
@@ -542,7 +546,7 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind, roomy: bool) {
     w.noninteractive.weak_bg_fill = t.card;
     w.noninteractive.bg_stroke = Stroke::new(1.0, t.separator);
     w.noninteractive.fg_stroke = Stroke::new(1.0, t.text_dim);
-    w.noninteractive.corner_radius = t.r_sm();
+    w.noninteractive.corner_radius = r;
 
     // Buttons and combo boxes are field-coloured boxes with a hairline edge.
     // One edge for every control, ours and egui's: firm at rest (field_border
@@ -577,7 +581,7 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind, roomy: bool) {
         s.text_styles = [
             (
                 TextStyle::Small,
-                FontId::proportional(if roomy { LABEL } else { TINY }),
+                FontId::proportional(if roomy { LABEL } else { CAPTION }),
             ),
             (
                 TextStyle::Body,
@@ -602,9 +606,11 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind, roomy: bool) {
         s.spacing.item_spacing = egui::vec2(space::SM, if roomy { space::SM } else { space::XS });
 
         // Padding that brings a line of the label up to the control's height; a row of plain text
-        // stays as tall as a small control.
-        let pad_y = ((control.height() - control.text() * 1.2) / 2.0).round();
-        s.spacing.button_padding = egui::vec2(if roomy { space::MD } else { space::SM }, pad_y);
+        // stays as tall as a small control (minimum 24px WCAG 2.2 AA target height).
+        let pad_y = ((control.height() - control.text() * 1.2) / 2.0)
+            .round()
+            .max(4.0);
+        s.spacing.button_padding = egui::vec2(if roomy { space::MD } else { 10.0 }, pad_y);
         s.spacing.interact_size = egui::Vec2::splat(ControlSize::Small.height());
         s.spacing.menu_margin = pad::MENU;
 
@@ -666,34 +672,24 @@ mod tests {
     }
 
     /// Every text pair the UI actually uses must pass WCAG AA (4.5:1 for
-    /// text, 3:1 for the focus ring and control edges). Measured values
-    /// (2026-11-17, SPEC palette): text 19.57:1 on canvas, dim 7.52:1,
-    /// faint (`mix(Steel, p1, 0.20)` #7d838d) 5.13:1 on canvas and 5.5:1
-    /// on chrome — so `text_faint` is only for text on canvas/chrome
-    /// (dropped rows, "untranslated" flags); the JSON editor uses
-    /// `text_dim` on field instead (8.08:1). ok #4ADE80 is 11.23:1,
-    /// warning #FBBF24 11.72:1, danger #F87171 7.07:1 on canvas.
-    /// The SPEC hairline `ln` is 1.31:1 on card — a gutter only, never a
-    /// control edge; `field_border` (3.62:1 on card, 4.28:1 on chrome)
-    /// edges interactive controls instead.
+    /// text, 3:1 for the focus ring and control edges). Measured values:
+    /// text 19.57:1 on canvas, dim 7.52:1, faint (`mix(Steel, p1, 0.10)`)
+    /// >= 5.75:1 on card, canvas, and chrome.
     #[test]
     fn vmax_contrast_pairs_pass_aa() {
         for kind in ThemeKind::ALL {
             let t = Tokens::for_kind(kind);
-            // Body text on every surface it sits on.
-            for (bg, name) in [(t.canvas, "canvas"), (t.card, "card"), (t.field, "field")] {
+            // Body text and faint text on every surface they sit on.
+            for (bg, name) in [
+                (t.canvas, "canvas"),
+                (t.card, "card"),
+                (t.field, "field"),
+                (t.chrome, "chrome"),
+            ] {
                 assert!(contrast(t.text, bg) >= 4.5, "{kind:?} text/{name}");
                 assert!(contrast(t.text_dim, bg) >= 4.5, "{kind:?} dim/{name}");
+                assert!(contrast(t.text_faint, bg) >= 4.5, "{kind:?} faint/{name}");
             }
-            // Faint: canvas and chrome only (see the doc comment above).
-            assert!(
-                contrast(t.text_faint, t.canvas) >= 4.5,
-                "{kind:?} faint/canvas"
-            );
-            assert!(
-                contrast(t.text_faint, t.chrome) >= 4.5,
-                "{kind:?} faint/chrome"
-            );
             // Blue text on every surface it sits on, and white-on-accent.
             for (bg, name) in [(t.canvas, "canvas"), (t.card, "card"), (t.field, "field")] {
                 assert!(

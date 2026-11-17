@@ -543,7 +543,7 @@ pub fn render_entry(
         if !blk.kept() {
             continue;
         }
-        let [x1, y1, x2, y2] = blk.bbox;
+        let [x1, y1, _x2, y2] = blk.bbox;
         let line_bboxes = if blk.line_bboxes.is_empty() {
             vec![blk.bbox]
         } else {
@@ -868,8 +868,8 @@ pub fn render_ocr_diagnostic(
             data[i * 4 + 3] = 255;
         }
     }
-    let badge_size = 13.max((w as f32 * 0.017) as i32);
-    let stroke_w = 2.max((w as f32 * 0.0025) as i32) as f32;
+    let badge_size = 14.max((w as f32 * 0.018) as i32);
+    let stroke_w = 3.max((w as f32 * 0.0035) as i32) as f32;
 
     let rect_outline = |pixmap: &mut Pixmap,
                         b: [i32; 4],
@@ -998,7 +998,7 @@ pub fn render_ocr_diagnostic(
     // the highlight is drawn last so its tag sits on top. The tag is only
     // collected here; all tags are placed (de-collided) and drawn together
     // after every box, so a tag never covers another tag or its own box.
-    let mut draw_block =
+    let draw_block =
         |pixmap: &mut Pixmap,
          blk: &crate::model::Block,
          stroke: [u8; 4],

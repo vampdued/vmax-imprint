@@ -183,7 +183,7 @@ impl<'a> PyParser<'a> {
                         while end < self.bytes.len() && (self.bytes[end] & 0xC0) == 0x80 {
                             end += 1;
                         }
-                        s.push_str(std::str::from_utf8(&self.bytes[start..end]).unwrap_or("�"));
+                        s.push_str(std::str::from_utf8(&self.bytes[start..end]).unwrap_or(""));
                         self.pos = end;
                     }
                 }
@@ -236,7 +236,7 @@ pub fn merge_translations(
     let mut warnings: Vec<String> = parsed
         .keys()
         .filter(|k| !known.contains(k.as_str()))
-        .map(|k| format!("Skipped \"{k}\" — no matching image in this folder."))
+        .map(|k| format!("{k}: skipped (no matching image in this folder)."))
         .collect();
     let mut count = 0usize;
 
@@ -246,8 +246,8 @@ pub fn merge_translations(
         };
         let valid_ids: std::collections::HashSet<String> =
             img.blocks.iter().map(|b| b.id.to_string()).collect();
-        // Group a file's stale block ids into one line, so three stale
-        // translations read as one short sentence instead of three long ones.
+        // Group a file's stale block ids into one concise colon-separated line
+        // so long filenames don't wrap on a hanging em-dash.
         let mut stale: Vec<&String> = tmap.keys().filter(|k| !valid_ids.contains(*k)).collect();
         stale.sort_by(|a, b| match (a.parse::<i64>(), b.parse::<i64>()) {
             (Ok(x), Ok(y)) => x.cmp(&y),
@@ -258,21 +258,19 @@ pub fn merge_translations(
             let ids: Vec<&str> = stale.iter().map(|s| s.as_str()).collect();
             if n == 1 {
                 warnings.push(format!(
-                    "Skipped 1 translation in {} — block {} isn't in the scan.",
+                    "{}: skipped block #{} (not in scan).",
                     img.file, ids[0]
                 ));
             } else {
                 warnings.push(format!(
-                    "Skipped {n} translations in {} — blocks {} aren't in the scan.",
+                    "{}: skipped {n} blocks (#{}) not in scan.",
                     img.file,
-                    ids.join(", ")
+                    ids.join(", #")
                 ));
             }
         }
         for blk in img.blocks.iter_mut() {
-            let val = tmap
-                .get(&blk.id.to_string())
-                .or_else(|| tmap.get(&blk.id.to_string()));
+            let val = tmap.get(&blk.id.to_string());
             if let Some(Value::String(s)) = val {
                 if !s.trim().is_empty() {
                     blk.new_text = s.clone();
@@ -342,7 +340,7 @@ pub fn resolve_data(
             let fallback = input_dir.join("captions.json");
             let text = std::fs::read_to_string(&fallback).with_context(|| {
                 format!(
-                    "Run 'Scan & Extract Text' or 'Load captions.json' first (tried {})",
+                    "Click 'Scan images' or 'Load captions' first (tried {})",
                     fallback.display()
                 )
             })?;
