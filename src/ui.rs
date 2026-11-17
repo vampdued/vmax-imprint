@@ -170,6 +170,21 @@ fn log_visible<'a>(lines: &'a [LogLine], filter: LogFilter) -> Vec<&'a LogLine> 
         .collect()
 }
 
+/// The log panel's next height after a drag-handle move, or `None` when
+/// the drag closes the panel. Pure so the resize + drag-to-close rule are
+/// unit-tested without building the app. `delta_y` is the pointer's
+/// vertical move this frame (up is negative, so dragging up grows the
+/// panel). Dragging down past 48px closes it; otherwise the height stays
+/// in 64–480px.
+fn log_height_after_drag(height: f32, delta_y: f32) -> Option<f32> {
+    let new_h = height - delta_y;
+    if new_h < 48.0 {
+        None
+    } else {
+        Some(new_h.clamp(64.0, 480.0))
+    }
+}
+
 /// One file's outcome in a render run (for the file-list status chips).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FileOutcome {
@@ -283,6 +298,12 @@ pub struct CaptionStudioApp {
     /// Whether the activity log panel is shown (the X in its header hides
     /// it; the status bar brings it back).
     show_log: bool,
+    /// The activity log panel's height in logical px. App-managed (the
+    /// panel uses `.exact_size(log_height)`) so a drag resize stays put:
+    /// egui's resizable-panel state snapped back to the pre-drag size
+    /// for the user. Clamped to 64–480 while open; dragging the handle
+    /// down past 48 closes the panel instead.
+    log_height: f32,
     /// The screenshot test mode (`--shot-test`), if this run is one.
     shot_test: Option<ShotTest>,
     /// The last save destination (the output folder after a render, the
@@ -374,7 +395,8 @@ impl CaptionStudioApp {
             log_filter: LogFilter::All,
             log_follow: true,
             log_len_seen: 0,
-            show_log: true,
+            show_log: settings.show_log,
+            log_height: settings.log_height.clamp(64.0, 480.0),
             shot_test: None,
             last_save_path: None,
             status: "Choose an input folder, then click Scan & Extract Text.".to_string(),
@@ -439,6 +461,8 @@ impl CaptionStudioApp {
             conf: self.conf.clamp(0.0, 1.0),
             minchars: self.minchars.max(0),
             sizing: self.sizing,
+            log_height: self.log_height.clamp(64.0, 480.0),
+            show_log: self.show_log,
         }
         .save();
     }
@@ -2187,6 +2211,7 @@ impl eframe::App for CaptionStudioApp {
                             // back (the X in the log header hides it).
                             if !self.show_log && ui.small_button("Show log").clicked() {
                                 self.show_log = true;
+                                self.save_settings();
                             }
                             // A solid accent fill, not the 17%-alpha wash (1.23:1
                             // against its track — the bar read as empty at 100%),
@@ -2212,14 +2237,54 @@ impl eframe::App for CaptionStudioApp {
         // away from the top. The panel is resizable (drag its top edge) and
         // closable (the X in its header); the status bar brings it back.
         if self.show_log {
+            // App-managed height: egui's resizable-panel state snapped the
+            // panel back to its pre-drag size on release, so the height
+            // lives in the App (and in Settings) and the resize handle is
+            // drawn by hand. Drag the grip to resize (64–480px), drag it
+            // down past the floor to close, double-click to reset to 188px.
             egui::Panel::bottom("activity_log")
-                .resizable(true)
-                .default_size(188.0)
-                .min_size(64.0)
-                .max_size(480.0)
+                .exact_size(self.log_height)
                 .show(ui, |ui| {
                     ui.add_enabled_ui(!modal_open, |ui| {
                         let t = crate::theme::Tokens::get(ui.ctx());
+                        let handle = ui.allocate_response(
+                            egui::vec2(ui.available_width(), 8.0),
+                            egui::Sense::click_and_drag(),
+                        );
+                        if handle.hovered() || handle.dragged() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                        }
+                        let grip = egui::Rect::from_center_size(
+                            handle.rect.center(),
+                            egui::vec2(48.0, 3.0),
+                        );
+                        ui.painter().rect_filled(
+                            grip,
+                            1.5,
+                            if handle.hovered() || handle.dragged() {
+                                t.accent
+                            } else {
+                                t.separator
+                            },
+                        );
+                        if handle.double_clicked() {
+                            self.log_height = 188.0;
+                            self.save_settings();
+                        }
+                        if handle.dragged() {
+                            match log_height_after_drag(self.log_height, handle.drag_delta().y) {
+                                None => {
+                                    // Dragged down past the floor: close.
+                                    self.show_log = false;
+                                    self.log_height = 188.0;
+                                    self.save_settings();
+                                }
+                                Some(h) => self.log_height = h,
+                            }
+                        }
+                        if handle.drag_stopped() {
+                            self.save_settings();
+                        }
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new("ACTIVITY")
@@ -2253,6 +2318,7 @@ impl eframe::App for CaptionStudioApp {
                                     // sits at the far right.
                                     if icon_text_button(ui, "x", "Close").clicked() {
                                         self.show_log = false;
+                                        self.save_settings();
                                     }
                                     // Stop is only meaningful while a job runs — it stays
                                     // disabled at idle so its state tells the truth.
@@ -4950,6 +5016,20 @@ mod tests {
         assert!(text.contains("\"2\": \"x\""));
         assert_eq!(per_image_json(Some(&data), "missing.png"), "");
         assert_eq!(per_image_json(None, "a.png"), "");
+    }
+
+    #[test]
+    fn log_height_after_drag_resizes_and_closes() {
+        // Dragging up (negative delta) grows the panel.
+        assert_eq!(log_height_after_drag(188.0, -20.0), Some(208.0));
+        // Dragging down shrinks it.
+        assert_eq!(log_height_after_drag(188.0, 20.0), Some(168.0));
+        // It never goes below 64 or above 480 while open.
+        assert_eq!(log_height_after_drag(70.0, 10.0), Some(64.0));
+        assert_eq!(log_height_after_drag(470.0, -20.0), Some(480.0));
+        // Dragging down past 48 closes the panel instead.
+        assert_eq!(log_height_after_drag(64.0, 20.0), None);
+        assert_eq!(log_height_after_drag(188.0, 200.0), None);
     }
 
     #[test]

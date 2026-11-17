@@ -149,6 +149,22 @@ pub struct Settings {
     pub minchars: i32,
     #[serde(default)]
     pub sizing: SizingMode,
+    /// The activity log panel's height in logical px (App-managed, so a
+    /// drag resize and the close state actually stay — the panel's own
+    /// resizable state did not persist for the user).
+    #[serde(default = "default_log_height")]
+    pub log_height: f32,
+    /// Whether the activity log panel is shown.
+    #[serde(default = "default_show_log")]
+    pub show_log: bool,
+}
+
+pub fn default_log_height() -> f32 {
+    188.0
+}
+
+pub fn default_show_log() -> bool {
+    true
 }
 
 pub fn default_conf() -> f64 {
@@ -167,6 +183,8 @@ impl Default for Settings {
             conf: 0.6,
             minchars: 12,
             sizing: SizingMode::UniformGrow,
+            log_height: 188.0,
+            show_log: true,
         }
     }
 }
