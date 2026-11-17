@@ -502,3 +502,36 @@ Verified against local main `cebd449` (files: `src/ui.rs`, `src/theme.rs`,
   Same 6 pre-existing warnings, no new ones.
 - NOT pushed; push only on his word (a fresh token is needed — the
   remote is verified token-free after the 16:04 push).
+
+## 12. Build record — Phase 5 (2026-11-17, branch `feature/redesign-handoff`, commit `ae522bc`)
+
+- Item 15 — structured log: `LogLine` is now `{time, level, file,
+  result}` (time = local HH:MM:SS via new `chrono` dep, `clock` + `std`
+  only — `iana-time-zone` was already in the local registry cache, so
+  the build stays offline; `Cargo.lock` updated). The table is newest
+  first (pure `log_visible`), zebra rows (card fill on even rows,
+  transparent on odd), filters All / Warnings with counts (warnings =
+  warn + error), Copy log (display order, `HH:MM:SS LEVEL [file] —
+  result`), Stop (disabled at idle, as before). Auto-scroll follows the
+  newest line until the user scrolls away from the top (`log_follow` +
+  `log_len_seen`; the first row scrolls to the top on new lines while
+  following). Per-file render outcomes now log a line each (`rendered` /
+  `copied unchanged` / `failed`, error level on failure) — that is what
+  fills the file column.
+- Item 16 — status bar final form: exact 32px. Left: the render counts
+  (`N images · N rendered · N copied unchanged · N failed`, pure
+  `render_counts`, 0s until a run finishes) or "JSON error" (danger,
+  full error on hover) when the editor JSON is broken; then the last save
+  path (the output folder after a render, the file after Save captions,
+  full path on hover); then the status message (the accesskit polite live
+  region, kept). The progress bar shows ONLY while a job runs (defect 6
+  — at idle it read as a second status line). The old "N files · N
+  untranslated" counts are gone from the bar; the untranslated count
+  still lives in the Translate stepper subtitle.
+- One compile fix: `ScrollAreaOutput.state.offset` is private in egui
+  0.37 and `offset()` is deprecated — `clamped_offset()` is the read.
+- Tests 42/42 green (was 40/40): +`log_visible_is_newest_first_and_
+  warnings_filter_info`, +`render_counts_reads_the_last_run`. Same
+  pre-existing warnings, no new ones.
+- NOT pushed; push only on his word (a fresh token is needed — the
+  remote is verified token-free after the 16:18 Phase 4 push).
