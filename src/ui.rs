@@ -1164,10 +1164,13 @@ impl CaptionStudioApp {
                 ui.painter().rect_filled(cell, 4.0, t.raised);
             }
             ui.vertical(|ui| {
-                // Tail-ellipsis: every file here shares the long
-                // "krithika___memes_40212569…" head, so a head-truncation
-                // makes all rows read identically — the tail keeps the
-                // distinguishing "_N.jpg" suffix visible.
+                // Hover-only sense: egui's default `selectable_labels`
+                // gives every label click-and-drag sense (and `.sense()`
+                // alone doesn't stop it — the selectable block ORs the
+                // click sense back in), so the filename and count labels
+                // stole the click from the row and only the thumbnail /
+                // gaps selected it. These are metadata, not text to copy,
+                // so they are not selectable and the whole row selects.
                 let shown = tail_ellipsis(ui, name, ui.available_width());
                 ui.add(
                     egui::Label::new(
@@ -1175,13 +1178,19 @@ impl CaptionStudioApp {
                             .size(crate::theme::LABEL)
                             .color(t.text),
                     )
-                    .truncate(),
+                    .truncate()
+                    .selectable(false)
+                    .sense(egui::Sense::hover()),
                 );
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(format!("{blocks} blocks"))
-                            .size(crate::theme::CAPTION)
-                            .color(t.text_dim),
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(format!("{blocks} blocks"))
+                                .size(crate::theme::CAPTION)
+                                .color(t.text_dim),
+                        )
+                        .selectable(false)
+                        .sense(egui::Sense::hover()),
                     );
                     if let Some(s) = status {
                         let color = match s {
@@ -1661,8 +1670,24 @@ impl CaptionStudioApp {
                     let n = data.images.len();
                     self.editor_text = serde_json::to_string_pretty(&compact_map_from_data(&data))
                         .unwrap_or_default();
+                    // Point the preview at the first file: without this
+                    // the JSON tab and the inspector show the "Scan
+                    // images…" hint even though the scan just finished,
+                    // because the per-image JSON and the block list both
+                    // look up the preview file, and it was still empty.
+                    let first_file = data.images.iter().map(|e| e.file.clone()).min();
+                    let first_verify = first_file
+                        .as_ref()
+                        .and_then(|f| data.entry(f))
+                        .map(verify_text_for);
                     self.extracted = Some(data);
                     self.preview_key.clear();
+                    if let Some(f) = first_file {
+                        self.set_preview_file(f);
+                    }
+                    if let Some(v) = first_verify {
+                        self.verify_text = v;
+                    }
                     self.tab = Tab::Json;
                     let prefix = if cancelled { "Stopped. " } else { "" };
                     self.status = format!(
@@ -3026,14 +3051,22 @@ impl eframe::App for CaptionStudioApp {
                                         let filtered = filter_file_names(&names, &self.preview_filter);
                                         let mut budget = 4;
                                         let mut picked: Option<String> = None;
-                                        // No visible scrollbar in the
-                                        // preview area — the list still
-                                        // scrolls with the wheel and the
-                                        // Up/Down keys; the "N of M"
-                                        // counter shows the position.
+                                        // The list scrolls with the wheel
+                                        // and the Up/Down keys, and the
+                                        // scrollbar shows when the content
+                                        // overflows — the hidden scrollbar
+                                        // left the overflow undiscoverable
+                                        // (the bottom row sat half-clipped
+                                        // with no sign the list scrolled and
+                                        // no way to drag to the bottom rows).
+                                        // The ScrollArea fills the column
+                                        // height instead of shrinking to its
+                                        // content, so as many whole rows as
+                                        // possible are visible.
                                         egui::ScrollArea::vertical()
+                                            .auto_shrink([false, false])
                                             .scroll_bar_visibility(
-                                                egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                                                egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded,
                                             )
                                             .show(ui, |ui| {
                                             if filtered.is_empty() {
@@ -3392,10 +3425,17 @@ fn status_chip(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
         .corner_radius(egui::CornerRadius::same(4))
         .inner_margin(egui::Margin::symmetric(6, 2));
     frame.show(ui, |ui| {
-        ui.label(
-            egui::RichText::new(text)
-                .size(crate::theme::CAPTION)
-                .color(color),
+        // Not selectable: a selectable label takes click-and-drag sense
+        // and would steal the file-list row's click (same reason as the
+        // row's filename/count labels).
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(text)
+                    .size(crate::theme::CAPTION)
+                    .color(color),
+            )
+            .selectable(false)
+            .sense(egui::Sense::hover()),
         );
     });
 }
