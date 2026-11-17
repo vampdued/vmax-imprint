@@ -296,6 +296,16 @@ Verified against local main `cebd449` (files: `src/ui.rs`, `src/theme.rs`,
 - **Q9 — Fonts download: A — YES.** Download IBM Plex Mono + Chakra
   Petch Medium 500 (OFL, official repos) into `assets/fonts/`.
 
+## 6. Open questions from SPEC §13 — answered from the repo
+- Target stack/runtime: **Rust + eframe/egui 0.37** (in-process backend).
+- Existing backend API/CLI: in-process functions + worker threads over
+  channels; headless `--ocr-test` exists. No HTTP/CLI boundary to keep.
+- Minimum window: proposed 1280×720 (Q6).
+- Light theme: SPEC says never; Q2 is the decision.
+- File-name scheme: real filenames, natural-sorted; "N of 75.png" is the
+  mockup's sample data.
+- Settings persist: `~/.caption_replacer.json` (add window size keys).
+
 ## 7. Build record — Phase 0 (2026-11-17, branch `feature/redesign-handoff`, commit `2db9d02`)
 
 - Fonts downloaded (google/fonts raw): `IBMPlexMono-Regular.ttf` + OFL,
@@ -317,15 +327,31 @@ Verified against local main `cebd449` (files: `src/ui.rs`, `src/theme.rs`,
   origin `a4b4aab`) still needs his fresh token to push. The redesign
   branch stays local until he says push.
 
-## 6. Open questions from SPEC §13 — answered from the repo
-- Target stack/runtime: **Rust + eframe/egui 0.37** (in-process backend).
-- Existing backend API/CLI: in-process functions + worker threads over
-  channels; headless `--ocr-test` exists. No HTTP/CLI boundary to keep.
-- Minimum window: proposed 1280×720 (Q6).
-- Light theme: SPEC says never; Q2 is the decision.
-- File-name scheme: real filenames, natural-sorted; "N of 75.png" is the
-  mockup's sample data.
-- Settings persist: `~/.caption_replacer.json` (add window size keys).
+## 8. Build record — Phase 1 (2026-11-17, branch `feature/redesign-handoff`, commit `aff26b9`)
+
+- **Bulk-edit placement — CONFIRMED (his "A", 2026-11-17):** the full
+  bulk JSON editor opens as a modal from the JSON tab (Q7 as locked).
+- Header 60px: brand | 4-step stepper | one primary. Stepper derivation
+  is pure (`derive_workflow_state`) + unit-tested; a copy of the original
+  does not count as translated; zero-block Translate is done only after a
+  scan (the test caught the vacuous-true bug before commit).
+- Sidebar fixed 316px, inspector fixed 380px (both non-resizable;
+  `Settings.panel_width` retired). Detected Blocks moved to the inspector;
+  log is a full-width 188px row with ACTIVITY + Copy log + Stop.
+- "Verify in Preview" is now secondary (defect 4). "Scan again" is NOT
+  in the Project card yet — it arrives in Phase 2 with its confirm modal.
+- egui 0.37 notes: `Panel` has `exact_size`, not `exact_height` /
+  `exact_width`; left/right panels default `resizable(true)`; `Response::
+  accessible_name` consumes and returns the Response.
+- Tests 32/32 green (+workflow test); same 6 pre-existing warnings.
+- **Not visually verified:** the GUI can't run on this VM (missing
+  `libxkbcommon-x11`) — the 1920×1080 eyeball is his Windows run, as
+  planned. Aria-current on the stepper is an egui limitation (no
+  AccessKit equivalent surfaced); the current step is marked by the blue
+  border + blue circle + focus ring instead.
+- **Main is pushed-pending:** local main `94116a4` (5 commits ahead of
+  origin `a4b4aab`) still needs his fresh token to push. The redesign
+  branch stays local until he says push.
 - Target stack/runtime: **Rust + eframe/egui 0.37** (in-process backend).
 - Existing backend API/CLI: in-process functions + worker threads over
   channels; headless `--ocr-test` exists. No HTTP/CLI boundary to keep.
