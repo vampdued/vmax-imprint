@@ -2264,9 +2264,16 @@ impl eframe::App for CaptionStudioApp {
                         // when it changes (batch finished, error) instead of the user
                         // having to go looking for it. The label truncates with an
                         // ellipsis so a long path can't silently clip against the bar.
-                        let status_resp = ui.add(egui::Label::new(&self.status).truncate());
+                        // While OCR warms up, the warm-up state shows here (it used
+                        // to sit in the sidebar and push the PROJECT card off).
+                        let status_text = if !self.ocr_ready {
+                            "Warming up OCR engine…".to_string()
+                        } else {
+                            self.status.clone()
+                        };
+                        let status_resp = ui.add(egui::Label::new(&status_text).truncate());
                         status_resp.widget_info(|| {
-                            egui::WidgetInfo::labeled(egui::Role::Status, true, self.status.clone())
+                            egui::WidgetInfo::labeled(egui::Role::Status, true, status_text.clone())
                         });
                         ui.ctx().accesskit_node_builder(status_resp.id, |node| {
                             node.set_live(egui::accesskit::Live::Polite);
@@ -2524,13 +2531,15 @@ impl eframe::App for CaptionStudioApp {
                     // where the panel is only ~584 logical px tall) they
                     // overflow the panel, and without this the Project card —
                     // Save / Load / Scan again / Open output — was unreachable.
+                    // The OCR error stays here (it needs the sidebar's room);
+                    // the warm-up line moved to the status bar — it pushed
+                    // the scroll area down ~28px and the PROJECT card off the
+                    // panel while warming up.
                     if let Some(e) = &self.ocr_error {
                         ui.colored_label(
                             crate::theme::Tokens::get(ui.ctx()).danger,
                             format!("OCR failed to start — restart the app to retry. ({e})"),
                         );
-                    } else if !self.ocr_ready {
-                        ui.label("Warming up OCR engine…");
                     }
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -2849,7 +2858,16 @@ impl eframe::App for CaptionStudioApp {
                             self.show_block_cards(ui, entry);
                         }
                         _ => {
-                            ui.monospace(&self.verify_text);
+                            // A plain label, not monospace: the empty-state
+                            // message is a sentence ("No text found…"), and
+                            // the mono font read as an editable code field
+                            // (a caret showed after "copied").
+                            let t = crate::theme::Tokens::get(ui.ctx());
+                            ui.label(
+                                egui::RichText::new(&self.verify_text)
+                                    .size(crate::theme::BODY)
+                                    .color(t.text_dim),
+                            );
                         }
                     });
                 });
@@ -3157,6 +3175,53 @@ impl eframe::App for CaptionStudioApp {
                                                 egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
                                                 egui::Color32::WHITE,
                                             );
+                                            // Position cue: at a manual zoom
+                                            // the image is cropped with no
+                                            // scrollbar, so the user can't
+                                            // tell which part they're seeing.
+                                            // A small "Drag to pan" hint at
+                                            // the stage's bottom-right while
+                                            // the image overflows the stage.
+                                            if !self.preview_zoom_fit
+                                                && (size.x > stage_rect.width()
+                                                    || size.y > stage_rect.height())
+                                            {
+                                                let hint = "Drag to pan";
+                                                let font =
+                                                    egui::FontId::proportional(crate::theme::CAPTION);
+                                                let text_w = ui
+                                                    .ctx()
+                                                    .fonts_mut(|f| {
+                                                        f.layout_no_wrap(hint.to_string(), font.clone(), t.text)
+                                                            .size()
+                                                            .x
+                                                    });
+                                                let pad = egui::vec2(8.0, 4.0);
+                                                let bg_rect = egui::Rect::from_min_size(
+                                                    egui::pos2(
+                                                        stage_rect.max.x - text_w - pad.x * 2.0 - 8.0,
+                                                        stage_rect.max.y
+                                                            - crate::theme::CAPTION
+                                                            - pad.y * 2.0
+                                                            - 8.0,
+                                                    ),
+                                                    egui::vec2(text_w + pad.x * 2.0, crate::theme::CAPTION + pad.y * 2.0),
+                                                );
+                                                let painter =
+                                                    ui.painter().with_clip_rect(stage_rect);
+                                                painter.rect_filled(
+                                                    bg_rect,
+                                                    egui::CornerRadius::same(4),
+                                                    egui::Color32::from_black_alpha(160),
+                                                );
+                                                painter.text(
+                                                    bg_rect.center(),
+                                                    egui::Align2::CENTER_CENTER,
+                                                    hint,
+                                                    font,
+                                                    t.text,
+                                                );
+                                            }
                                             // Click (not drag) in OCR Boxes
                                             // mode selects the block under the
                                             // pointer — the list scrolls to
