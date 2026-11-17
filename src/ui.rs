@@ -1115,14 +1115,14 @@ impl CaptionStudioApp {
             )
         });
         let selected = name == self.preview_file;
-        // 64px: the thumbnail (44px) + two text lines + padding. At 52px
-        // the status chip sat on the row's bottom edge and the selection
-        // stroke cut straight through it; at 60px the thumbnail and the
-        // chip still filled the row edge-to-edge (shot 03: "the image
-        // and content are overflowing"), so the row grows again to give
-        // both clear breathing room.
+        // 68px: the thumbnail (44px) + two text lines + 6px padding. At
+        // 52px the status chip sat on the row's bottom edge and the
+        // selection stroke cut straight through it; at 60px the thumbnail
+        // and the chip still filled the row edge-to-edge (shot 03: "the
+        // image and content are overflowing"), so the row grew to 64px,
+        // and the spec gives it 68px for clear vertical breathing room.
         let (rect, resp) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 64.0), egui::Sense::click());
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 68.0), egui::Sense::click());
         let resp = resp.accessible_name(format!(
             "{} · {} blocks{}",
             name,
@@ -1144,7 +1144,7 @@ impl CaptionStudioApp {
             .rect_stroke(rect, t.radius_sm, stroke, egui::StrokeKind::Inside);
         let mut child = ui.new_child(
             egui::UiBuilder::new()
-                .max_rect(rect.shrink(4.0))
+                .max_rect(rect.shrink(6.0))
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
         child.horizontal(|ui| {
@@ -1182,6 +1182,9 @@ impl CaptionStudioApp {
                     .selectable(false)
                     .sense(egui::Sense::hover()),
                 );
+                // Explicit baseline separation between the filename and
+                // the metadata row, so the two lines never read as one.
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.add(
                         egui::Label::new(
@@ -3570,11 +3573,11 @@ fn file_status(entry: &crate::model::ImageEntry, rendered: bool, failed: bool) -
 
 fn file_status_label(status: FileStatus) -> &'static str {
     match status {
-        FileStatus::Rendered => "rendered",
-        FileStatus::NoText => "no text",
-        FileStatus::Failed => "failed",
-        FileStatus::Untranslated => "untranslated",
-        FileStatus::Ready => "ready",
+        FileStatus::Rendered => "Rendered",
+        FileStatus::NoText => "No Captions",
+        FileStatus::Failed => "Failed",
+        FileStatus::Untranslated => "Needs Text",
+        FileStatus::Ready => "Ready",
     }
 }
 
