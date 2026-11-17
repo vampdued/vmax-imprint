@@ -382,3 +382,50 @@ Verified against local main `cebd449` (files: `src/ui.rs`, `src/theme.rs`,
   except the two touched files, whose fmt churn was then removed by
   re-applying the edits to pristine files. Formatting the touched files
   is a Phase 7 step, not a per-phase one.
+
+## 10. Build record — Phase 3 (2026-11-17, branch `feature/redesign-handoff`, commit `f45f0c7`)
+
+- Workspace restructured: toolbar (prev/next chevrons, "N of M", segmented
+  Rendered / OCR Boxes / Original with solid accent on the selected button,
+  Fit/100% segmented at the right end) + file list (230px) | stage.
+- File list: filter box ("Filter N images…"), 44px thumbnails via a lazy
+  small-decode cache (4 decodes/frame budget, 128 FIFO cap, undecodable
+  files cached as `None` so they aren't retried; budget-exhausted misses
+  are NOT cached, so they retry next frame), name (truncated), "N blocks",
+  status chip. Chips: rendered (ok) / no text (warn) / failed (error) /
+  untranslated (muted) / ready (accent-ink — all translated, not rendered
+  yet; the plan's four-chip set doesn't cover that state, so "ready" was
+  added and is noted here). Per-file outcomes arrive on a new
+  `WorkerMsg::FileRendered` from the render worker; `clear_render_state()`
+  drops the summary + both sets on every dataset change and at run start.
+- Stage: checkerboard background (canvas base + card cells, 16px),
+  wheel zoom around the cursor (`smooth_scroll_delta`, ×1.105/notch,
+  clamped 0.05–8×), drag pan, `0` resets to Fit. Wheel/drag exit Fit into
+  a manual zoom — Fit is a preset, not a mode. Pan is clamped so at least
+  40px of the image stays visible. Zoom/pan are display-only: the preview
+  key is untouched (the texture is full-res; no re-render on zoom/pan).
+- OCR diagnostic labels (SPEC §5): kept label is now `#n · conf · kept`,
+  black text on SPEC ok (11.23:1), outside the box top-left; dropped
+  boxes are DASHED (solid kept / dashed filtered) with a matching dashed
+  halo, so colour is not the only cue. The dropped label keeps "DROP
+  (reason)" (dropped items have no id/conf for the `#n · conf` format).
+  The 11px label size is the mockup's display size; the baked-in label
+  keeps the existing ∝-image-width sizing so it stays legible at any zoom.
+- Click box ↔ block row both ways is preserved through the stage rewrite
+  (click uses the pan/scale-aware image rect; the row click sets
+  `selected_block`, which re-renders the diagnostic with the Max Blue
+  highlight). The old file dropdown + `short_file_names` are deleted; the
+  filter box is now always visible in the list column.
+- Keyboard nav: Up/Down move within the (filtered) list, Enter focuses the
+  stage. Active while nothing has focus, or while the filter has it — the
+  filter is the only text field in the Preview tab.
+- Two compile errors fixed along the way: `InputState` has no
+  `raw_scroll_delta` in egui 0.37 (use `smooth_scroll_delta`); the render
+  worker's `outcome` was partially moved by the `Err(e)` arm (restructured
+  into one `match &outcome` that returns the `FileOutcome`).
+- Tests 35/35 green (was 33/33): +`file_status_covers_all_five_states`,
+  +`step_in_names_wraps_and_ignores_an_empty_list`,
+  +`clamp_pan_keeps_forty_pixels_visible`; the `short_file_names` test went
+  with the dropdown. Same 6 pre-existing warnings, no new ones.
+- NOT pushed (branch is 1 commit ahead of origin at `5a5ed3d`); push only
+  on his word.
