@@ -567,3 +567,32 @@ Verified against local main `cebd449` (files: `src/ui.rs`, `src/theme.rs`,
   no new ones.
 - NOT pushed; push only on his word (a fresh token is needed — the
   remote is verified token-free after the 16:28 Phase 5 push).
+
+## 14. Build record — Phase 7 (2026-11-17, branch `feature/redesign-handoff`, commits `d26a0e7` + `2a7c1c0`)
+
+- Final pass. `cargo test --offline` green: 44/44, same 5 pre-existing
+  warnings (test build), no new ones.
+- `cargo fmt` on the seven redesign-touched files ONLY
+  (`src/icons.rs`, `src/layout.rs`, `src/model.rs`, `src/parser.rs`,
+  `src/render.rs`, `src/theme.rs`, `src/ui.rs`) — commit `d26a0e7`,
+  formatting only (1,100 + / 561 -). Note: `cargo fmt` on its own
+  formats the whole crate (it showed diffs in `build.rs` and
+  `src/fonts.rs` too), so the files were formatted by invoking `rustfmt
+  --edition 2021` on them directly. The rest of the crate is still not
+  fmt-clean and is left alone. Tests re-run after the fmt: still 44/44.
+- Deliverables: `CHANGELOG.md` (new — Phases 0–7 + the 1.0.0–1.0.3
+  history) and README touch-ups (the Fonts bullet now names the vendored
+  UI fonts; the layout table gains `theme.rs`/`icons.rs` and the
+  three-column `ui.rs` description) — commit `2a7c1c0`. The README's
+  Build section was already accurate for this branch (Windows release
+  target, Linux dev/test with the ORT 1.32.0 vendor note) and needed no
+  rewrite.
+- NOT pushed; push only on his word (a fresh token is needed — the
+  remote is verified token-free after the 16:52 Phase 6 push).
+- The gate is his Windows 1920×1080 eyeball (side-by-side vs the
+  reference, states idle / scanning / review / rendering / error, plus a
+  keyboard-only pass). State screenshots could NOT be produced here:
+  the Linux GUI needs `libxkbcommon-x11`, which this VM does not have
+  and whose apt mirror is unreachable, so only the headless paths were
+  verified on Linux (see the README's Linux GUI note). No screenshot in
+  this repo is claimed as a visual verification.
