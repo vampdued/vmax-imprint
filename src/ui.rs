@@ -348,7 +348,7 @@ impl CaptionStudioApp {
             fit_cache: std::collections::HashMap::new(),
             preview_texture: None,
             preview_size: [0.0, 0.0],
-            verify_text: String::new(),
+            verify_text: "Scan images to fill this in, or paste translated JSON here.".to_string(),
             selected_block: None,
             blocks_scroll_to_selected: false,
             preview_entry: None,
@@ -1116,7 +1116,7 @@ impl CaptionStudioApp {
             .rect_stroke(rect, t.radius_sm, stroke, egui::StrokeKind::Inside);
         let mut child = ui.new_child(
             egui::UiBuilder::new()
-                .max_rect(rect.shrink(6.0))
+                .max_rect(rect.shrink(4.0))
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
         child.horizontal(|ui| {
@@ -1390,17 +1390,8 @@ impl CaptionStudioApp {
                     blk.new_text.trim()
                 };
                 let chars = eff.chars().count();
-                let (label, col) = if fits {
-                    (
-                        format!("Fits plate · {lines} lines · {chars} chars"),
-                        t.ok,
-                    )
-                } else {
-                    (
-                        format!("Shrinks to {size}px · {lines} lines · {chars} chars"),
-                        t.warning,
-                    )
-                };
+                let label = fit_label(fits, lines, chars, size);
+                let col = if fits { t.ok } else { t.warning };
                 ui.label(
                     egui::RichText::new(label)
                         .size(crate::theme::CAPTION)
@@ -1919,6 +1910,7 @@ impl eframe::App for CaptionStudioApp {
             let mut open = true;
             egui::Window::new("Nothing translated")
                 .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .resizable(false)
                 .open(&mut open)
                 .show(&ctx, |ui| {
@@ -1954,6 +1946,7 @@ impl eframe::App for CaptionStudioApp {
             let n = self.workflow_state().images;
             egui::Window::new("Scan again")
                 .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .resizable(false)
                 .open(&mut open)
                 .show(&ctx, |ui| {
@@ -1986,6 +1979,7 @@ impl eframe::App for CaptionStudioApp {
             let mut open = true;
             egui::Window::new("Paste Translated JSON")
                 .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .resizable(true)
                 .default_size([700.0, 450.0])
                 .open(&mut open)
@@ -2044,6 +2038,7 @@ impl eframe::App for CaptionStudioApp {
             let mut open = true;
             egui::Window::new("Bulk edit — Translation JSON")
                 .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .resizable(true)
                 .default_size([900.0, 600.0])
                 .open(&mut open)
@@ -2092,6 +2087,7 @@ impl eframe::App for CaptionStudioApp {
             let mut open = true;
             egui::Window::new("Import — some files skipped")
                 .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .resizable(true)
                 .default_size([600.0, 300.0])
                 .open(&mut open)
@@ -2378,9 +2374,10 @@ impl eframe::App for CaptionStudioApp {
             .resizable(false)
             .show(ui, |ui| {
                 ui.add_enabled_ui(!modal_open, |ui| {
-                    // No outer ScrollArea: the fixed sections fit (tuning starts
-                    // collapsed), so nothing here needs to scroll at the default
-                    // size.
+                    // The three cards scroll: at 1080p (and at 125% scaling,
+                    // where the panel is only ~584 logical px tall) they
+                    // overflow the panel, and without this the Project card —
+                    // Save / Load / Scan again / Open output — was unreachable.
                     if let Some(e) = &self.ocr_error {
                         ui.colored_label(
                             crate::theme::Tokens::get(ui.ctx()).danger,
@@ -2390,195 +2387,206 @@ impl eframe::App for CaptionStudioApp {
                         ui.label("Warming up OCR engine…");
                     }
                     ui.separator();
-
-                    // Source & Output card (SPEC §2): path rows with the tail
-                    // shown + full path on hover, 36px browse buttons; the font
-                    // field stays editable (short values, placeholder for the
-                    // accepted extensions); the sizing select's popup opens
-                    // UPWARD so it never covers the OCR card below (defect 1).
-                    sidebar_card(ui, "SOURCE & OUTPUT", |ui| {
-                        if path_row(ui, "Input folder", &self.input_dir).clicked() {
-                            self.browse_input();
-                        }
-                        ui.add_space(8.0);
-                        if path_row(ui, "Output folder", &self.output_dir).clicked() {
-                            self.browse_output();
-                        }
-                        ui.add_space(8.0);
-                        let font_label = ui
-                            .label(crate::theme::label_text(
-                                "Custom font (optional)",
-                                crate::theme::LABEL,
-                            ))
-                            .id;
-                        ui.horizontal(|ui| {
-                            let resp = ui
-                                .add(
-                                    egui::TextEdit::singleline(&mut self.font_path)
-                                        .hint_text(".ttf  .otf  .ttc")
-                                        .desired_width(
-                                            ui.available_width()
-                                                - 36.0
-                                                - ui.spacing().item_spacing.x,
-                                        ),
-                                )
-                                .labelled_by(font_label);
-                            focus_ring(ui, &resp);
-                            let path = self.font_path.clone();
-                            if !path.is_empty() {
-                                resp.on_hover_text(path);
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        // Source & Output card (SPEC §2): path rows with the tail
+                        // shown + full path on hover, 36px browse buttons; the font
+                        // field stays editable (short values, placeholder for the
+                        // accepted extensions); the sizing select's popup opens
+                        // UPWARD so it never covers the OCR card below (defect 1).
+                        sidebar_card(ui, "SOURCE & OUTPUT", |ui| {
+                            if path_row(ui, "Input folder", &self.input_dir).clicked() {
+                                self.browse_input();
                             }
-                            let browse = crate::icons::button_box(
-                                ui,
-                                "folder",
-                                36.0,
-                                false,
-                                "Browse for font file",
-                            );
-                            focus_ring(ui, &browse);
-                            if browse.clicked() {
-                                self.browse_font();
+                            ui.add_space(8.0);
+                            if path_row(ui, "Output folder", &self.output_dir).clicked() {
+                                self.browse_output();
                             }
-                        });
-                        ui.add_space(8.0);
-                        ui.label(crate::theme::label_text("Font sizing", crate::theme::LABEL));
-                        let sizing_btn = ui.add_sized(
-                            egui::vec2(ui.available_width(), 36.0),
-                            egui::Button::new(format!("{} ▾", self.sizing.label())),
-                        );
-                        focus_ring(ui, &sizing_btn);
-                        let mut picked: Option<crate::model::SizingMode> = None;
-                        egui::Popup::menu(&sizing_btn)
-                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                            // Defect 1: the old ComboBox opened downward and
-                            // covered the OCR Thresholds card. This popup opens
-                            // upward (its bottom edge at the button's top edge)
-                            // on the top layer, falling back to downward only
-                            // when it doesn't fit above.
-                            .align(egui::RectAlign::TOP_START)
-                            .align_alternatives(&[egui::RectAlign::BOTTOM_START])
-                            .show(|ui| {
-                                for mode in crate::model::SizingMode::all() {
-                                    if ui
-                                        .selectable_value(&mut self.sizing, mode, mode.label())
-                                        .clicked()
-                                    {
-                                        picked = Some(mode);
-                                        egui::Popup::close_id(
-                                            ui.ctx(),
-                                            egui::Popup::default_response_id(&sizing_btn),
-                                        );
-                                    }
+                            ui.add_space(8.0);
+                            let font_label = ui
+                                .label(crate::theme::label_text(
+                                    "Custom font (optional)",
+                                    crate::theme::LABEL,
+                                ))
+                                .id;
+                            ui.horizontal(|ui| {
+                                let resp = ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut self.font_path)
+                                            .hint_text(".ttf  .otf  .ttc")
+                                            .desired_width(
+                                                ui.available_width()
+                                                    - 36.0
+                                                    - ui.spacing().item_spacing.x,
+                                            ),
+                                    )
+                                    .labelled_by(font_label);
+                                focus_ring(ui, &resp);
+                                let path = self.font_path.clone();
+                                if !path.is_empty() {
+                                    resp.on_hover_text(path);
+                                }
+                                let browse = crate::icons::button_box(
+                                    ui,
+                                    "folder",
+                                    36.0,
+                                    false,
+                                    "Browse for font file",
+                                );
+                                focus_ring(ui, &browse);
+                                if browse.clicked() {
+                                    self.browse_font();
                                 }
                             });
-                        if let Some(mode) = picked {
-                            self.sizing = mode;
-                            self.save_settings();
-                            self.preview_key.clear();
-                        }
-                    });
-                    ui.add_space(12.0);
-
-                    // OCR Thresholds card (SPEC §2): always visible; two
-                    // sliders with mono value outputs; dragging schedules a
-                    // debounced (50 ms) instant re-filter — no Apply button
-                    // anymore. Reset restores .60/12; Inspect boxes switches
-                    // the stage to OCR mode.
-                    sidebar_card(ui, "OCR THRESHOLDS", |ui| {
-                        ui.label(crate::theme::label_text(
-                            "Minimum confidence",
-                            crate::theme::LABEL,
-                        ));
-                        ui.horizontal(|ui| {
-                            let slider_w = (ui.available_width() - 52.0).max(60.0);
-                            let conf_resp = ui.add_sized(
-                                egui::vec2(slider_w, 28.0),
-                                egui::Slider::new(&mut self.conf, 0.0..=1.0)
-                                    .step_by(0.01)
-                                    .show_value(false),
+                            ui.add_space(8.0);
+                            ui.label(crate::theme::label_text("Font sizing", crate::theme::LABEL));
+                            let sizing_btn = ui.add_sized(
+                                egui::vec2(ui.available_width(), 36.0),
+                                egui::Button::new(format!("{} ▾", self.sizing.label())),
                             );
-                            focus_ring(ui, &conf_resp);
-                            ui.monospace(format!("{:.2}", self.conf));
-                            if conf_resp.changed() && self.extracted.is_some() {
-                                self.thresholds_changed_at = Some(std::time::Instant::now());
-                                ui.ctx()
-                                    .request_repaint_after(std::time::Duration::from_millis(60));
-                            }
-                        });
-                        ui.add_space(4.0);
-                        ui.label(crate::theme::label_text(
-                            "Minimum text length",
-                            crate::theme::LABEL,
-                        ));
-                        ui.horizontal(|ui| {
-                            let slider_w = (ui.available_width() - 52.0).max(60.0);
-                            let min_resp = ui.add_sized(
-                                egui::vec2(slider_w, 28.0),
-                                egui::Slider::new(&mut self.minchars, 1..=40).show_value(false),
-                            );
-                            focus_ring(ui, &min_resp);
-                            ui.monospace(format!("{}", self.minchars));
-                            if min_resp.changed() && self.extracted.is_some() {
-                                self.thresholds_changed_at = Some(std::time::Instant::now());
-                                ui.ctx()
-                                    .request_repaint_after(std::time::Duration::from_millis(60));
-                            }
-                        });
-                        ui.add_space(4.0);
-                        ui.label(crate::theme::label_text(
-                            "Changes apply instantly to the preview.",
-                            crate::theme::CAPTION,
-                        ));
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            if icon_text_button(ui, "rotate-ccw", "Reset").clicked() {
-                                self.conf = crate::model::default_conf();
-                                self.minchars = crate::model::default_minchars();
+                            focus_ring(ui, &sizing_btn);
+                            let mut picked: Option<crate::model::SizingMode> = None;
+                            egui::Popup::menu(&sizing_btn)
+                                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                                // The popup is exactly the button's width, so it
+                                // stays inside the 316px sidebar instead of
+                                // spilling into the workspace.
+                                .width(sizing_btn.rect.width())
+                                // Defect 1: the old ComboBox opened downward and
+                                // covered the OCR Thresholds card. This popup opens
+                                // upward (its bottom edge at the button's top edge)
+                                // on the top layer, falling back to downward only
+                                // when it doesn't fit above.
+                                .align(egui::RectAlign::TOP_START)
+                                .align_alternatives(&[egui::RectAlign::BOTTOM_START])
+                                .show(|ui| {
+                                    for mode in crate::model::SizingMode::all() {
+                                        if ui
+                                            .selectable_value(&mut self.sizing, mode, mode.label())
+                                            .clicked()
+                                        {
+                                            picked = Some(mode);
+                                            egui::Popup::close_id(
+                                                ui.ctx(),
+                                                egui::Popup::default_response_id(&sizing_btn),
+                                            );
+                                        }
+                                    }
+                                });
+                            if let Some(mode) = picked {
+                                self.sizing = mode;
                                 self.save_settings();
-                                if self.extracted.is_some() {
+                                self.preview_key.clear();
+                            }
+                        });
+                        ui.add_space(12.0);
+
+                        // OCR Thresholds card (SPEC §2): always visible; two
+                        // sliders with mono value outputs; dragging schedules a
+                        // debounced (50 ms) instant re-filter — no Apply button
+                        // anymore. Reset restores .60/12; Inspect boxes switches
+                        // the stage to OCR mode.
+                        sidebar_card(ui, "OCR THRESHOLDS", |ui| {
+                            ui.label(crate::theme::label_text(
+                                "Minimum confidence",
+                                crate::theme::LABEL,
+                            ));
+                            ui.horizontal(|ui| {
+                                let slider_w = (ui.available_width() - 52.0).max(60.0);
+                                let conf_resp = ui.add_sized(
+                                    egui::vec2(slider_w, 28.0),
+                                    egui::Slider::new(&mut self.conf, 0.0..=1.0)
+                                        .step_by(0.01)
+                                        .show_value(false),
+                                );
+                                focus_ring(ui, &conf_resp);
+                                ui.monospace(format!("{:.2}", self.conf));
+                                if conf_resp.changed() && self.extracted.is_some() {
                                     self.thresholds_changed_at = Some(std::time::Instant::now());
                                     ui.ctx().request_repaint_after(
                                         std::time::Duration::from_millis(60),
                                     );
                                 }
-                            }
-                            if icon_text_button(ui, "search", "Inspect boxes").clicked() {
-                                self.preview_mode = PreviewMode::Ocr;
-                                self.tab = Tab::Preview;
-                                self.preview_key.clear();
-                            }
-                        });
-                    });
-                    ui.add_space(12.0);
-
-                    // Project card (SPEC §2): the 2×2 grid, now complete —
-                    // Scan again joins Save / Load / Open output. Scan again
-                    // with edits asks first (confirm modal, §9 copy); without
-                    // edits it scans straight away.
-                    sidebar_card(ui, "PROJECT", |ui| {
-                        egui::Grid::new("project_grid")
-                            .num_columns(2)
-                            .spacing([8.0, 8.0])
-                            .show(ui, |ui| {
-                                if icon_text_button(ui, "save", "Save captions").clicked() {
-                                    self.save_full_json();
+                            });
+                            ui.add_space(4.0);
+                            ui.label(crate::theme::label_text(
+                                "Minimum text length",
+                                crate::theme::LABEL,
+                            ));
+                            ui.horizontal(|ui| {
+                                let slider_w = (ui.available_width() - 52.0).max(60.0);
+                                let min_resp = ui.add_sized(
+                                    egui::vec2(slider_w, 28.0),
+                                    egui::Slider::new(&mut self.minchars, 1..=40).show_value(false),
+                                );
+                                focus_ring(ui, &min_resp);
+                                ui.monospace(format!("{}", self.minchars));
+                                if min_resp.changed() && self.extracted.is_some() {
+                                    self.thresholds_changed_at = Some(std::time::Instant::now());
+                                    ui.ctx().request_repaint_after(
+                                        std::time::Duration::from_millis(60),
+                                    );
                                 }
-                                if icon_text_button(ui, "folder-open", "Load captions").clicked() {
-                                    self.load_full_json();
-                                }
-                                ui.end_row();
-                                if icon_text_button(ui, "scan", "Scan again").clicked() {
-                                    if self.has_translations() {
-                                        self.confirm_rescan = true;
-                                    } else {
-                                        self.start_extract();
+                            });
+                            ui.add_space(4.0);
+                            ui.label(crate::theme::label_text(
+                                "Changes apply instantly to the preview.",
+                                crate::theme::CAPTION,
+                            ));
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                if icon_text_button(ui, "rotate-ccw", "Reset").clicked() {
+                                    self.conf = crate::model::default_conf();
+                                    self.minchars = crate::model::default_minchars();
+                                    self.save_settings();
+                                    if self.extracted.is_some() {
+                                        self.thresholds_changed_at =
+                                            Some(std::time::Instant::now());
+                                        ui.ctx().request_repaint_after(
+                                            std::time::Duration::from_millis(60),
+                                        );
                                     }
                                 }
-                                if icon_text_button(ui, "folder-open", "Open output").clicked() {
-                                    self.open_output_folder();
+                                if icon_text_button(ui, "search", "Inspect boxes").clicked() {
+                                    self.preview_mode = PreviewMode::Ocr;
+                                    self.tab = Tab::Preview;
+                                    self.preview_key.clear();
                                 }
-                                ui.end_row();
                             });
+                        });
+                        ui.add_space(12.0);
+
+                        // Project card (SPEC §2): the 2×2 grid, now complete —
+                        // Scan again joins Save / Load / Open output. Scan again
+                        // with edits asks first (confirm modal, §9 copy); without
+                        // edits it scans straight away.
+                        sidebar_card(ui, "PROJECT", |ui| {
+                            egui::Grid::new("project_grid")
+                                .num_columns(2)
+                                .spacing([8.0, 8.0])
+                                .show(ui, |ui| {
+                                    if icon_text_button(ui, "save", "Save captions").clicked() {
+                                        self.save_full_json();
+                                    }
+                                    if icon_text_button(ui, "folder-open", "Load captions")
+                                        .clicked()
+                                    {
+                                        self.load_full_json();
+                                    }
+                                    ui.end_row();
+                                    if icon_text_button(ui, "scan", "Scan again").clicked() {
+                                        if self.has_translations() {
+                                            self.confirm_rescan = true;
+                                        } else {
+                                            self.start_extract();
+                                        }
+                                    }
+                                    if icon_text_button(ui, "folder-open", "Open output").clicked()
+                                    {
+                                        self.open_output_folder();
+                                    }
+                                    ui.end_row();
+                                });
+                        });
                     });
                 });
             });
@@ -2735,13 +2743,13 @@ impl eframe::App for CaptionStudioApp {
                             // File list.
                             let filter_resp = ui
                                 .allocate_ui_with_layout(
-                                    egui::vec2(230.0, rest.y),
+                                    egui::vec2(250.0, rest.y),
                                     egui::Layout::top_down(egui::Align::LEFT),
                                     |ui| {
                                         let filter_resp = ui.add(
                                             egui::TextEdit::singleline(&mut self.preview_filter)
                                                 .hint_text(format!("Filter {} images…", names.len()))
-                                                .desired_width(230.0),
+                                                .desired_width(250.0),
                                         );
                                         focus_ring(ui, &filter_resp);
                                         let filtered = filter_file_names(&names, &self.preview_filter);
@@ -3097,6 +3105,19 @@ fn counts_for(data: &crate::model::ExtractedData) -> (usize, usize) {
     (files, untranslated)
 }
 
+/// The inspector's fit line, with singular/plural agreement ("1 line",
+/// "1 char" — the old format always said "lines"/"chars", so a one-line
+/// block read "1 lines").
+fn fit_label(fits: bool, lines: usize, chars: usize, size: i32) -> String {
+    let line_word = if lines == 1 { "line" } else { "lines" };
+    let char_word = if chars == 1 { "char" } else { "chars" };
+    if fits {
+        format!("Fits plate · {lines} {line_word} · {chars} {char_word}")
+    } else {
+        format!("Shrinks to {size}px · {lines} {line_word} · {chars} {char_word}")
+    }
+}
+
 /// Pure derivation of the header stepper state from a dataset + the last
 /// render summary (see `workflow_state` for the rules). Kept pure so the
 /// step logic is unit-tested without building the app.
@@ -3167,7 +3188,7 @@ fn derive_workflow_state(
             "—".to_string()
         },
         if scan_done {
-            format!("{unchanged} unchanged")
+            format!("{unchanged} will copy unchanged")
         } else {
             "—".to_string()
         },
@@ -3854,6 +3875,20 @@ mod tests {
     }
 
     #[test]
+    fn fit_label_agrees_in_number() {
+        assert_eq!(fit_label(true, 1, 59, 20), "Fits plate · 1 line · 59 chars");
+        assert_eq!(
+            fit_label(true, 3, 157, 20),
+            "Fits plate · 3 lines · 157 chars"
+        );
+        assert_eq!(fit_label(true, 1, 1, 20), "Fits plate · 1 line · 1 char");
+        assert_eq!(
+            fit_label(false, 2, 40, 14),
+            "Shrinks to 14px · 2 lines · 40 chars"
+        );
+    }
+
+    #[test]
     fn workflow_steps_advance_with_data_and_render() {
         fn entry(file: &str, blocks: Vec<(&str, &str)>) -> crate::model::ImageEntry {
             crate::model::ImageEntry {
@@ -3917,7 +3952,7 @@ mod tests {
             ]
         );
         assert_eq!(wf.subtitles[1], "1 of 3 translated");
-        assert_eq!(wf.subtitles[2], "1 unchanged");
+        assert_eq!(wf.subtitles[2], "1 will copy unchanged");
         // All translated: Review is current.
         let data = crate::model::ExtractedData {
             images: vec![entry("a.png", vec![("one", "uno"), ("two", "dos")])],
@@ -4020,7 +4055,7 @@ mod tests {
             }],
         };
         let wf = derive_workflow_state(Some(&data), None);
-        assert_eq!(wf.subtitles[2], "1 unchanged");
+        assert_eq!(wf.subtitles[2], "1 will copy unchanged");
         assert_eq!(wf.current, WorkflowStep::Review);
     }
 

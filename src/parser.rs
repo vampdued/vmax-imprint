@@ -258,12 +258,12 @@ pub fn merge_translations(
             let ids: Vec<&str> = stale.iter().map(|s| s.as_str()).collect();
             if n == 1 {
                 warnings.push(format!(
-                    "Skipped 1 translation in {} — block {} has no matching text.",
+                    "Skipped 1 translation in {} — block {} isn't in the scan.",
                     img.file, ids[0]
                 ));
             } else {
                 warnings.push(format!(
-                    "Skipped {n} translations in {} — blocks {} have no matching text.",
+                    "Skipped {n} translations in {} — blocks {} aren't in the scan.",
                     img.file,
                     ids.join(", ")
                 ));
