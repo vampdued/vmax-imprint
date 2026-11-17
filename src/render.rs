@@ -678,8 +678,10 @@ pub fn render_entry(
 
 /// OCR diagnostic overlay — Python `render_ocr_diagnostic`.
 /// Kept blocks in green, dropped lines in orange, with `#id · conf · Boxed/Unboxed`
-/// tags. Returns an RGB image.
-pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry) -> RgbImage {
+/// tags. `highlight` (a block id) draws that block in Max Blue instead, so the
+/// preview can show which block the Detected Blocks list has selected.
+/// Returns an RGB image.
+pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry, highlight: Option<usize>) -> RgbImage {
     let (w, h) = (img.width(), img.height());
     let (wi, hi) = (w as i32, h as i32);
     let mut pixmap = Pixmap::new(w, h).expect("pixmap");
@@ -769,23 +771,51 @@ pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry) -> RgbImage {
             [194, 65, 12, 230],
         );
     }
-    for blk in &entry.blocks {
+    // One block painter for both the kept green and the highlighted blue;
+    // the highlight is drawn last so its tag sits on top.
+    let draw_block = |pixmap: &mut Pixmap,
+                      blk: &crate::model::Block,
+                      stroke: [u8; 4],
+                      width_extra: f32,
+                      fill: [u8; 4],
+                      tag_bg: [u8; 4]| {
         let [x1, y1, _, _] = clamp_box(blk.bbox, wi, hi);
-        rect_outline(
-            &mut pixmap,
-            blk.bbox,
-            [34, 197, 94, 255],
-            stroke_w + 1.0,
-            Some([34, 197, 94, 30]),
-        );
+        rect_outline(pixmap, blk.bbox, stroke, stroke_w + width_extra, Some(fill));
         let kind = if blk.is_boxed { "Boxed" } else { "Unboxed" };
         tag(
-            &mut pixmap,
+            pixmap,
             x1,
             y1,
             &format!("#{} · {:.2} · {}", blk.id, blk.confidence, kind),
+            tag_bg,
+        );
+    };
+    for blk in &entry.blocks {
+        if Some(blk.id) == highlight {
+            continue;
+        }
+        draw_block(
+            &mut pixmap,
+            blk,
+            [34, 197, 94, 255],
+            1.0,
+            [34, 197, 94, 30],
             [21, 128, 61, 240],
         );
+    }
+    if let Some(id) = highlight {
+        if let Some(blk) = entry.blocks.iter().find(|b| b.id == id) {
+            // Max Blue #2F5BFF, drawn thicker so it reads as selected even
+            // at a glance.
+            draw_block(
+                &mut pixmap,
+                blk,
+                [47, 91, 255, 255],
+                3.0,
+                [47, 91, 255, 40],
+                [47, 91, 255, 240],
+            );
+        }
     }
 
     let mut out = RgbImage::new(w, h);
@@ -992,7 +1022,20 @@ mod tests {
     fn diagnostic_draws_without_panic() {
         let img = RgbImage::new(200, 100);
         let entry = test_entry();
-        let out = render_ocr_diagnostic(&img, &entry);
+        let out = render_ocr_diagnostic(&img, &entry, None);
         assert_eq!(out.dimensions(), (200, 100));
+    }
+
+    #[test]
+    fn diagnostic_highlight_recolours_only_the_selected_block() {
+        let img = RgbImage::new(200, 100);
+        let entry = test_entry();
+        let plain = render_ocr_diagnostic(&img, &entry, None);
+        let lit = render_ocr_diagnostic(&img, &entry, Some(1));
+        // The highlight changes the render (blue stroke + tag instead of green).
+        assert_ne!(plain.as_raw(), lit.as_raw());
+        // An unknown id highlights nothing.
+        let unknown = render_ocr_diagnostic(&img, &entry, Some(99));
+        assert_eq!(plain.as_raw(), unknown.as_raw());
     }
 }
