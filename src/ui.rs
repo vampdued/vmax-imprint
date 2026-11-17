@@ -105,6 +105,29 @@ pub struct CaptionStudioApp {
     preview_texture: Option<TextureHandle>,
     preview_size: [f32; 2],
     verify_text: String,
+    /// The block id selected in the Detected Blocks list (or by clicking
+    /// its box in the OCR Boxes view). Kept as an id, not an index, so it
+    /// survives re-sorts; cleared whenever the preview file changes.
+    selected_block: Option<usize>,
+    /// Set when a click on the image selects a block, so the list scrolls
+    /// the row into view on the next frame.
+    blocks_scroll_to_selected: bool,
+    /// The entry the preview was built from — the Detected Blocks rows and
+    /// the image click-to-select read it, instead of re-resolving JSON.
+    preview_entry: Option<crate::model::ImageEntry>,
+    /// Where the preview image actually landed on screen + the scale it was
+    /// drawn at, so an image click maps back to image pixels.
+    preview_image_rect: egui::Rect,
+    preview_image_scale: f32,
+    /// Filter text for the preview-file dropdown.
+    preview_filter: String,
+    /// Focus the filter field the first frame the dropdown opens.
+    preview_filter_focus: bool,
+    /// Status-bar counts for the dataset the preview shows.
+    preview_file_count: usize,
+    preview_untranslated: usize,
+    /// The editor JSON's parse error, if it failed to resolve.
+    preview_json_error: Option<String>,
     log_lines: Vec<LogLine>,
     status: String,
     progress: f32,
@@ -151,6 +174,16 @@ impl CaptionStudioApp {
             preview_texture: None,
             preview_size: [0.0, 0.0],
             verify_text: String::new(),
+            selected_block: None,
+            blocks_scroll_to_selected: false,
+            preview_entry: None,
+            preview_image_rect: egui::Rect::NOTHING,
+            preview_image_scale: 1.0,
+            preview_filter: String::new(),
+            preview_filter_focus: false,
+            preview_file_count: 0,
+            preview_untranslated: 0,
+            preview_json_error: None,
             log_lines: Vec::new(),
             status: "Choose an input folder, then click Scan & Extract Text.".to_string(),
             progress: 0.0,
@@ -515,46 +548,93 @@ impl CaptionStudioApp {
     /// Resolve the current editor + extracted data, pick the selected file's
     /// entry, and rebuild the verify text + preview texture when the cache
     /// key changed (Python `_refresh_inline_preview`).
+    /// Switch the preview file, clearing anything tied to the old file
+    /// (selection + the rendered texture, so the next frame re-renders).
+    fn set_preview_file(&mut self, name: String) {
+        self.preview_file = name;
+        self.selected_block = None;
+        self.preview_key.clear();
+    }
+
+    /// Resolve the dataset the preview shows — the editor JSON when pasted,
+    /// else the extracted scan — and refresh the status-bar counts + JSON
+    /// validity. Returns None when there is nothing to preview.
+    fn resolve_preview_data(&mut self) -> Option<crate::model::ExtractedData> {
+        if self.editor_text.trim().is_empty() {
+            self.preview_json_error = None;
+            return match &self.extracted {
+                Some(d) => {
+                    let (f, u) = counts_for(d);
+                    self.preview_file_count = f;
+                    self.preview_untranslated = u;
+                    Some(d.clone())
+                }
+                None => {
+                    self.preview_file_count = 0;
+                    self.preview_untranslated = 0;
+                    None
+                }
+            };
+        }
+        match self.resolve_editor() {
+            Ok((d, _, _)) => {
+                let (f, u) = counts_for(&d);
+                self.preview_file_count = f;
+                self.preview_untranslated = u;
+                self.preview_json_error = None;
+                Some(d)
+            }
+            Err(e) => {
+                self.preview_json_error = Some(e.to_string());
+                self.preview_file_count = 0;
+                self.preview_untranslated = 0;
+                None
+            }
+        }
+    }
+
     fn refresh_preview(&mut self, ctx: &egui::Context) {
-        let in_dir = self.input_dir.trim();
-        if in_dir.is_empty() || !Path::new(in_dir).is_dir() {
+        // Owned: the resolution below borrows `self` mutably, so the input
+        // dir can't stay borrowed from `self` across it.
+        let in_dir = self.input_dir.trim().to_string();
+        if in_dir.is_empty() || !Path::new(&in_dir).is_dir() {
             self.verify_text = "Select a valid Input Folder on the left to preview images.".into();
+            self.preview_entry = None;
+            self.preview_file_count = 0;
+            self.preview_untranslated = 0;
+            self.preview_json_error = None;
             return;
         }
-        let data = if self.editor_text.trim().is_empty() {
-            match &self.extracted {
-                Some(d) => d.clone(),
-                None => {
-                    self.verify_text = "Scan & Extract Text or paste translated JSON to preview.".into();
-                    return;
-                }
-            }
-        } else {
-            match self.resolve_editor() {
-                Ok((d, _, _)) => d,
-                Err(e) => {
-                    self.verify_text = format!("Couldn't preview the JSON — {e}. Fix the marked spot and try again.");
-                    return;
-                }
-            }
+        let Some(data) = self.resolve_preview_data() else {
+            self.preview_entry = None;
+            self.verify_text = match &self.preview_json_error {
+                Some(e) => format!(
+                    "Couldn't preview the JSON — {e}. Fix the marked spot and try again."
+                ),
+                None => "Scan & Extract Text or paste translated JSON to preview.".into(),
+            };
+            return;
         };
         if data.images.is_empty() {
             self.verify_text = "No images found in extracted metadata.".into();
+            self.preview_entry = None;
             return;
         }
         if !data.images.iter().any(|e| e.file == self.preview_file) {
             let mut names: Vec<&str> = data.images.iter().map(|e| e.file.as_str()).collect();
             names.sort();
             if let Some(first) = names.first() {
-                self.preview_file = first.to_string();
+                self.set_preview_file(first.to_string());
             }
         }
         let Some(entry) = data.entry(&self.preview_file).cloned() else {
+            self.preview_entry = None;
             return;
         };
+        self.preview_entry = Some(entry.clone());
         self.verify_text = verify_text_for(&entry);
 
-        let img_path = PathBuf::from(in_dir).join(&entry.file);
+        let img_path = PathBuf::from(&in_dir).join(&entry.file);
         let mtime = img_path
             .metadata()
             .and_then(|m| m.modified())
@@ -565,10 +645,11 @@ impl CaptionStudioApp {
         let blocks_json = serde_json::to_string(&entry.blocks).unwrap_or_default();
         let dropped_json = serde_json::to_string(&entry.dropped).unwrap_or_default();
         let key = format!(
-            "{}|{mtime}|{:?}|{}|{blocks_json}|{dropped_json}",
+            "{}|{mtime}|{:?}|{}|{blocks_json}|{dropped_json}|{:?}",
             img_path.display(),
             self.preview_mode,
-            self.font_path
+            self.font_path,
+            self.selected_block
         );
         if key == self.preview_key && self.preview_texture.is_some() {
             return;
@@ -582,7 +663,7 @@ impl CaptionStudioApp {
         };
         let rendered = match self.preview_mode {
             PreviewMode::Original => img,
-            PreviewMode::Ocr => render_ocr_diagnostic(&img, &entry),
+            PreviewMode::Ocr => render_ocr_diagnostic(&img, &entry, self.selected_block),
             PreviewMode::Rendered => {
                 let font = if self.font_path.trim().is_empty() {
                     None
@@ -608,6 +689,71 @@ impl CaptionStudioApp {
         }
         names.sort();
         names
+    }
+
+    /// Structured Detected Blocks rows: one row per kept block (conf chip +
+    /// OCR text, dim, → NEW text when translated), dropped rows faint and
+    /// not selectable. Clicking a row selects the block and re-renders the
+    /// preview with its box in Max Blue.
+    fn show_block_rows(&mut self, ui: &mut egui::Ui, entry: &crate::model::ImageEntry) {
+        use egui::text::{LayoutJob, TextFormat};
+        let t = crate::theme::Tokens::get(ui.ctx());
+        let font = egui::FontId::monospace(crate::theme::CODE);
+        // Confidence at/above 0.90 reads as kept-and-sure (diagnostic green);
+        // below it the row carries the theme's amber warning instead.
+        let conf_green = egui::Color32::from_rgb(34, 197, 94);
+        for blk in &entry.blocks {
+            let mut job = LayoutJob::default();
+            let conf_col = if blk.confidence >= 0.90 { conf_green } else { t.warning };
+            job.append(
+                &format!("#{} ", blk.id),
+                0.0,
+                TextFormat { font_id: font.clone(), color: t.accent_ink, ..Default::default() },
+            );
+            job.append(
+                &format!("{:.2} ", blk.confidence),
+                0.0,
+                TextFormat { font_id: font.clone(), color: conf_col, ..Default::default() },
+            );
+            job.append(
+                &format!("OCR: \"{}\"", blk.original_text),
+                0.0,
+                TextFormat { font_id: font.clone(), color: t.text_dim, ..Default::default() },
+            );
+            let new_t = blk.new_text.trim();
+            if !new_t.is_empty() && new_t != blk.original_text.trim() {
+                job.append(
+                    &format!("  →  NEW: \"{}\"", new_t),
+                    0.0,
+                    TextFormat { font_id: font.clone(), color: t.text, ..Default::default() },
+                );
+            } else if new_t.is_empty() {
+                job.append(
+                    "  · untranslated",
+                    0.0,
+                    TextFormat { font_id: font.clone(), color: t.text_faint, ..Default::default() },
+                );
+            }
+            let selected = self.selected_block == Some(blk.id);
+            let resp = ui.selectable_label(selected, job);
+            if selected && self.blocks_scroll_to_selected {
+                resp.scroll_to_me(Some(egui::Align::Center));
+                self.blocks_scroll_to_selected = false;
+            }
+            if resp.clicked() {
+                self.selected_block = Some(blk.id);
+                self.preview_key.clear();
+            }
+        }
+        for drop in &entry.dropped {
+            let mut job = LayoutJob::default();
+            job.append(
+                &format!("[FILTERED · {}] \"{}\"", drop.reason, drop.text),
+                0.0,
+                TextFormat { font_id: font.clone(), color: t.text_faint, ..Default::default() },
+            );
+            ui.label(job);
+        }
     }
 
     // ------------------------------------------------------------ messages
@@ -919,6 +1065,36 @@ impl eframe::App for CaptionStudioApp {
                             .desired_width(220.0)
                             .show_percentage(),
                     );
+                    // Counts for the dataset the preview shows, left of the
+                    // bar: file count + how many blocks still have no
+                    // translation. A JSON error replaces the counts (danger
+                    // colour, full error on hover) so a broken paste is
+                    // visible without switching tabs.
+                    if self.preview_file_count > 0 || self.preview_json_error.is_some() {
+                        match &self.preview_json_error {
+                            Some(e) => {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new("JSON error").color(t.danger),
+                                    )
+                                    .truncate(),
+                                )
+                                .on_hover_text(e.clone());
+                            }
+                            None => {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(format!(
+                                            "{} files · {} untranslated",
+                                            self.preview_file_count, self.preview_untranslated
+                                        ))
+                                        .color(t.text_dim),
+                                    )
+                                    .truncate(),
+                                );
+                            }
+                        }
+                    }
                 });
             });
             });
@@ -1159,31 +1335,94 @@ impl eframe::App for CaptionStudioApp {
                         .accessible_name("Translation JSON");
                         if resp.changed() {
                             self.preview_key.clear();
+                            // Keep the status-bar counts + JSON validity live
+                            // while editing, not just on the Preview tab.
+                            self.resolve_preview_data();
                         }
                     });
                 }
                 Tab::Preview => {
                     self.refresh_preview(&ctx);
                     // File navigation: bigger steppers (Medium, 32px) for a
-                    // real touch target, and the file picker carries an
-                    // accessible name.
+                    // real touch target, and the file picker is a filterable
+                    // dropdown — full names share a long prefix, so the
+                    // button shows the short name and the full path on hover.
                     ui.horizontal(|ui| {
                         let names = self.file_names();
+                        let shorts = short_file_names(&names);
+                        let cur_idx = names.iter().position(|n| n == &self.preview_file).unwrap_or(0);
+                        let short_current = shorts
+                            .get(cur_idx)
+                            .cloned()
+                            .unwrap_or_else(|| self.preview_file.clone());
                         if crate::icons::button(ui, "chevron-left", crate::theme::ControlSize::Medium, false, "Previous file").clicked() {
                             step_preview(&mut self.preview_file, &names, -1);
+                            self.selected_block = None;
                             self.preview_key.clear();
                         }
-                        let combo = egui::ComboBox::from_id_salt("preview_file")
-                            .selected_text(&self.preview_file)
-                            .show_ui(ui, |ui| {
-                                for n in &names {
-                                    ui.selectable_value(&mut self.preview_file, n.clone(), n);
+                        let full_path = PathBuf::from(self.input_dir.trim())
+                            .join(&self.preview_file)
+                            .display()
+                            .to_string();
+                        let btn = ui
+                            .button(format!("{short_current} ▾"))
+                            .on_hover_text(full_path)
+                            .accessible_name(format!("Preview file {}", self.preview_file));
+                        if btn.clicked() {
+                            self.preview_filter_focus = true;
+                        }
+                        let mut picked: Option<String> = None;
+                        egui::Popup::menu(&btn)
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                            .show(|ui| {
+                                let filter_resp = ui.add(
+                                    egui::TextEdit::singleline(&mut self.preview_filter)
+                                        .hint_text("Filter files…")
+                                        .desired_width(260.0),
+                                );
+                                if self.preview_filter_focus {
+                                    filter_resp.request_focus();
+                                    self.preview_filter_focus = false;
                                 }
+                                let filtered = filter_file_names(&names, &self.preview_filter);
+                                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                                    if filtered.is_empty() {
+                                        ui.label(crate::theme::label_text(
+                                            "No files match.",
+                                            crate::theme::CAPTION,
+                                        ));
+                                    }
+                                    for n in filtered {
+                                        let idx = names.iter().position(|x| x == n).unwrap_or(0);
+                                        let short = shorts
+                                            .get(idx)
+                                            .cloned()
+                                            .unwrap_or_else(|| n.clone());
+                                        let path = PathBuf::from(self.input_dir.trim())
+                                            .join(n)
+                                            .display()
+                                            .to_string();
+                                        let resp = ui
+                                            .selectable_label(n == &self.preview_file, short)
+                                            .on_hover_text(path);
+                                        if resp.clicked() {
+                                            picked = Some(n.clone());
+                                            self.preview_filter.clear();
+                                            egui::Popup::close_id(
+                                                ui.ctx(),
+                                                egui::Popup::default_response_id(&btn),
+                                            );
+                                        }
+                                    }
+                                });
                             });
-                        combo.response.accessible_name("Preview file");
                         if crate::icons::button(ui, "chevron-right", crate::theme::ControlSize::Medium, false, "Next file").clicked() {
                             step_preview(&mut self.preview_file, &names, 1);
+                            self.selected_block = None;
                             self.preview_key.clear();
+                        }
+                        if let Some(name) = picked {
+                            self.set_preview_file(name);
                         }
                     });
                     // The mode choice gets its own row as a segmented control,
@@ -1233,10 +1472,39 @@ impl eframe::App for CaptionStudioApp {
                                             // an unnamed texture, and the
                                             // Detected Blocks list beside it
                                             // is the text alternative.
-                                            ui.image((tex.id(), size)).accessible_name(format!(
-                                                "{} rendered preview",
-                                                self.preview_file
-                                            ));
+                                            // Click sense (the Image widget
+                                            // defaults to hover-only): in OCR
+                                            // Boxes mode a click selects the
+                                            // block under the pointer — the
+                                            // list scrolls to its row and the
+                                            // box turns Max Blue.
+                                            let img_resp = ui
+                                                .add(
+                                                    egui::Image::new((tex.id(), size))
+                                                        .sense(egui::Sense::click()),
+                                                )
+                                                .accessible_name(format!(
+                                                    "{} rendered preview",
+                                                    self.preview_file
+                                                ));
+                                            self.preview_image_rect = img_resp.rect;
+                                            self.preview_image_scale = scale;
+                                            if img_resp.clicked()
+                                                && matches!(self.preview_mode, PreviewMode::Ocr)
+                                            {
+                                                if let (Some(pos), Some(entry)) = (
+                                                    img_resp.interact_pointer_pos(),
+                                                    &self.preview_entry,
+                                                ) {
+                                                    let x = (pos.x - self.preview_image_rect.min.x)
+                                                        / self.preview_image_scale;
+                                                    let y = (pos.y - self.preview_image_rect.min.y)
+                                                        / self.preview_image_scale;
+                                                    self.selected_block = block_at(entry, x, y);
+                                                    self.blocks_scroll_to_selected = true;
+                                                    self.preview_key.clear();
+                                                }
+                                            }
                                         });
                                     });
                                 } else {
@@ -1256,8 +1524,37 @@ impl eframe::App for CaptionStudioApp {
                                     ui.label(crate::theme::label_text("Green boxes = kept · Orange boxes = filtered out", crate::theme::CAPTION));
                                 }
                                 ui.label(crate::theme::heading("Detected Blocks", crate::theme::CARD));
+                                if ui.small_button("Copy block list").clicked() {
+                                    match arboard::Clipboard::new()
+                                        .and_then(|mut cb| cb.set_text(self.verify_text.clone()))
+                                    {
+                                        Ok(()) => {
+                                            self.status = "Block list copied to clipboard.".into()
+                                        }
+                                        Err(_) => {
+                                            self.status =
+                                                "Couldn't copy the block list — try again.".into()
+                                        }
+                                    }
+                                }
+                                // Structured rows (conf chip + OCR → NEW)
+                                // instead of the old monospace blob, so a row
+                                // can be clicked to highlight its box. When
+                                // there is no entry yet (no scan, no JSON),
+                                // the guidance text stays.
+                                let entry = self.preview_entry.clone();
                                 egui::ScrollArea::vertical().show(ui, |ui| {
-                                    ui.monospace(&self.verify_text);
+                                    match &entry {
+                                        Some(entry)
+                                            if !entry.blocks.is_empty()
+                                                || !entry.dropped.is_empty() =>
+                                        {
+                                            self.show_block_rows(ui, entry);
+                                        }
+                                        _ => {
+                                            ui.monospace(&self.verify_text);
+                                        }
+                                    }
                                 });
                             },
                         );
@@ -1277,6 +1574,77 @@ fn step_preview(current: &mut String, names: &[String], delta: i32) {
     let idx = names.iter().position(|n| n == current).unwrap_or(0) as i32;
     let next = (idx + delta).rem_euclid(names.len() as i32) as usize;
     *current = names[next].clone();
+}
+
+/// (file count, untranslated-block count) for a dataset. A block counts as
+/// untranslated while its new text is empty — nothing has been entered yet.
+fn counts_for(data: &crate::model::ExtractedData) -> (usize, usize) {
+    let files = data.images.len();
+    let untranslated = data
+        .images
+        .iter()
+        .flat_map(|e| e.blocks.iter())
+        .filter(|b| b.new_text.trim().is_empty())
+        .count();
+    (files, untranslated)
+}
+
+/// Short display names for the file dropdown: the longest prefix every name
+/// shares is stripped (it carries no information), and anything still longer
+/// than 30 chars is middle-truncated so the differing `_N.jpg` suffix stays
+/// visible. One file, or an empty remainder, falls back to the full name.
+fn short_file_names(names: &[String]) -> Vec<String> {
+    if names.len() < 2 {
+        return names.to_vec();
+    }
+    let mut prefix: Vec<char> = names[0].chars().collect();
+    for n in &names[1..] {
+        let keep = prefix.iter().zip(n.chars()).take_while(|(a, b)| *a == b).count();
+        prefix.truncate(keep);
+        if prefix.is_empty() {
+            break;
+        }
+    }
+    let prefix: String = prefix.into_iter().collect();
+    names
+        .iter()
+        .map(|n| {
+            let short = n.strip_prefix(prefix.as_str()).unwrap_or(n.as_str());
+            let short = if short.is_empty() { n.as_str() } else { short };
+            let chars: Vec<char> = short.chars().collect();
+            if chars.len() > 30 {
+                let head: String = chars[..13].iter().collect();
+                let tail: String = chars[chars.len() - 14..].iter().collect();
+                format!("{head}…{tail}")
+            } else {
+                short.to_string()
+            }
+        })
+        .collect()
+}
+
+/// Case-insensitive substring filter for the file dropdown. An empty query
+/// matches everything.
+fn filter_file_names<'a>(names: &'a [String], query: &str) -> Vec<&'a String> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return names.iter().collect();
+    }
+    names.iter().filter(|n| n.to_lowercase().contains(&q)).collect()
+}
+
+/// The id of the first kept block whose box contains the point (image
+/// pixels), for click-to-select in the OCR Boxes view. Dropped boxes are
+/// not selectable.
+fn block_at(entry: &crate::model::ImageEntry, x: f32, y: f32) -> Option<usize> {
+    entry
+        .blocks
+        .iter()
+        .find(|b| {
+            let [x1, y1, x2, y2] = b.bbox;
+            x >= x1 as f32 && x < x2 as f32 && y >= y1 as f32 && y < y2 as f32
+        })
+        .map(|b| b.id)
 }
 
 /// A text button with a Lucide icon to its left, tinted like the label
@@ -1495,5 +1863,96 @@ mod tests {
         let job = json_highlight_job(text, &t);
         assert_eq!(job.text, text);
         job.debug_sanity_check();
+    }
+
+    #[test]
+    fn short_file_names_strip_the_shared_prefix_and_keep_the_suffix() {
+        let names = vec![
+            "scene1_frame_01.jpg".to_string(),
+            "scene1_frame_02.jpg".to_string(),
+            "scene1_frame_10.jpg".to_string(),
+        ];
+        assert_eq!(short_file_names(&names), vec!["01.jpg", "02.jpg", "10.jpg"]);
+        // One file: nothing shared to strip.
+        assert_eq!(short_file_names(&names[..1]), vec!["scene1_frame_01.jpg"]);
+        // A long remainder is middle-truncated, suffix intact.
+        let long = vec![
+            "a_very_long_scene_name_alpha_version_extended_cut_01.jpg".to_string(),
+            "a_very_long_scene_name_beta_version_extended_cut_01.jpg".to_string(),
+        ];
+        let shorts = short_file_names(&long);
+        assert!(shorts[0].ends_with("01.jpg"));
+        assert!(shorts[0].chars().count() <= 30);
+    }
+
+    #[test]
+    fn filter_file_names_is_case_insensitive_substring() {
+        let names = vec!["Alpha_01.jpg".to_string(), "beta_02.jpg".to_string()];
+        assert_eq!(filter_file_names(&names, "").len(), 2);
+        assert_eq!(filter_file_names(&names, "ALPHA"), vec![&names[0]]);
+        assert_eq!(filter_file_names(&names, "02"), vec![&names[1]]);
+        assert!(filter_file_names(&names, "zzz").is_empty());
+    }
+
+    fn test_block(id: usize, new_text: &str) -> crate::model::Block {
+        crate::model::Block {
+            id,
+            bbox: [10, 20, 50, 60],
+            line_bboxes: vec![[10, 20, 50, 60]],
+            original_text: "x".into(),
+            new_text: new_text.into(),
+            confidence: 0.9,
+            text_color: [0, 0, 0],
+            bg_color: [0, 0, 0],
+            is_boxed: true,
+            font_size_est: 10,
+        }
+    }
+
+    #[test]
+    fn counts_for_counts_empty_new_text_as_untranslated() {
+        let data = crate::model::ExtractedData {
+            images: vec![
+                crate::model::ImageEntry {
+                    file: "a.png".into(),
+                    width: 100,
+                    height: 100,
+                    raw_lines: vec![],
+                    blocks: vec![test_block(0, ""), test_block(1, "z")],
+                    dropped: vec![],
+                },
+                crate::model::ImageEntry {
+                    file: "b.png".into(),
+                    width: 100,
+                    height: 100,
+                    raw_lines: vec![],
+                    blocks: vec![],
+                    dropped: vec![],
+                },
+            ],
+        };
+        assert_eq!(counts_for(&data), (2, 1));
+    }
+
+    #[test]
+    fn block_at_finds_the_box_and_ignores_outside_points() {
+        let entry = crate::model::ImageEntry {
+            file: "a.png".into(),
+            width: 100,
+            height: 100,
+            raw_lines: vec![],
+            blocks: vec![test_block(7, "z")],
+            dropped: vec![crate::model::DroppedItem {
+                bbox: [70, 70, 90, 90],
+                text: "d".into(),
+                reason: "low-conf".into(),
+            }],
+        };
+        assert_eq!(block_at(&entry, 30.0, 40.0), Some(7));
+        assert_eq!(block_at(&entry, 5.0, 5.0), None);
+        // The right/bottom edges are exclusive, and dropped boxes are not
+        // selectable.
+        assert_eq!(block_at(&entry, 50.0, 40.0), None);
+        assert_eq!(block_at(&entry, 80.0, 80.0), None);
     }
 }
