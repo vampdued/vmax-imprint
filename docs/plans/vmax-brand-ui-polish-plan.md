@@ -318,7 +318,7 @@ crispness check); release post generated from the pipeline.
 - Still his call: the v1.0.4 tag for the Windows exe, so he can eyeball
   Phase 1 on his machine (top/bottom plates on `_3.jpg` must read fully).
 
-## 8. Phase 2 build record (2026-11-17, local — push is his call)
+## 8. Phase 2 build record (2026-11-17, PUSHED same day — origin/main `a4b4aab`)
 
 - `render.rs`: `render_ocr_diagnostic` takes `highlight: Option<usize>`
   (block id); the highlighted block is drawn last in Max Blue #2F5BFF
@@ -354,3 +354,7 @@ crispness check); release post generated from the pipeline.
   wrapping at 340px, click mapping through the ScrollArea), the highlight
   colour on real photos. His Windows eyeball is the gate: step through
   the 18 files, click a block, status bar shows the counts.
+- Push: same token as the Phase 1 push re-pasted by him, still valid
+  (API 200); pushed `6b537e8..a4b4aab`, origin/main verified at `a4b4aab`.
+  Token via `GH_TOKEN` env only, never saved; remote token-free, the
+  `gh auth git-credential` helper removed again afterwards.
