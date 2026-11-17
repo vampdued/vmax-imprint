@@ -37,7 +37,9 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("square", include_bytes!("../assets/icons/square.svg")),
 ];
 
-/// Every icon the UI uses; the test below asserts each one is embedded.
+/// Every icon the UI uses (plus `square`, the unknown-name fallback); the
+/// test below asserts each one is embedded. `x` is embedded in `ICONS` but
+/// no control uses it, so it is not listed here.
 /// (Test-only: kept out of the non-test build.)
 #[cfg(test)]
 pub const USED_ICONS: &[&str] = &[
@@ -56,7 +58,6 @@ pub const USED_ICONS: &[&str] = &[
     "chevron-left",
     "chevron-right",
     "check",
-    "x",
     "square",
 ];
 
@@ -120,7 +121,7 @@ pub fn button_box(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, 
     } else if resp.hovered() {
         t.text
     } else {
-        t.icon
+        t.icon_rest
     };
 
     paint(ui, rect, name, (box_size * 0.55).round(), tint);

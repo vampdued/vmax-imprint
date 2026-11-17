@@ -279,7 +279,7 @@ impl CaptionStudioApp {
 
     fn copy_compact_for_ai(&mut self) {
         if self.editor_text.trim().is_empty() {
-            self.status = "Nothing to copy — scan & extract text first or load a JSON file.".into();
+            self.status = "Nothing to copy — Scan & Extract Text first or load a JSON file.".into();
             return;
         }
         match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(self.editor_text.clone())) {
@@ -365,7 +365,7 @@ impl CaptionStudioApp {
     fn open_output_folder(&mut self) {
         let out = self.output_dir.trim();
         if out.is_empty() || !Path::new(out).exists() {
-            self.status = "Output folder does not exist yet.".into();
+            self.status = "Output folder doesn't exist yet — render an image first.".into();
             return;
         }
         let res = if cfg!(target_os = "windows") {
@@ -385,7 +385,7 @@ impl CaptionStudioApp {
     fn start_extract(&mut self) {
         let in_dir = self.input_dir.trim().to_string();
         if in_dir.is_empty() || !Path::new(&in_dir).is_dir() {
-            self.status = "Please select a valid Input Folder.".into();
+            self.status = "Select an input folder first.".into();
             return;
         }
         if !self.ocr_ready {
@@ -396,7 +396,7 @@ impl CaptionStudioApp {
         self.busy = true;
         self.cancel.store(false, Ordering::SeqCst);
         self.progress = 0.0;
-        self.status = "Initializing OCR engine...".into();
+        self.status = "Starting scan…".into();
         let tx = self.tx.clone();
         let cancel = self.cancel.clone();
         let min_conf = self.safe_conf();
@@ -411,7 +411,7 @@ impl CaptionStudioApp {
         let in_dir = self.input_dir.trim().to_string();
         let out_dir = self.output_dir.trim().to_string();
         if in_dir.is_empty() || !Path::new(&in_dir).is_dir() {
-            self.status = "Please select a valid Input Folder.".into();
+            self.status = "Select an input folder first.".into();
             return;
         }
         if out_dir.is_empty() {
@@ -419,13 +419,13 @@ impl CaptionStudioApp {
             return;
         }
         if Path::new(&out_dir) == Path::new(&in_dir) {
-            self.status = "Output folder must differ from Input folder.".into();
+            self.status = "Output folder must differ from Input folder, or renders would overwrite your originals.".into();
             return;
         }
         let (data, warnings, count) = match self.resolve_editor() {
             Ok(v) => v,
             Err(e) => {
-                self.status = format!("Parse error: {e}");
+                self.status = format!("Couldn't parse the JSON — {e}");
                 return;
             }
         };
@@ -475,7 +475,7 @@ impl CaptionStudioApp {
             match &self.extracted {
                 Some(d) => d.clone(),
                 None => {
-                    self.verify_text = "Scan & Extract text or paste translated JSON to preview.".into();
+                    self.verify_text = "Scan & Extract Text or paste translated JSON to preview.".into();
                     return;
                 }
             }
@@ -483,7 +483,7 @@ impl CaptionStudioApp {
             match self.resolve_editor() {
                 Ok((d, _, _)) => d,
                 Err(e) => {
-                    self.verify_text = format!("JSON Preview Error:\n{e}");
+                    self.verify_text = format!("Couldn't preview the JSON — {e}");
                     return;
                 }
             }
@@ -526,7 +526,7 @@ impl CaptionStudioApp {
         let img = match load_image(&img_path) {
             Ok(i) => i,
             Err(_) => {
-                self.verify_text = format!("Could not read image: {}", entry.file);
+                self.verify_text = format!("Couldn't read {} — it may have moved or be corrupt.", entry.file);
                 return;
             }
         };
@@ -605,9 +605,9 @@ impl CaptionStudioApp {
                     self.busy = false;
                     self.progress = 1.0;
                     let prefix = if cancelled { "Stopped — " } else { "Complete — " };
-                    let summary = format!("{prefix}Rendered {rendered}, copied {copied}, failed {failed}");
+                    let summary = format!("{prefix}rendered {rendered}, copied {copied} unchanged, failed {failed}");
                     self.log(summary.clone());
-                    self.status = format!("{summary} -> {}", self.output_dir);
+                    self.status = format!("{summary}. Saved to {}", self.output_dir);
                 }
             }
         }
@@ -665,7 +665,7 @@ fn extract_worker(
     }
     img_files.sort();
     if img_files.is_empty() {
-        send(WorkerMsg::Status("No supported images found in folder.".into()));
+        send(WorkerMsg::Status("No supported images found — add .jpg, .png, or .webp files.".into()));
         send(WorkerMsg::ExtractDone { data: ExtractedData::default(), cancelled: false });
         return;
     }
@@ -808,13 +808,17 @@ impl eframe::App for CaptionStudioApp {
                 .show(&ctx, |ui| {
                     ui.label("No caption differs from the original. Copy originals anyway?");
                     ui.horizontal(|ui| {
-                        if ui.button("Yes, copy originals").clicked() {
+                        let yes = ui.button("Yes, copy originals");
+                        focus_ring(ui, &yes);
+                        if yes.clicked() {
                             self.confirm_copy_originals = false;
                             if let Some(data) = self.pending_render.take() {
                                 self.launch_render(data);
                             }
                         }
-                        if ui.button("Cancel").clicked() {
+                        let cancel = ui.button("Cancel");
+                        focus_ring(ui, &cancel);
+                        if cancel.clicked() {
                             self.confirm_copy_originals = false;
                             self.pending_render = None;
                         }
@@ -841,51 +845,41 @@ impl eframe::App for CaptionStudioApp {
             .resizable(true)
             .default_size(370.0)
             .show(ui, |ui| {
-                ui.label(crate::theme::heading("Caption Studio", crate::theme::CARD));
+                // The panel has no auto-scroll (egui SidePanel clips overflow)
+                // and the four sections total ~840px against ~650px at the
+                // default window size — so the content scrolls instead of
+                // cutting the Activity Log off at the bottom.
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.label(crate::theme::heading("Caption Studio", crate::theme::SECTION));
                 ui.label(crate::theme::label_text("Batch Image Translator & OCR Verifier", crate::theme::SMALL));
                 if let Some(e) = &self.ocr_error {
-                    ui.colored_label(crate::theme::Tokens::get(ui.ctx()).danger, format!("OCR error: {e}"));
+                    ui.colored_label(crate::theme::Tokens::get(ui.ctx()).danger, format!("OCR failed to start — restart the app to retry. ({e})"));
                 } else if !self.ocr_ready {
                     ui.label("Warming up OCR engine…");
                 }
                 ui.separator();
 
-                egui::CollapsingHeader::new("1. Folders & Font").default_open(true).show(ui, |ui| {
+                egui::CollapsingHeader::new("Folders & Font").default_open(true).show(ui, |ui| {
                     ui.label("Input Folder:");
                     ui.horizontal(|ui| {
                         ui.text_edit_singleline(&mut self.input_dir);
-                        if crate::icons::button(ui, "folder", crate::theme::ControlSize::Small, false, "Browse…").clicked() {
+                        if crate::icons::button(ui, "folder", crate::theme::ControlSize::Small, false, "Browse for input folder").clicked() {
                             self.browse_input();
                         }
                     });
                     ui.label("Output Folder:");
                     ui.horizontal(|ui| {
                         ui.text_edit_singleline(&mut self.output_dir);
-                        if crate::icons::button(ui, "folder", crate::theme::ControlSize::Small, false, "Browse…").clicked() {
+                        if crate::icons::button(ui, "folder", crate::theme::ControlSize::Small, false, "Browse for output folder").clicked() {
                             self.browse_output();
                         }
                     });
-                    ui.label("Custom Font (.ttf / .otf, optional):");
+                    ui.label("Custom Font (.ttf / .otf / .ttc, optional):");
                     ui.horizontal(|ui| {
                         ui.text_edit_singleline(&mut self.font_path);
-                        if crate::icons::button(ui, "folder", crate::theme::ControlSize::Small, false, "Browse…").clicked() {
+                        if crate::icons::button(ui, "folder", crate::theme::ControlSize::Small, false, "Browse for font file").clicked() {
                             self.browse_font();
                         }
-                    });
-                });
-
-                egui::CollapsingHeader::new("OCR Threshold Tuning").default_open(true).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("OCR confidence threshold:");
-                        ui.add(
-                            egui::DragValue::new(&mut self.conf)
-                                .range(0.10..=0.95)
-                                .speed(0.05),
-                        );
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Ignore unboxed text < chars:");
-                        ui.add(egui::DragValue::new(&mut self.minchars).range(0..=60).speed(1));
                     });
                     ui.horizontal(|ui| {
                         ui.label("Font sizing:");
@@ -907,6 +901,21 @@ impl eframe::App for CaptionStudioApp {
                             self.preview_key.clear();
                         }
                     });
+                });
+
+                egui::CollapsingHeader::new("OCR Threshold Tuning").default_open(false).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("OCR confidence threshold:");
+                        ui.add(
+                            egui::DragValue::new(&mut self.conf)
+                                .range(0.10..=0.95)
+                                .speed(0.05),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Minimum length for unboxed text (chars):");
+                        ui.add(egui::DragValue::new(&mut self.minchars).range(0..=60).speed(1));
+                    });
                     ui.horizontal(|ui| {
                         if icon_text_button(ui, "check", "Apply Thresholds (Instant)").clicked() {
                             self.reapply_thresholds();
@@ -919,7 +928,7 @@ impl eframe::App for CaptionStudioApp {
                     });
                 });
 
-                egui::CollapsingHeader::new("2. Batch Workflow").default_open(true).show(ui, |ui| {
+                egui::CollapsingHeader::new("Batch Workflow").default_open(true).show(ui, |ui| {
                     ui.add_enabled_ui(!self.busy, |ui| {
                         if icon_text_button(ui, "scan", "Scan & Extract Text").clicked() {
                             self.start_extract();
@@ -937,15 +946,19 @@ impl eframe::App for CaptionStudioApp {
                         }
                     });
                     ui.horizontal(|ui| {
-                        if icon_text_button(ui, "eye", "Live Preview").clicked() {
+                        if icon_text_button(ui, "eye", "Live Preview & OCR Check").clicked() {
                             self.tab = Tab::Preview;
                         }
-                        if icon_text_button(ui, "folder-open", "Open Output").clicked() {
+                        if icon_text_button(ui, "folder-open", "Open Output Folder").clicked() {
                             self.open_output_folder();
                         }
-                        if icon_text_button(ui, "octagon-x", "Stop").clicked() {
-                            self.cancel.store(true, Ordering::SeqCst);
-                        }
+                        // Stop is only meaningful while a job runs — it stays
+                        // disabled at idle so its state tells the truth.
+                        ui.add_enabled_ui(self.busy, |ui| {
+                            if icon_text_button(ui, "octagon-x", "Stop").clicked() {
+                                self.cancel.store(true, Ordering::SeqCst);
+                            }
+                        });
                     });
                 });
 
@@ -959,10 +972,16 @@ impl eframe::App for CaptionStudioApp {
                             }
                         });
                 });
+                });
             });
 
         // --- Right column: tabbed workspace ---
-        egui::CentralPanel::default().show(ui, |ui| {
+        // The central workspace sits on `canvas` (the main reading surface),
+        // a step above the chrome panels — this is what the `canvas` token is for.
+        let canvas = crate::theme::Tokens::get(ui.ctx()).canvas;
+        egui::CentralPanel::default()
+            .frame(egui::Frame::central_panel(ui.style()).fill(canvas))
+            .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.tab, Tab::Json, "Translation JSON");
                 ui.selectable_value(&mut self.tab, Tab::Preview, "Live Preview & OCR Check");
@@ -977,10 +996,10 @@ impl eframe::App for CaptionStudioApp {
                         if icon_text_button(ui, "clipboard-paste", "Paste Translated JSON").clicked() {
                             self.paste_clipboard();
                         }
-                        if icon_text_button(ui, "file-json", "Import .json File...").clicked() {
+                        if icon_text_button(ui, "file-json", "Import Translated JSON...").clicked() {
                             self.load_translated_file();
                         }
-                        if icon_text_button(ui, "arrow-right", "Verify OCR / Preview ->").clicked() {
+                        if icon_text_button(ui, "arrow-right", "Verify in Preview").clicked() {
                             self.tab = Tab::Preview;
                         }
                     });
@@ -1031,7 +1050,13 @@ impl eframe::App for CaptionStudioApp {
                     } else {
                         ui.label("Run 'Scan & Extract Text' or paste JSON,\nthen switch here to verify OCR boxes or rendered captions.");
                     }
-                    egui::CollapsingHeader::new("Detected Blocks Check (Green = Kept in OCR Boxes | Orange = Filtered Out)").default_open(true).show(ui, |ui| {
+                    // The green/orange legend belongs with the image it
+                    // describes (OCR Boxes mode only — the other modes draw
+                    // no coloured boxes).
+                    if matches!(self.preview_mode, PreviewMode::Ocr) {
+                        ui.label(crate::theme::label_text("Green boxes = kept · Orange boxes = filtered out", crate::theme::CAPTION));
+                    }
+                    egui::CollapsingHeader::new("Detected Blocks").default_open(true).show(ui, |ui| {
                         egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
                             ui.monospace(&self.verify_text);
                         });
@@ -1058,7 +1083,24 @@ fn icon_text_button(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Respons
     let t = crate::theme::Tokens::get(ui.ctx());
     let tint = if ui.is_enabled() { t.text } else { t.text_faint };
     let image = crate::icons::image(icon, crate::theme::ControlSize::Small.icon(), tint);
-    ui.add(egui::Button::image_and_text(image, label))
+    let resp = ui.add(egui::Button::image_and_text(image, label));
+    focus_ring(ui, &resp);
+    resp
+}
+
+/// Draw the keyboard-focus ring around a button, matching the one
+/// `icons::button` draws — egui's own buttons have no focus style, so
+/// without this keyboard focus is invisible everywhere except icon buttons.
+fn focus_ring(ui: &egui::Ui, resp: &egui::Response) {
+    if resp.has_focus() {
+        let t = crate::theme::Tokens::get(ui.ctx());
+        ui.painter().rect_stroke(
+            resp.rect.expand(1.0),
+            t.radius_sm,
+            egui::Stroke::new(1.5, t.accent),
+            egui::StrokeKind::Outside,
+        );
+    }
 }
 
 pub fn run_app() -> eframe::Result<()> {

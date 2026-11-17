@@ -105,7 +105,7 @@ impl SizingMode {
         match self {
             SizingMode::UniformGrow => "Uniform — plates grow",
             SizingMode::PerBlock => "Per-block — plates stay put",
-            SizingMode::UniformSmallest => "Uniform smallest",
+            SizingMode::UniformSmallest => "Uniform — smallest size",
         }
     }
     pub fn all() -> [SizingMode; 3] {

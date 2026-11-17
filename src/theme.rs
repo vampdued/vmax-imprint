@@ -19,6 +19,9 @@ use std::sync::Arc;
 pub enum ThemeKind {
     #[default]
     Studio,
+    /// Port-complete but inactive: the app applies Studio only and has no
+    /// theme switch yet. Covered by the `light_theme_applies` test so the
+    /// port stays honest if a switch is added later.
     StudioLight,
 }
 
@@ -69,28 +72,26 @@ pub struct Tokens {
     pub text: Color32,
     pub text_dim: Color32,
     pub text_faint: Color32,
-    pub icon: Color32,
+    /// The icon glyph colour at rest (hovered icons use `text`).
+    pub icon_rest: Color32,
     pub accent: Color32,
-    pub accent_hover: Color32,
     /// Indigo that reads as text on the theme's surfaces.
     pub accent_ink: Color32,
     /// Indigo wash for soft highlights.
     pub accent_soft: Color32,
-    /// Text drawn on an `accent` fill.
-    pub on_accent: Color32,
     pub separator: Color32,
     pub shadow: Color32,
     pub danger: Color32,
     pub warning: Color32,
-    pub success: Color32,
     pub code_bg: Color32,
     pub radius_sm: f32,
     pub radius: f32,
     pub radius_lg: f32,
 }
 
-/// The app colour: deep indigo (#1659c4). White on it passes WCAG AA; on its
-/// bright accent (#2d81ff, used for hover) it doesn't.
+/// The app colour: deep indigo (#1659c4). White on it passes WCAG AA; white on
+/// the brighter #2d81ff doesn't, so that blue is only ever a wash or a stroke,
+/// never a background behind text.
 pub const BRAND: Color32 = Color32::from_rgb(0x16, 0x59, 0xc4);
 
 impl Tokens {
@@ -112,17 +113,14 @@ impl Tokens {
                 text: Color32::from_rgb(0xf2, 0xf1, 0xee),
                 text_dim: Color32::from_rgb(0xb3, 0xb3, 0xb2),
                 text_faint: Color32::from_rgb(0x8d, 0x8d, 0x8d),
-                icon: Color32::from_rgb(0xa8, 0xa8, 0xa6),
+                icon_rest: Color32::from_rgb(0xa8, 0xa8, 0xa6),
                 accent: BRAND,
-                accent_hover: Color32::from_rgb(0x2d, 0x81, 0xff),
                 accent_ink: Color32::from_rgb(0x74, 0xaa, 0xff),
                 accent_soft: Color32::from_rgba_unmultiplied(0x2d, 0x81, 0xff, 44),
-                on_accent: Color32::WHITE,
                 separator: Color32::from_rgb(0x24, 0x25, 0x27),
                 shadow: Color32::from_black_alpha(120),
                 danger: Color32::from_rgb(0xff, 0x62, 0x59),
                 warning: Color32::from_rgb(0xe0, 0xa2, 0x3a),
-                success: Color32::from_rgb(0x5b, 0xbf, 0x8f),
                 code_bg: Color32::from_rgb(0x06, 0x06, 0x07),
                 radius_sm: RADIUS_SM,
                 radius: RADIUS,
@@ -145,17 +143,14 @@ impl Tokens {
                 text: Color32::from_rgb(0x10, 0x10, 0x14),
                 text_dim: Color32::from_rgb(0x3d, 0x3d, 0x40),
                 text_faint: Color32::from_rgb(0x5d, 0x5c, 0x5e),
-                icon: Color32::from_rgb(0x4f, 0x4f, 0x52),
+                icon_rest: Color32::from_rgb(0x4f, 0x4f, 0x52),
                 accent: BRAND,
-                accent_hover: Color32::from_rgb(0x2d, 0x81, 0xff),
                 accent_ink: BRAND,
                 accent_soft: Color32::from_rgba_unmultiplied(0x2d, 0x81, 0xff, 28),
-                on_accent: Color32::WHITE,
                 separator: Color32::from_rgb(0xdb, 0xda, 0xd8),
                 shadow: Color32::from_black_alpha(20),
                 danger: Color32::from_rgb(0xb3, 0x26, 0x1e),
                 warning: Color32::from_rgb(0x9a, 0x67, 0x00),
-                success: Color32::from_rgb(0x12, 0x75, 0x36),
                 code_bg: Color32::from_rgb(0xe9, 0xe8, 0xe4),
                 radius_sm: RADIUS_SM,
                 radius: RADIUS,
@@ -224,7 +219,7 @@ pub fn install_fonts(ctx: &egui::Context) {
     fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "JetBrainsMono".to_owned());
 
     let base: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
-    for (fam, stack) in weighted_families(&base, &[]) {
+    for (fam, stack) in weighted_families(&base) {
         fonts.families.insert(fam, stack);
     }
 
@@ -233,12 +228,11 @@ pub fn install_fonts(ctx: &egui::Context) {
 
 /// The medium and semibold families: Figtree's own weight first, then the
 /// whole proportional stack.
-fn weighted_families(base: &[String], bold: &[String]) -> Vec<(FontFamily, Vec<String>)> {
+fn weighted_families(base: &[String]) -> Vec<(FontFamily, Vec<String>)> {
     [("medium", "Figtree-Medium"), ("semibold", "Figtree-SemiBold")]
         .into_iter()
         .map(|(fam, primary)| {
             let mut stack = vec![primary.to_owned()];
-            stack.extend(bold.iter().cloned());
             stack.extend(base.iter().cloned());
             (FontFamily::Name(fam.into()), stack)
         })
@@ -273,7 +267,8 @@ pub const TINY: f32 = 11.0;
 /// Code, paths and numbers in JetBrains Mono.
 pub const CODE: f32 = 12.5;
 
-/// The spacing steps: every gap between things is one of these.
+/// The spacing steps: the gaps between things are built from these. (Panel and
+/// window dimensions are layout literals in `ui.rs`, not scale steps.)
 pub mod space {
     /// A nudge between two lines that belong together.
     pub const XXS: f32 = 2.0;
@@ -304,7 +299,7 @@ pub mod pad {
     /// Code blocks and dense workbench boxes.
     pub const TIGHT: Margin = Margin::same(8);
     pub const PANEL: Margin = Margin::same(12);
-    pub const CARD: Margin = Margin::same(16);
+    pub const CARD_PAD: Margin = Margin::same(16);
     /// Dialogs, side panes and a screen's main card.
     pub const ROOMY: Margin = Margin::same(24);
     /// A card that holds one row.
@@ -425,10 +420,6 @@ pub fn scroll_style() -> egui::style::ScrollStyle {
 /// How opaque a scroll bar's thumb is at rest (over the text colour).
 const SCROLL_THUMB_AT_REST: f32 = 0.5;
 
-/// How far one notch of the mouse wheel scrolls, in points. egui's own step is 40, which takes
-/// two or three turns for what a browser scrolls in one; it still eases to the new place.
-pub const WHEEL_STEP: f32 = 100.0;
-
 /// Apply a theme. `roomy` = bigger type, more air (not used here; the app runs compact).
 pub fn apply(ctx: &egui::Context, kind: ThemeKind, roomy: bool) {
     let t = Tokens::for_kind(kind);
@@ -500,7 +491,7 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind, roomy: bool) {
         s.text_styles = [
             (TextStyle::Small, FontId::proportional(if roomy { LABEL } else { TINY })),
             (TextStyle::Body, FontId::proportional(if roomy { BODY } else { LABEL })),
-            (TextStyle::Button, FontId::proportional(control.text())),
+            (TextStyle::Button, medium(control.text())),
             (TextStyle::Heading, semibold(if roomy { SECTION } else { CARD })),
             (TextStyle::Monospace, FontId::monospace(if roomy { LABEL } else { CODE })),
         ]
@@ -541,6 +532,18 @@ mod tests {
         // The heading style uses the semibold family.
         let heading = ctx.global_style().text_styles.get(&TextStyle::Heading).cloned().unwrap();
         assert_eq!(heading.family, FontFamily::Name("semibold".into()));
+    }
+
+    #[test]
+    fn light_theme_applies() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        apply(&ctx, ThemeKind::StudioLight, false);
+        let t = Tokens::get(&ctx);
+        assert_eq!(t.kind, ThemeKind::StudioLight);
+        assert!(!t.dark());
+        assert_eq!(t.text, Color32::from_rgb(0x10, 0x10, 0x14));
+        assert_eq!(t.canvas, Color32::from_rgb(0xf2, 0xf1, 0xee));
     }
 
     #[test]
