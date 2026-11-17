@@ -14,6 +14,11 @@ use image::RgbImage;
 
 /// Sample background / text colours for one line bbox in an RGB image.
 /// Returns `(bg_color, text_color, is_boxed)`.
+///
+/// The colours are sampled per block from the original image, so a rendered
+/// caption keeps the meme's own palette — a yellow plate on top and a cyan
+/// plate below is the original's doing, not a theme bug, and the plates must
+/// never be normalised to one colour.
 pub fn sample_colors(img_rgb: &RgbImage, bbox: [i32; 4]) -> ([u8; 3], [u8; 3], bool) {
     let (w, h) = (img_rgb.width() as i32, img_rgb.height() as i32);
     let [x1, y1, x2, y2] = clamp_box(bbox, w, h);
@@ -144,7 +149,7 @@ pub fn group_lines_into_blocks(
             dropped.push(DroppedItem {
                 bbox: line.bbox,
                 text: line.text.clone(),
-                reason: format!("conf {score:.2} < {min_conf:.2}"),
+                reason: format!("confidence {score:.2}, needed {min_conf:.2}"),
             });
         } else {
             kept.push(line);
@@ -229,7 +234,7 @@ pub fn group_lines_into_blocks(
             dropped.push(DroppedItem {
                 bbox: [min_x, min_y, max_x, max_y],
                 text: combined_text,
-                reason: format!("unboxed {n_chars} < {min_chars} chars"),
+                reason: format!("{n_chars} chars, needs {min_chars}"),
             });
             continue;
         }
@@ -275,7 +280,7 @@ mod tests {
         let (blocks, dropped) = group_lines_into_blocks(&raw, 0.6, 12);
         assert_eq!(blocks.len(), 1);
         assert_eq!(dropped.len(), 1);
-        assert_eq!(dropped[0].reason, "conf 0.05 < 0.60");
+        assert_eq!(dropped[0].reason, "confidence 0.05, needed 0.60");
     }
 
     #[test]
@@ -293,7 +298,7 @@ mod tests {
         short.is_boxed = false;
         let (blocks, dropped) = group_lines_into_blocks(&[short], 0.6, 12);
         assert!(blocks.is_empty());
-        assert!(dropped[0].reason.contains("unboxed 4 < 12 chars"));
+        assert!(dropped[0].reason.contains("4 chars, needs 12"));
     }
 
     #[test]

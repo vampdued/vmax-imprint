@@ -683,6 +683,16 @@ pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry) -> RgbImage {
         let stroke = Stroke { width, ..Default::default() };
         if let Some(rect) = Rect::from_xywh(x1 as f32, y1 as f32, (x2 - x1) as f32, (y2 - y1) as f32) {
             let path = tiny_skia::PathBuilder::from_rect(rect);
+            // A dark halo under the coloured outline, so it holds up on
+            // light photo areas: the kept green is 2.28:1 and the dropped
+            // orange 2.80:1 on white, below the 3:1 a non-text mark needs.
+            // Drawn first, 2px wider, so it reads as a dark edge around the
+            // coloured line.
+            let mut halo = Paint::default();
+            halo.set_color_rgba8(0, 0, 0, 200);
+            halo.anti_alias = true;
+            let halo_stroke = Stroke { width: width + 2.0, ..Default::default() };
+            pixmap.stroke_path(&path, &halo, &halo_stroke, Transform::identity(), None);
             pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
         }
     };

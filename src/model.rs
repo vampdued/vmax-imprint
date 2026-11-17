@@ -129,6 +129,9 @@ pub struct Settings {
     pub minchars: i32,
     #[serde(default)]
     pub sizing: SizingMode,
+    /// The left panel's width, dragged by the user; restored on launch.
+    #[serde(default = "default_panel_width")]
+    pub panel_width: f32,
 }
 
 pub fn default_conf() -> f64 {
@@ -136,6 +139,9 @@ pub fn default_conf() -> f64 {
 }
 pub fn default_minchars() -> i32 {
     12
+}
+pub fn default_panel_width() -> f32 {
+    370.0
 }
 
 impl Default for Settings {
@@ -147,6 +153,7 @@ impl Default for Settings {
             conf: 0.6,
             minchars: 12,
             sizing: SizingMode::UniformGrow,
+            panel_width: default_panel_width(),
         }
     }
 }

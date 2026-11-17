@@ -102,11 +102,16 @@ impl Tokens {
             ThemeKind::Studio => Tokens {
                 kind,
                 chrome: Color32::from_rgb(0x10, 0x10, 0x14),
-                canvas: Color32::from_rgb(0x12, 0x13, 0x16),
+                // A visible step above chrome (#101014) so the central
+                // workspace reads as its own surface; the old #121316 was
+                // 2 LSB away and the seam was invisible (pixel-sampled).
+                canvas: Color32::from_rgb(0x15, 0x16, 0x19),
                 card: Color32::from_rgb(0x1b, 0x1c, 0x1f),
                 card_border: Color32::from_rgb(0x34, 0x34, 0x36),
                 raised: Color32::from_rgb(0x22, 0x23, 0x25),
-                field: Color32::from_rgb(0x22, 0x23, 0x26),
+                // A visible step above `raised` (#222325 — the old field was
+                // 1 LSB away, so controls were indistinguishable from cards).
+                field: Color32::from_rgb(0x26, 0x27, 0x2b),
                 field_border: Color32::from_rgb(0x6c, 0x6c, 0x6c),
                 hover: Color32::from_rgb(0x2a, 0x2b, 0x2e),
                 pressed: Color32::from_rgb(0x33, 0x34, 0x37),
@@ -135,7 +140,9 @@ impl Tokens {
                 canvas: Color32::from_rgb(0xf2, 0xf1, 0xee),
                 card: Color32::from_rgb(0xfa, 0xf9, 0xf7),
                 card_border: Color32::from_rgb(0xce, 0xcd, 0xcb),
-                raised: Color32::from_rgb(0xe9, 0xe8, 0xe4),
+                // A step above `card` (#faf9f7), not a copy of `chrome` —
+                // the old value was identical to chrome and code_bg.
+                raised: Color32::from_rgb(0xff, 0xff, 0xff),
                 field: Color32::WHITE,
                 field_border: Color32::from_rgb(0x86, 0x85, 0x85),
                 hover: Color32::from_rgb(0xe4, 0xe4, 0xe1),
@@ -151,7 +158,8 @@ impl Tokens {
                 shadow: Color32::from_black_alpha(20),
                 danger: Color32::from_rgb(0xb3, 0x26, 0x1e),
                 warning: Color32::from_rgb(0x9a, 0x67, 0x00),
-                code_bg: Color32::from_rgb(0xe9, 0xe8, 0xe4),
+                // A step below `chrome` so code reads as sunken, not a copy of it.
+                code_bg: Color32::from_rgb(0xe4, 0xe3, 0xdf),
                 radius_sm: RADIUS_SM,
                 radius: RADIUS,
                 radius_lg: RADIUS_LG,
@@ -466,10 +474,12 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind, roomy: bool) {
     w.noninteractive.corner_radius = t.r_sm();
 
     // Buttons and combo boxes are field-coloured boxes with a hairline edge.
-    // One edge for every control, ours and egui's: soft at rest, firmer under the pointer, the
+    // One edge for every control, ours and egui's: firm at rest (field_border
+    // is 3.62:1 against the panel — the old card_border edge was 1.53:1, so
+    // buttons were nearly invisible at rest), firmer under the pointer, the
     // app colour while it's pressed or open.
     for (wv, bg, weak, stroke) in [
-        (&mut w.inactive, t.field, t.field, t.card_border),
+        (&mut w.inactive, t.field, t.field, t.field_border),
         (&mut w.hovered, t.hover, t.hover, t.field_border),
         (&mut w.active, t.pressed, t.pressed, t.accent),
         // An open dropdown is edged in the app colour, like a field being typed in.
@@ -492,6 +502,10 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind, roomy: bool) {
             (TextStyle::Small, FontId::proportional(if roomy { LABEL } else { TINY })),
             (TextStyle::Body, FontId::proportional(if roomy { BODY } else { LABEL })),
             (TextStyle::Button, medium(control.text())),
+            // egui panics resolving a missing style, so Heading stays as the
+            // framework fallback — but the app's headings go through
+            // `theme::heading()`, never `ui.heading()`, so this is the only
+            // heading path in practice.
             (TextStyle::Heading, semibold(if roomy { SECTION } else { CARD })),
             (TextStyle::Monospace, FontId::monospace(if roomy { LABEL } else { CODE })),
         ]

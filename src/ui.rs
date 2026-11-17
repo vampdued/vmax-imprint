@@ -41,6 +41,36 @@ enum PreviewMode {
     Original,
 }
 
+/// How loud a log line is. The Activity Log renders each level in its own
+/// colour (info = plain text, warning = the warning token, error = danger),
+/// so severity is visible at a glance instead of living in a `WARN ` prefix
+/// that wraps onto its own line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogLevel {
+    Info,
+    Warn,
+    Error,
+}
+
+/// One Activity Log line: its text plus the level that decides its colour.
+#[derive(Debug, Clone)]
+struct LogLine {
+    text: String,
+    level: LogLevel,
+}
+
+impl LogLine {
+    fn info(text: String) -> Self {
+        LogLine { text, level: LogLevel::Info }
+    }
+    fn warn(text: String) -> Self {
+        LogLine { text, level: LogLevel::Warn }
+    }
+    fn error(text: String) -> Self {
+        LogLine { text, level: LogLevel::Error }
+    }
+}
+
 enum WorkerMsg {
     Log(String),
     Status(String),
@@ -75,13 +105,16 @@ pub struct CaptionStudioApp {
     preview_texture: Option<TextureHandle>,
     preview_size: [f32; 2],
     verify_text: String,
-    log_lines: Vec<String>,
+    log_lines: Vec<LogLine>,
     status: String,
     progress: f32,
     busy: bool,
     cancel: Arc<AtomicBool>,
     confirm_copy_originals: bool,
     pending_render: Option<ExtractedData>,
+    /// The left panel's width, restored from settings and kept in sync as
+    /// the user drags the divider (saved with the rest of the settings).
+    panel_width: f32,
 
     tx: Sender<WorkerMsg>,
     rx: Receiver<WorkerMsg>,
@@ -125,6 +158,7 @@ impl CaptionStudioApp {
             cancel: Arc::new(AtomicBool::new(false)),
             confirm_copy_originals: false,
             pending_render: None,
+            panel_width: settings.panel_width,
             tx: tx.clone(),
             rx,
         };
@@ -141,7 +175,19 @@ impl CaptionStudioApp {
     // ------------------------------------------------------------ helpers
 
     fn log(&mut self, msg: String) {
-        self.log_lines.push(msg);
+        self.log_at(LogLine::info(msg));
+    }
+
+    fn log_warn(&mut self, msg: String) {
+        self.log_at(LogLine::warn(msg));
+    }
+
+    fn log_error(&mut self, msg: String) {
+        self.log_at(LogLine::error(msg));
+    }
+
+    fn log_at(&mut self, line: LogLine) {
+        self.log_lines.push(line);
         if self.log_lines.len() > 400 {
             let excess = self.log_lines.len() - 400;
             self.log_lines.drain(..excess);
@@ -156,6 +202,7 @@ impl CaptionStudioApp {
             conf: self.conf.clamp(0.0, 1.0),
             minchars: self.minchars.max(0),
             sizing: self.sizing,
+            panel_width: self.panel_width,
         }
         .save();
     }
@@ -415,7 +462,7 @@ impl CaptionStudioApp {
             return;
         }
         if out_dir.is_empty() {
-            self.status = "Please specify an Output Folder.".into();
+            self.status = "Select an output folder first.".into();
             return;
         }
         if Path::new(&out_dir) == Path::new(&in_dir) {
@@ -430,7 +477,10 @@ impl CaptionStudioApp {
             }
         };
         for w in &warnings {
-            self.log(format!("WARN {w}"));
+            // The warning text already says what happened ("Skipped …") and
+            // the level paints it amber — no `WARN ` prefix to orphan onto
+            // its own line when the filename wraps.
+            self.log_warn(w.clone());
         }
         if count == Some(0) {
             // No caption differs from the original — ask, like Python.
@@ -576,7 +626,7 @@ impl CaptionStudioApp {
                         self.ocr = Some(engine);
                         self.ocr_ready = true;
                         self.ocr_error = None;
-                        self.log("OCR engine ready (RapidOCR PP-OCRv4, embedded).".into());
+                        self.log("OCR engine ready.".into());
                         if self.pending_extract {
                             self.pending_extract = false;
                             self.start_extract();
@@ -585,6 +635,7 @@ impl CaptionStudioApp {
                     Err(e) => {
                         self.ocr_error = Some(e.clone());
                         self.status = format!("OCR engine failed to start: {e}");
+                        self.log_error(format!("OCR engine failed to start: {e}"));
                     }
                 },
                 WorkerMsg::ExtractDone { data, cancelled } => {
@@ -607,7 +658,14 @@ impl CaptionStudioApp {
                     let prefix = if cancelled { "Stopped — " } else { "Complete — " };
                     let summary = format!("{prefix}rendered {rendered}, copied {copied} unchanged, failed {failed}");
                     self.log(summary.clone());
-                    self.status = format!("{summary}. Saved to {}", self.output_dir);
+                    // The leaf folder name only — the full output path
+                    // crowded the status bar against the progress bar, and
+                    // the folder is one click away via "Open Output Folder".
+                    let leaf = Path::new(&self.output_dir)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| self.output_dir.clone());
+                    self.status = format!("{summary}. Saved to {leaf}.");
                 }
             }
         }
@@ -799,16 +857,19 @@ impl eframe::App for CaptionStudioApp {
         }
 
         // --- Confirm-copy-originals modal (Python askYesNo) ---
+        // While it is open the panels behind it are disabled (a focus trap:
+        // egui windows are non-modal, so without this Tab and clicks escape
+        // to the panels) and Escape dismisses it.
         if self.confirm_copy_originals {
             let mut open = true;
-            egui::Window::new("No Text Changes")
+            egui::Window::new("Nothing translated")
                 .collapsible(false)
                 .resizable(false)
                 .open(&mut open)
                 .show(&ctx, |ui| {
-                    ui.label("No caption differs from the original. Copy originals anyway?");
+                    ui.label("Every caption matches the original, so rendering would just put the original text back on the images. Render them anyway?");
                     ui.horizontal(|ui| {
-                        let yes = ui.button("Yes, copy originals");
+                        let yes = ui.button("Render anyway");
                         focus_ring(ui, &yes);
                         if yes.clicked() {
                             self.confirm_copy_originals = false;
@@ -816,7 +877,7 @@ impl eframe::App for CaptionStudioApp {
                                 self.launch_render(data);
                             }
                         }
-                        let cancel = ui.button("Cancel");
+                        let cancel = ui.button("Go back");
                         focus_ring(ui, &cancel);
                         if cancel.clicked() {
                             self.confirm_copy_originals = false;
@@ -824,32 +885,56 @@ impl eframe::App for CaptionStudioApp {
                         }
                     });
                 });
-            if !open {
+            if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.confirm_copy_originals = false;
                 self.pending_render = None;
             }
         }
+        let modal_open = self.confirm_copy_originals;
 
         // --- Status bar ---
         egui::Panel::bottom("status_bar").show(ui, |ui| {
+            ui.add_enabled_ui(!modal_open, |ui| {
             ui.horizontal(|ui| {
-                ui.label(&self.status);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add(egui::ProgressBar::new(self.progress).show_percentage());
+                // A polite live region: a screen reader announces the status
+                // when it changes (batch finished, error) instead of the user
+                // having to go looking for it. The label truncates with an
+                // ellipsis so a long path can't silently clip against the bar.
+                let status_resp = ui.add(egui::Label::new(&self.status).truncate());
+                status_resp.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::Status, true, self.status.clone())
                 });
+                ui.ctx().accesskit_node_builder(status_resp.id, |node| {
+                    node.set_live(egui::accesskit::Live::Polite);
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // A solid accent fill, not the 17%-alpha wash (1.23:1
+                    // against its track — the bar read as empty at 100%),
+                    // and capped at ~220px so it reads as a bar instead of a
+                    // second status line.
+                    let t = crate::theme::Tokens::get(ui.ctx());
+                    ui.add(
+                        egui::ProgressBar::new(self.progress)
+                            .fill(t.accent)
+                            .desired_width(220.0)
+                            .show_percentage(),
+                    );
+                });
+            });
             });
         });
 
         // --- Left column ---
-        egui::Panel::left("left_panel")
+        let panel_resp = egui::Panel::left("left_panel")
             .resizable(true)
-            .default_size(370.0)
+            .default_size(self.panel_width)
             .show(ui, |ui| {
-                // The panel has no auto-scroll (egui SidePanel clips overflow)
-                // and the four sections total ~840px against ~650px at the
-                // default window size — so the content scrolls instead of
-                // cutting the Activity Log off at the bottom.
-                egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.add_enabled_ui(!modal_open, |ui| {
+                // No outer ScrollArea: the fixed sections fit (tuning starts
+                // collapsed, ~470px against ~990px at the default size), so
+                // the Activity Log below can take the remaining panel height
+                // instead of living in a fixed 220px box with dead space
+                // under it.
                 ui.label(crate::theme::heading("Caption Studio", crate::theme::SECTION));
                 ui.label(crate::theme::label_text("Batch Image Translator & OCR Verifier", crate::theme::SMALL));
                 if let Some(e) = &self.ocr_error {
@@ -860,31 +945,43 @@ impl eframe::App for CaptionStudioApp {
                 ui.separator();
 
                 egui::CollapsingHeader::new("Folders & Font").default_open(true).show(ui, |ui| {
-                    ui.label("Input Folder:");
+                    let input_label = ui.label("Input Folder:").id;
                     ui.horizontal(|ui| {
-                        ui.text_edit_singleline(&mut self.input_dir);
+                        let resp = ui.text_edit_singleline(&mut self.input_dir).labelled_by(input_label);
+                        let path = self.input_dir.clone();
+                        if !path.is_empty() {
+                            resp.on_hover_text(path);
+                        }
                         if crate::icons::button(ui, "folder", crate::theme::ControlSize::Small, false, "Browse for input folder").clicked() {
                             self.browse_input();
                         }
                     });
-                    ui.label("Output Folder:");
+                    let output_label = ui.label("Output Folder:").id;
                     ui.horizontal(|ui| {
-                        ui.text_edit_singleline(&mut self.output_dir);
+                        let resp = ui.text_edit_singleline(&mut self.output_dir).labelled_by(output_label);
+                        let path = self.output_dir.clone();
+                        if !path.is_empty() {
+                            resp.on_hover_text(path);
+                        }
                         if crate::icons::button(ui, "folder", crate::theme::ControlSize::Small, false, "Browse for output folder").clicked() {
                             self.browse_output();
                         }
                     });
-                    ui.label("Custom Font (.ttf / .otf / .ttc, optional):");
+                    let font_label = ui.label("Custom Font (.ttf / .otf / .ttc, optional):").id;
                     ui.horizontal(|ui| {
-                        ui.text_edit_singleline(&mut self.font_path);
+                        let resp = ui.text_edit_singleline(&mut self.font_path).labelled_by(font_label);
+                        let path = self.font_path.clone();
+                        if !path.is_empty() {
+                            resp.on_hover_text(path);
+                        }
                         if crate::icons::button(ui, "folder", crate::theme::ControlSize::Small, false, "Browse for font file").clicked() {
                             self.browse_font();
                         }
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Font sizing:");
+                        let sizing_label = ui.label("Font sizing:").id;
                         let mut changed = false;
-                        egui::ComboBox::from_id_salt("sizing_mode")
+                        let combo = egui::ComboBox::from_id_salt("sizing_mode")
                             .selected_text(self.sizing.label())
                             .show_ui(ui, |ui| {
                                 for mode in crate::model::SizingMode::all() {
@@ -896,6 +993,7 @@ impl eframe::App for CaptionStudioApp {
                                     }
                                 }
                             });
+                        combo.response.labelled_by(sizing_label);
                         if changed {
                             self.save_settings();
                             self.preview_key.clear();
@@ -905,16 +1003,18 @@ impl eframe::App for CaptionStudioApp {
 
                 egui::CollapsingHeader::new("OCR Threshold Tuning").default_open(false).show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("OCR confidence threshold:");
+                        let conf_label = ui.label("OCR confidence threshold:").id;
                         ui.add(
                             egui::DragValue::new(&mut self.conf)
                                 .range(0.10..=0.95)
                                 .speed(0.05),
-                        );
+                        )
+                        .labelled_by(conf_label);
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Minimum length for unboxed text (chars):");
-                        ui.add(egui::DragValue::new(&mut self.minchars).range(0..=60).speed(1));
+                        let min_label = ui.label("Minimum length for unboxed text (chars):").id;
+                        ui.add(egui::DragValue::new(&mut self.minchars).range(0..=60).speed(1))
+                            .labelled_by(min_label);
                     });
                     ui.horizontal(|ui| {
                         if icon_text_button(ui, "check", "Apply Thresholds (Instant)").clicked() {
@@ -930,7 +1030,7 @@ impl eframe::App for CaptionStudioApp {
 
                 egui::CollapsingHeader::new("Batch Workflow").default_open(true).show(ui, |ui| {
                     ui.add_enabled_ui(!self.busy, |ui| {
-                        if icon_text_button(ui, "scan", "Scan & Extract Text").clicked() {
+                        if primary_icon_text_button(ui, "scan", "Scan & Extract Text", true).clicked() {
                             self.start_extract();
                         }
                         ui.horizontal(|ui| {
@@ -941,7 +1041,7 @@ impl eframe::App for CaptionStudioApp {
                                 self.load_full_json();
                             }
                         });
-                        if icon_text_button(ui, "play", "Render Translated Images").clicked() {
+                        if primary_icon_text_button(ui, "play", "Render Translated Images", true).clicked() {
                             self.start_render();
                         }
                     });
@@ -963,17 +1063,41 @@ impl eframe::App for CaptionStudioApp {
                 });
 
                 egui::CollapsingHeader::new("Activity Log").default_open(true).show(ui, |ui| {
+                    // The log fills the rest of the panel: it sizes to its
+                    // content up to the remaining height, then scrolls, always
+                    // showing the newest line. Severity is a short coloured
+                    // tag that can't wrap away from its message; the message
+                    // itself stays in the plain text colour so the log reads
+                    // quietly instead of shouting in amber.
+                    let t = crate::theme::Tokens::get(ui.ctx());
                     egui::ScrollArea::vertical()
-                        .max_height(220.0)
+                        .max_height(ui.available_height())
                         .stick_to_bottom(true)
                         .show(ui, |ui| {
                             for line in &self.log_lines {
-                                ui.monospace(line);
+                                ui.horizontal(|ui| {
+                                    match line.level {
+                                        LogLevel::Warn => {
+                                            ui.colored_label(t.warning, egui::RichText::new("WARN").monospace().small());
+                                        }
+                                        LogLevel::Error => {
+                                            ui.colored_label(t.danger, egui::RichText::new("ERROR").monospace().small());
+                                        }
+                                        LogLevel::Info => {}
+                                    }
+                                    ui.monospace(&line.text);
+                                });
                             }
                         });
                 });
-                });
             });
+            });
+        // Keep the persisted width in sync with the divider the user drags —
+        // the saved value is what the next launch restores.
+        let w = panel_resp.response.rect.width();
+        if (w - self.panel_width).abs() > 0.5 {
+            self.panel_width = w;
+        }
 
         // --- Right column: tabbed workspace ---
         // The central workspace sits on `canvas` (the main reading surface),
@@ -982,6 +1106,7 @@ impl eframe::App for CaptionStudioApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(ui.style()).fill(canvas))
             .show(ui, |ui| {
+            ui.add_enabled_ui(!modal_open, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.tab, Tab::Json, "Translation JSON");
                 ui.selectable_value(&mut self.tab, Tab::Preview, "Live Preview & OCR Check");
@@ -999,17 +1124,30 @@ impl eframe::App for CaptionStudioApp {
                         if icon_text_button(ui, "file-json", "Import Translated JSON...").clicked() {
                             self.load_translated_file();
                         }
-                        if icon_text_button(ui, "arrow-right", "Verify in Preview").clicked() {
+                        if primary_icon_text_button(ui, "arrow-right", "Verify in Preview", false).clicked() {
                             self.tab = Tab::Preview;
                         }
                     });
                     egui::ScrollArea::vertical().show(ui, |ui| {
+                        // Syntax-highlighted JSON (keys, strings, numbers,
+                        // punctuation, empty strings) with a hint when it is
+                        // empty, so the editor reads as a document instead of
+                        // a wall of one-colour text.
+                        let t = crate::theme::Tokens::get(ui.ctx());
+                        let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+                            let mut job = json_highlight_job(buf.as_str(), &t);
+                            job.wrap.max_width = wrap_width;
+                            ui.fonts_mut(|f| f.layout_job(job))
+                        };
                         let resp = ui.add(
                             egui::TextEdit::multiline(&mut self.editor_text)
                                 .font(egui::TextStyle::Monospace)
                                 .desired_width(f32::INFINITY)
-                                .desired_rows(30),
-                        );
+                                .desired_rows(30)
+                                .layouter(&mut layouter)
+                                .hint_text("Scan images to fill this in, or paste translated JSON here."),
+                        )
+                        .accessible_name("Translation JSON");
                         if resp.changed() {
                             self.preview_key.clear();
                         }
@@ -1017,52 +1155,107 @@ impl eframe::App for CaptionStudioApp {
                 }
                 Tab::Preview => {
                     self.refresh_preview(&ctx);
+                    // File navigation: bigger steppers (Medium, 32px) for a
+                    // real touch target, and the file picker carries an
+                    // accessible name.
                     ui.horizontal(|ui| {
                         let names = self.file_names();
-                        if crate::icons::button(ui, "chevron-left", crate::theme::ControlSize::Small, false, "Previous file").clicked() {
+                        if crate::icons::button(ui, "chevron-left", crate::theme::ControlSize::Medium, false, "Previous file").clicked() {
                             step_preview(&mut self.preview_file, &names, -1);
                             self.preview_key.clear();
                         }
-                        egui::ComboBox::from_id_salt("preview_file")
+                        let combo = egui::ComboBox::from_id_salt("preview_file")
                             .selected_text(&self.preview_file)
                             .show_ui(ui, |ui| {
                                 for n in &names {
                                     ui.selectable_value(&mut self.preview_file, n.clone(), n);
                                 }
                             });
-                        if crate::icons::button(ui, "chevron-right", crate::theme::ControlSize::Small, false, "Next file").clicked() {
+                        combo.response.accessible_name("Preview file");
+                        if crate::icons::button(ui, "chevron-right", crate::theme::ControlSize::Medium, false, "Next file").clicked() {
                             step_preview(&mut self.preview_file, &names, 1);
                             self.preview_key.clear();
                         }
-                        ui.radio_value(&mut self.preview_mode, PreviewMode::Rendered, "Rendered");
-                        ui.radio_value(&mut self.preview_mode, PreviewMode::Ocr, "OCR Boxes");
-                        ui.radio_value(&mut self.preview_mode, PreviewMode::Original, "Original");
                     });
-                    // Image area
-                    let avail = ui.available_size();
-                    if let Some(tex) = &self.preview_texture {
-                        let (iw, ih) = (self.preview_size[0], self.preview_size[1]);
-                        let scale = (avail.x / iw).min(avail.y / ih).min(1.5).max(0.05);
-                        let size = egui::Vec2::new(iw * scale, ih * scale);
-                        egui::ScrollArea::both().show(ui, |ui| {
-                            ui.image((tex.id(), size));
-                        });
-                    } else {
-                        ui.label("Run 'Scan & Extract Text' or paste JSON,\nthen switch here to verify OCR boxes or rendered captions.");
-                    }
-                    // The green/orange legend belongs with the image it
-                    // describes (OCR Boxes mode only — the other modes draw
-                    // no coloured boxes).
-                    if matches!(self.preview_mode, PreviewMode::Ocr) {
-                        ui.label(crate::theme::label_text("Green boxes = kept · Orange boxes = filtered out", crate::theme::CAPTION));
-                    }
-                    egui::CollapsingHeader::new("Detected Blocks").default_open(true).show(ui, |ui| {
-                        egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
-                            ui.monospace(&self.verify_text);
-                        });
+                    // The mode choice gets its own row as a segmented control,
+                    // so the file row isn't cramped and the three modes read
+                    // as one choice.
+                    ui.horizontal(|ui| {
+                        ui.label(crate::theme::label_text("View:", crate::theme::LABEL));
+                        ui.selectable_value(&mut self.preview_mode, PreviewMode::Rendered, "Rendered");
+                        ui.selectable_value(&mut self.preview_mode, PreviewMode::Ocr, "OCR Boxes");
+                        ui.selectable_value(&mut self.preview_mode, PreviewMode::Original, "Original");
+                    });
+                    // Image left, Detected Blocks right. The old layout
+                    // stacked the image above the blocks and the image's
+                    // ScrollArea ate the whole height, so the blocks — the
+                    // text alternative to the image, and the main
+                    // OCR-verification affordance — sat below the fold with
+                    // no way to reach them, and a portrait image left half
+                    // the panel as dead black space. Side by side, both are
+                    // always on screen.
+                    let blocks_w = 340.0;
+                    ui.horizontal_top(|ui| {
+                        let total = ui.available_size();
+                        let gap = ui.spacing().item_spacing.x;
+                        let image_w = (total.x - blocks_w - gap).max(240.0);
+                        // --- Image pane ---
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(image_w, total.y),
+                            egui::Layout::top_down(egui::Align::LEFT),
+                            |ui| {
+                                if let Some(tex) = &self.preview_texture {
+                                    let (iw, ih) = (self.preview_size[0], self.preview_size[1]);
+                                    let scale = (image_w / iw).min(total.y / ih).min(1.5).max(0.05);
+                                    let size = egui::Vec2::new(iw * scale, ih * scale);
+                                    // Centre the image in its pane when it is
+                                    // smaller than the pane; when it is larger
+                                    // the offsets are zero and the ScrollArea
+                                    // lets the user pan it.
+                                    let x_off = ((image_w - size.x) / 2.0).max(0.0);
+                                    let y_off = ((total.y - size.y) / 2.0).max(0.0);
+                                    egui::ScrollArea::both().show(ui, |ui| {
+                                        ui.add_space(y_off);
+                                        ui.horizontal(|ui| {
+                                            ui.add_space(x_off);
+                                            // An accessible name for the image
+                                            // (filename + "rendered preview"):
+                                            // a screen reader otherwise gets
+                                            // an unnamed texture, and the
+                                            // Detected Blocks list beside it
+                                            // is the text alternative.
+                                            ui.image((tex.id(), size)).accessible_name(format!(
+                                                "{} rendered preview",
+                                                self.preview_file
+                                            ));
+                                        });
+                                    });
+                                } else {
+                                    ui.label("Run 'Scan & Extract Text' or paste JSON,\nthen switch here to verify OCR boxes or rendered captions.");
+                                }
+                            },
+                        );
+                        // --- Detected Blocks pane ---
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(blocks_w, total.y),
+                            egui::Layout::top_down(egui::Align::LEFT),
+                            |ui| {
+                                // The green/orange legend belongs with the
+                                // image it describes (OCR Boxes mode only —
+                                // the other modes draw no coloured boxes).
+                                if matches!(self.preview_mode, PreviewMode::Ocr) {
+                                    ui.label(crate::theme::label_text("Green boxes = kept · Orange boxes = filtered out", crate::theme::CAPTION));
+                                }
+                                ui.label(crate::theme::heading("Detected Blocks", crate::theme::CARD));
+                                egui::ScrollArea::vertical().show(ui, |ui| {
+                                    ui.monospace(&self.verify_text);
+                                });
+                            },
+                        );
                     });
                 }
             }
+            });
         });
     }
 
@@ -1088,6 +1281,25 @@ fn icon_text_button(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Respons
     resp
 }
 
+/// A primary action: accent fill, white icon and label. The screen's main
+/// steps (Scan, Render, "Verify in Preview") get this so they read as the
+/// thing to do, not as one more secondary button. `full_width` makes it the
+/// panel's full width at the default control height (Scan and Render).
+fn primary_icon_text_button(ui: &mut egui::Ui, icon: &str, label: &str, full_width: bool) -> egui::Response {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let size = if full_width { crate::theme::ControlSize::Medium } else { crate::theme::ControlSize::Small };
+    let tint = if ui.is_enabled() { egui::Color32::WHITE } else { t.text_faint };
+    let image = crate::icons::image(icon, size.icon(), tint);
+    let button = egui::Button::image_and_text(image, label).fill(t.accent);
+    let resp = if full_width {
+        ui.add_sized(egui::vec2(ui.available_width(), size.height()), button)
+    } else {
+        ui.add(button)
+    };
+    focus_ring(ui, &resp);
+    resp
+}
+
 /// Draw the keyboard-focus ring around a button, matching the one
 /// `icons::button` draws — egui's own buttons have no focus style, so
 /// without this keyboard focus is invisible everywhere except icon buttons.
@@ -1097,10 +1309,122 @@ fn focus_ring(ui: &egui::Ui, resp: &egui::Response) {
         ui.painter().rect_stroke(
             resp.rect.expand(1.0),
             t.radius_sm,
-            egui::Stroke::new(1.5, t.accent),
+            // `accent_ink`, not `accent`: the indigo ring was 2.44:1 against
+            // the field it sits on (below the 3:1 a focus indicator needs);
+            // accent_ink is 6.69:1 there and 8.08:1 on chrome.
+            egui::Stroke::new(1.5, t.accent_ink),
             egui::StrokeKind::Outside,
         );
     }
+}
+
+/// Syntax-highlight the Translation JSON editor: keys in accent_ink, string
+/// values in the text colour, numbers/booleans/null in amber, punctuation
+/// dimmed, and empty strings (`""`) visibly dimmed so a missing translation
+/// reads as empty instead of blending in. Tolerant of invalid JSON (the user
+/// is mid-edit) — it tokenizes by shape and never parses. Byte-safe: the
+/// structural characters are all ASCII, so scanning bytes for them can never
+/// mistake a multi-byte character for one, and spans only ever start and end
+/// on character boundaries.
+fn json_highlight_job(text: &str, t: &crate::theme::Tokens) -> egui::text::LayoutJob {
+    use egui::text::{LayoutJob, TextFormat};
+    let font = egui::FontId::monospace(crate::theme::CODE);
+    let mut job = LayoutJob::default();
+    let push = |job: &mut LayoutJob, s: &str, color: egui::Color32| {
+        job.append(s, 0.0, TextFormat { font_id: font.clone(), color, ..Default::default() });
+    };
+    let bytes = text.as_bytes();
+    let n = bytes.len();
+    let mut i = 0;
+    while i < n {
+        match bytes[i] {
+            b'"' => {
+                // A string: find its end, honouring escapes. Multi-byte
+                // characters inside can never contain a `"` or `\` byte.
+                let start = i;
+                i += 1;
+                let mut closed = false;
+                while i < n {
+                    if bytes[i] == b'\\' {
+                        i = (i + 2).min(n);
+                        continue;
+                    }
+                    if bytes[i] == b'"' {
+                        i += 1;
+                        closed = true;
+                        break;
+                    }
+                    i += 1;
+                }
+                let s = &text[start..i];
+                // A key is a string followed (past whitespace) by `:`.
+                let mut j = i;
+                while j < n && (bytes[j] as char).is_whitespace() {
+                    j += 1;
+                }
+                let is_key = closed && j < n && bytes[j] == b':';
+                if s == "\"\"" {
+                    push(&mut job, s, t.text_faint);
+                } else if is_key {
+                    push(&mut job, s, t.accent_ink);
+                } else {
+                    push(&mut job, s, t.text);
+                }
+            }
+            b'{' | b'}' | b'[' | b']' | b':' | b',' => {
+                push(&mut job, &text[i..i + 1], t.text_faint);
+                i += 1;
+            }
+            b'0'..=b'9' | b'-' => {
+                // A number: digits, `.`, `e`/`E`, `+`/`-` after `e`. Only
+                // ASCII bytes advance the cursor, so a multi-byte character
+                // ends the number without ever splitting it.
+                let start = i;
+                i += 1;
+                while i < n {
+                    match bytes[i] {
+                        b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-' => i += 1,
+                        _ => break,
+                    }
+                }
+                push(&mut job, &text[start..i], t.warning);
+            }
+            b't' | b'f' | b'n' => {
+                let rest = &text[i..];
+                let word = if rest.starts_with("true") {
+                    "true"
+                } else if rest.starts_with("false") {
+                    "false"
+                } else if rest.starts_with("null") {
+                    "null"
+                } else {
+                    ""
+                };
+                if word.is_empty() {
+                    push(&mut job, &text[i..i + 1], t.text);
+                    i += 1;
+                } else {
+                    push(&mut job, word, t.warning);
+                    i += word.len();
+                }
+            }
+            _ => {
+                // Whitespace and anything else: plain text, coalesced into
+                // one span. Advance by whole characters so the span never
+                // ends mid-character.
+                let start = i;
+                loop {
+                    let Some(ch) = text[i..].chars().next() else { break };
+                    if matches!(ch, '"' | '{' | '}' | '[' | ']' | ':' | ',' | '-' | 't' | 'f' | 'n') || ch.is_ascii_digit() {
+                        break;
+                    }
+                    i += ch.len_utf8();
+                }
+                push(&mut job, &text[start..i], t.text);
+            }
+        }
+    }
+    job
 }
 
 pub fn run_app() -> eframe::Result<()> {
@@ -1116,4 +1440,44 @@ pub fn run_app() -> eframe::Result<()> {
         options,
         Box::new(|cc| Ok(Box::new(CaptionStudioApp::new(cc)))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_highlight_colours_keys_values_numbers_and_empty_strings() {
+        let t = crate::theme::Tokens::for_kind(crate::theme::ThemeKind::Studio);
+        let text = "{\n  \"meme.png\": {\n    \"0\": \"Hello\",\n    \"1\": \"\",\n    \"2\": 42\n  }\n}";
+        let job = json_highlight_job(text, &t);
+        // The job covers the whole input, section by section, with no gaps.
+        assert_eq!(job.text, text);
+        job.debug_sanity_check();
+        // `LayoutJob::append` merges adjacent spans that share a format, so
+        // a section may be wider than the token (e.g. ` "Hello"`); match by
+        // containment, not exact equality.
+        let colour_of = |needle: &str| {
+            job.sections
+                .iter()
+                .find(|s| job.text[s.byte_range.start.0..s.byte_range.end.0].contains(needle))
+                .map(|s| s.format.color)
+        };
+        assert_eq!(colour_of("\"meme.png\""), Some(t.accent_ink));
+        assert_eq!(colour_of("\"0\""), Some(t.accent_ink));
+        assert_eq!(colour_of("\"Hello\""), Some(t.text));
+        assert_eq!(colour_of("\"\""), Some(t.text_faint));
+        assert_eq!(colour_of("42"), Some(t.warning));
+        assert_eq!(colour_of("{"), Some(t.text_faint));
+    }
+
+    #[test]
+    fn json_highlight_survives_multibyte_text_and_broken_json() {
+        let t = crate::theme::Tokens::for_kind(crate::theme::ThemeKind::Studio);
+        // Tamil text, an emoji, and an unterminated string (mid-edit).
+        let text = "{\"a\": \"வணக்கம் 🎉\", \"b\": \"unterminated";
+        let job = json_highlight_job(text, &t);
+        assert_eq!(job.text, text);
+        job.debug_sanity_check();
+    }
 }

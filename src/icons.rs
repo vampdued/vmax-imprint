@@ -127,12 +127,23 @@ pub fn button_box(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, 
     paint(ui, rect, name, (box_size * 0.55).round(), tint);
 
     if resp.has_focus() {
-        ui.painter().rect_stroke(rect.expand(1.0), t.radius_sm, Stroke::new(1.5, t.accent), egui::StrokeKind::Outside);
+        // `accent_ink` (#74aaff), not `accent`: the indigo ring was 2.44:1
+        // against the field it sits on (below the 3:1 a focus indicator
+        // needs); accent_ink is 6.69:1 there and 8.08:1 on chrome.
+        ui.painter().rect_stroke(rect.expand(1.0), t.radius_sm, Stroke::new(1.5, t.accent_ink), egui::StrokeKind::Outside);
     }
 
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
 
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, if tooltip.is_empty() { name } else { tooltip }));
+
+    // A sighted keyboard user tabbing to an icon-only button sees the glyph
+    // and the focus ring but no text saying what it does (`on_hover_text`
+    // fires on hover only) — so show the tooltip on keyboard focus too.
+    // Not when hovered as well, or the two tooltips would stack.
+    if resp.has_focus() && !resp.hovered() && !tooltip.is_empty() {
+        resp.show_tooltip_text(tooltip);
+    }
 
     if tooltip.is_empty() { resp } else { resp.on_hover_text(tooltip) }
 }

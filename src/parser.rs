@@ -224,7 +224,7 @@ pub fn merge_translations(
     let mut warnings: Vec<String> = parsed
         .keys()
         .filter(|k| !known.contains(k.as_str()))
-        .map(|k| format!("'{k}' is in JSON but not in extracted data (ignored)."))
+        .map(|k| format!("Skipped \"{k}\" — no matching image in this folder."))
         .collect();
     let mut count = 0usize;
 
@@ -234,11 +234,26 @@ pub fn merge_translations(
         };
         let valid_ids: std::collections::HashSet<String> =
             img.blocks.iter().map(|b| b.id.to_string()).collect();
-        for k in tmap.keys() {
-            if !valid_ids.contains(k) {
+        // Group a file's stale block ids into one line, so three stale
+        // translations read as one short sentence instead of three long ones.
+        let mut stale: Vec<&String> = tmap.keys().filter(|k| !valid_ids.contains(*k)).collect();
+        stale.sort_by(|a, b| match (a.parse::<i64>(), b.parse::<i64>()) {
+            (Ok(x), Ok(y)) => x.cmp(&y),
+            _ => a.cmp(b),
+        });
+        if !stale.is_empty() {
+            let n = stale.len();
+            let ids: Vec<&str> = stale.iter().map(|s| s.as_str()).collect();
+            if n == 1 {
                 warnings.push(format!(
-                    "{}: block id '{k}' doesn't exist (ignored).",
-                    img.file
+                    "Skipped 1 translation in {} — block {} has no matching text.",
+                    img.file, ids[0]
+                ));
+            } else {
+                warnings.push(format!(
+                    "Skipped {n} translations in {} — blocks {} have no matching text.",
+                    img.file,
+                    ids.join(", ")
                 ));
             }
         }
