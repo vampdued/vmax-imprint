@@ -301,9 +301,10 @@ pub fn compact_map_from_data(data: &ExtractedData) -> BTreeMap<String, BTreeMap<
             };
             blocks_map.insert(blk.id.to_string(), text);
         }
-        if !blocks_map.is_empty() {
-            compact.insert(img.file.clone(), blocks_map);
-        }
+        // An image with no blocks exports `{}` (redesign Phase 6, item 18):
+        // the file exists in the map so the AI and the importer know it was
+        // seen and is copied unchanged, instead of vanishing from the JSON.
+        compact.insert(img.file.clone(), blocks_map);
     }
     compact
 }
@@ -386,5 +387,21 @@ mod tests {
         assert_eq!(merged.images[0].blocks[0].new_text, "Vanakkam");
         assert_eq!(count, 1);
         assert!(warnings.iter().any(|w| w.contains("ghost.png")));
+    }
+
+    #[test]
+    fn compact_map_keeps_empty_images() {
+        let mut data = ExtractedData::default();
+        data.images.push(crate::model::ImageEntry {
+            file: "empty.png".into(),
+            width: 100,
+            height: 100,
+            raw_lines: vec![],
+            blocks: vec![],
+            dropped: vec![],
+        });
+        let compact = compact_map_from_data(&data);
+        assert!(compact.contains_key("empty.png"));
+        assert!(compact["empty.png"].is_empty());
     }
 }

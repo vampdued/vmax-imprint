@@ -1635,7 +1635,7 @@ fn verify_text_for(entry: &crate::model::ImageEntry) -> String {
         lines.push(format!("[FILTERED · {}] \"{}\"", drop.reason, drop.text));
     }
     if lines.is_empty() {
-        lines.push("No text detected on this image with current settings.".into());
+        lines.push("No text found. This image will be copied unchanged.".into());
     }
     lines.join("\n")
 }
@@ -2971,8 +2971,13 @@ fn derive_workflow_state(
     // Zero kept blocks after a scan is vacuously done (nothing to
     // translate); with nothing scanned at all, Translate is still to do.
     let translate_done = scan_done && (total_blocks == 0 || translated == total_blocks);
-    let render_done = render_summary.is_some();
-    let done = [scan_done, translate_done, render_done, render_done];
+    // Review is done once a render was attempted (the user reviewed before
+    // rendering); Render is done only when a run finished with no failures.
+    // A failed run leaves Render current, with the failed count in its
+    // subtitle, so the user re-renders instead of moving on.
+    let review_done = render_summary.is_some();
+    let render_done = render_summary.map(|(_, _, f)| f == 0).unwrap_or(false);
+    let done = [scan_done, translate_done, review_done, render_done];
     let current_idx = done.iter().position(|d| !d).unwrap_or(3);
     let mut states = [StepState::Todo; 4];
     for (i, s) in states.iter_mut().enumerate() {
@@ -3001,7 +3006,8 @@ fn derive_workflow_state(
             "—".to_string()
         },
         match render_summary {
-            Some((r, _, _)) => format!("{r} rendered"),
+            Some((r, _, 0)) => format!("{r} rendered"),
+            Some((r, _, f)) => format!("{r} rendered · {f} failed"),
             None => "Not rendered yet".to_string(),
         },
     ];
@@ -3675,6 +3681,15 @@ mod tests {
         assert_eq!(wf.current, WorkflowStep::Render);
         assert_eq!(wf.states, [StepState::Done; 4]);
         assert_eq!(wf.subtitles[3], "2 rendered");
+        // A run with failures: Review is done (it was reviewed), but Render
+        // stays current with the failed count in its subtitle.
+        let wf = derive_workflow_state(Some(&data), Some((1, 0, 1)));
+        assert_eq!(wf.current, WorkflowStep::Render);
+        assert_eq!(
+            wf.states,
+            [StepState::Done, StepState::Done, StepState::Done, StepState::Current]
+        );
+        assert_eq!(wf.subtitles[3], "1 rendered · 1 failed");
     }
 
     fn test_block(id: usize, new_text: &str) -> crate::model::Block {
@@ -3820,6 +3835,22 @@ mod tests {
         assert_eq!(
             render_counts(12, Some((10, 2, 0))),
             "12 images · 10 rendered · 2 copied unchanged · 0 failed"
+        );
+    }
+
+    #[test]
+    fn empty_image_verify_text_names_the_copy() {
+        let entry = crate::model::ImageEntry {
+            file: "empty.png".into(),
+            width: 100,
+            height: 100,
+            raw_lines: vec![],
+            blocks: vec![],
+            dropped: vec![],
+        };
+        assert_eq!(
+            verify_text_for(&entry),
+            "No text found. This image will be copied unchanged."
         );
     }
 
