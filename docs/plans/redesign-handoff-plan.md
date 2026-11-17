@@ -535,3 +535,35 @@ Verified against local main `cebd449` (files: `src/ui.rs`, `src/theme.rs`,
   pre-existing warnings, no new ones.
 - NOT pushed; push only on his word (a fresh token is needed — the
   remote is verified token-free after the 16:18 Phase 4 push).
+
+## 13. Build record — Phase 6 (2026-11-17, branch `feature/redesign-handoff`, commit `f26404d`)
+
+- Item 17 — workflow state machine, final: the derivation rules were
+  already in place from Phase 1 (Scan done once extracted; Translate
+  done when every kept block has a real translation; Review current while
+  translations exist and no render has completed; `run_step` clicks =
+  Scan → run scan, Translate → JSON tab, Review → Preview tab, Render →
+  run render; the header primary follows the current step). What was
+  missing was the failed-render rule, now in: Review is done once a
+  render was attempted, but Render is done only at 0 failed — a run with
+  failures leaves Render current with the failed count in its subtitle
+  (`N rendered · M failed`), so the user re-renders instead of moving
+  on. (Review → Preview tab is the "focus stage" action: the stage is
+  the Preview tab's content and its keyboard nav is active whenever
+  nothing else has focus.)
+- Item 18 — empty-image handling: the inspector's empty line is now the
+  plan's copy, "No text found. This image will be copied unchanged."
+  (`verify_text_for`); and `compact_map_from_data` keeps empty images
+  as `{}` instead of dropping them, so a file that was seen and is copied
+  unchanged stays visible in the AI JSON and the importer instead of
+  vanishing. The render worker already copies empty images unchanged
+  (no live blocks → `Copied`).
+- Item 19 — NOT built: the inspector-as-overlay-drawer below 1280px is
+  still pending his confirm (the plan §3 calls for it); it is a separate
+  decision, not part of this commit.
+- Tests 44/44 green (was 42/42): +`empty_image_verify_text_names_the_
+  copy`, +`compact_map_keeps_empty_images`, and the failed-render case
+  extends the existing workflow-steps test. Same pre-existing warnings,
+  no new ones.
+- NOT pushed; push only on his word (a fresh token is needed — the
+  remote is verified token-free after the 16:28 Phase 5 push).
