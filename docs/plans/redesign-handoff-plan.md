@@ -1059,3 +1059,53 @@ he approved.
   width with a right inset, "Scan again" / "Inspect boxes" / the
   Import button are gone, the paste dialog offers file import, and the
   primary reads "Open output" after a clean render.
+
+## 23. Build record — round-3 fixes, his live-run feedback (2026-11-17, branch `feature/redesign-handoff`, commit `378efca`)
+
+He ran the pushed `9ba77e4` build, sent two annotated screenshots and
+a third shot-test zip (all 20 captured), and reported four issues, to
+fix after the §22 work. All four are in this commit.
+
+- **(a) Scanned bulk JSON not appearing after a scan:** the JSON tab
+  (and the inspector) showed the "Scan images…" hint even though the
+  scan had finished — 18 images, 47 blocks. Root cause: `ExtractDone`
+  set `editor_text` and switched to the JSON tab but never set
+  `preview_file`, which starts empty, so `per_image_json` and
+  `verify_text` had no file to look up. The scan now points the
+  preview at the first file (lexicographically smallest, matching
+  `refresh_preview`) and sets its block list on completion.
+- **(c) Row selection only on the "correct place":** a file-list row
+  only selected when clicked on the thumbnail or a gap, not on the
+  filename / count / chip. Root cause: egui's default
+  `selectable_labels` gives every label click-and-drag sense, so the
+  row's labels stole the click — and `.sense(Sense::hover())` alone
+  does NOT stop it, because the label's selectable block ORs the click
+  sense back in. The row's labels (filename, "N blocks", status chip)
+  are now `.selectable(false)` + hover-only, so the whole 64px row
+  selects. Verified against egui 0.37 `label.rs`: the selectable block
+  runs whenever `selectable` resolves true.
+- **(b) List overflow:** the bottom row sat half-clipped with no sign
+  the list scrolled and no way to drag to the bottom rows. The
+  ScrollArea's scrollbar was `AlwaysHidden`. It now shows when the
+  content overflows (`VisibleWhenNeeded`), and the ScrollArea fills the
+  column height (`auto_shrink([false, false])`) so as many whole rows
+  as possible are visible. This deviates from the SPEC's
+  hidden-scrollbar choice; discoverability wins — he flagged it.
+  (A half-clipped row at the viewport's bottom edge is still normal
+  for a scrollable list; the scrollbar is what makes it navigable.)
+- **(d) Buttons ugly / overflow / cropping:** the segmented groups in
+  his screenshot are the label-sized, flush-right ones from the old
+  build — the A3 fix already in `884f736` (equal widths per group +
+  12px right inset, 32px height) is the answer; nothing further
+  changed here. He hasn't rebuilt with it yet.
+
+- `cargo test` green: **48/48**. `rustfmt --edition 2021` on `ui.rs`
+  only.
+- NOT pushed — branch is 3 ahead of origin (`884f736`, `ace13f8`,
+  `378efca`); push on his word + a fresh token.
+- His Windows run is the gate: rebuild from the branch, re-run the
+  shot-test (now 19 shots — see §22), and confirm the JSON tab shows
+  the scanned blocks right after a scan, any spot on a file row
+  selects it, and the list shows a scrollbar when it overflows.
+- F10 caret: still open (see §22 — ruled out a TextEdit caret and the
+  scrollbar; mechanism unidentified, no guessed fix).
