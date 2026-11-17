@@ -885,8 +885,7 @@ remain deferred.
   presentation-only; the stage hint and the status override are not
   pure functions). Same pre-existing warnings, no new ones.
   `rustfmt --edition 2021` on `ui.rs` only.
-- NOT pushed — this commit (`018ca36`) is 1 ahead of origin; push on
-  his word + a fresh token.
+- PUSHED 2026-11-17 ~19:02 IST (`cbd1518`, his word + fresh token).
 - His Windows run is the gate: rebuild from the branch, re-run the
   shot-test, and confirm the "Drag to pan" hint at 100%/zoomed, the
   empty-image message as plain text, and the PROJECT card staying put
