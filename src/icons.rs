@@ -20,7 +20,10 @@ use crate::theme::{ControlSize, Tokens};
 /// The embedded Lucide SVGs (name, bytes). `file-json` holds the `braces` glyph.
 pub static ICONS: &[(&str, &[u8])] = &[
     ("folder", include_bytes!("../assets/icons/folder.svg")),
-    ("folder-open", include_bytes!("../assets/icons/folder-open.svg")),
+    (
+        "folder-open",
+        include_bytes!("../assets/icons/folder-open.svg"),
+    ),
     ("scan", include_bytes!("../assets/icons/scan.svg")),
     ("search", include_bytes!("../assets/icons/search.svg")),
     ("save", include_bytes!("../assets/icons/save.svg")),
@@ -28,13 +31,28 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("eye", include_bytes!("../assets/icons/eye.svg")),
     ("octagon-x", include_bytes!("../assets/icons/octagon-x.svg")),
     ("copy", include_bytes!("../assets/icons/copy.svg")),
-    ("clipboard-paste", include_bytes!("../assets/icons/clipboard-paste.svg")),
+    (
+        "clipboard-paste",
+        include_bytes!("../assets/icons/clipboard-paste.svg"),
+    ),
     ("file-json", include_bytes!("../assets/icons/file-json.svg")),
-    ("arrow-right", include_bytes!("../assets/icons/arrow-right.svg")),
-    ("chevron-left", include_bytes!("../assets/icons/chevron-left.svg")),
-    ("chevron-right", include_bytes!("../assets/icons/chevron-right.svg")),
+    (
+        "arrow-right",
+        include_bytes!("../assets/icons/arrow-right.svg"),
+    ),
+    (
+        "chevron-left",
+        include_bytes!("../assets/icons/chevron-left.svg"),
+    ),
+    (
+        "chevron-right",
+        include_bytes!("../assets/icons/chevron-right.svg"),
+    ),
     ("check", include_bytes!("../assets/icons/check.svg")),
-    ("rotate-ccw", include_bytes!("../assets/icons/rotate-ccw.svg")),
+    (
+        "rotate-ccw",
+        include_bytes!("../assets/icons/rotate-ccw.svg"),
+    ),
     ("x", include_bytes!("../assets/icons/x.svg")),
     ("square", include_bytes!("../assets/icons/square.svg")),
     // VMAX interlock mark (brand kit v1.1, white on transparent). Not a
@@ -75,7 +93,9 @@ fn white_icons() -> &'static HashMap<&'static str, Arc<[u8]>> {
         ICONS
             .iter()
             .map(|(name, bytes)| {
-                let svg = String::from_utf8_lossy(bytes).replace("currentColor", "#ffffff").replace("stroke-width=\"2\"", "stroke-width=\"1.75\"");
+                let svg = String::from_utf8_lossy(bytes)
+                    .replace("currentColor", "#ffffff")
+                    .replace("stroke-width=\"2\"", "stroke-width=\"1.75\"");
                 (*name, Arc::from(svg.into_bytes().into_boxed_slice()))
             })
             .collect()
@@ -99,10 +119,21 @@ pub fn image(name: &str, size: f32, tint: Color32) -> egui::Image<'static> {
 pub fn image_sized(name: &str, size: Vec2, tint: Color32) -> egui::Image<'static> {
     let (name, bytes) = match white_icons().get(name) {
         Some(b) => (name, b.clone()),
-        None => ("square", white_icons().get("square").cloned().unwrap_or_else(|| Arc::from(Vec::new().into_boxed_slice()))),
+        None => (
+            "square",
+            white_icons()
+                .get("square")
+                .cloned()
+                .unwrap_or_else(|| Arc::from(Vec::new().into_boxed_slice())),
+        ),
     };
 
-    egui::Image::from_bytes(format!("bytes://icons/{name}.svg"), egui::load::Bytes::Shared(bytes)).fit_to_exact_size(size).tint(tint)
+    egui::Image::from_bytes(
+        format!("bytes://icons/{name}.svg"),
+        egui::load::Bytes::Shared(bytes),
+    )
+    .fit_to_exact_size(size)
+    .tint(tint)
 }
 
 /// Paint an icon centred in `rect`.
@@ -113,12 +144,24 @@ pub fn paint(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32) {
 
 /// Square icon button at a control size: transparent until hovered; `selected` gets the accent
 /// treatment.
-pub fn button(ui: &mut egui::Ui, name: &str, size: ControlSize, selected: bool, tooltip: &str) -> Response {
+pub fn button(
+    ui: &mut egui::Ui,
+    name: &str,
+    size: ControlSize,
+    selected: bool,
+    tooltip: &str,
+) -> Response {
     button_box(ui, name, size.height(), selected, tooltip)
 }
 
 /// [`button`] in a box of any size.
-pub fn button_box(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tooltip: &str) -> Response {
+pub fn button_box(
+    ui: &mut egui::Ui,
+    name: &str,
+    box_size: f32,
+    selected: bool,
+    tooltip: &str,
+) -> Response {
     let t = Tokens::get(ui.ctx());
 
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(box_size), Sense::click());
@@ -143,12 +186,23 @@ pub fn button_box(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, 
         // `accent_ink` (#8FA8FF), not `accent`: the Max Blue ring was 2.44:1
         // against the old field; accent_ink is 9.21:1 on the field and on
         // chrome (both black now — the contrast test pins this).
-        ui.painter().rect_stroke(rect.expand(1.0), t.radius_sm, Stroke::new(1.5, t.accent_ink), egui::StrokeKind::Outside);
+        ui.painter().rect_stroke(
+            rect.expand(1.0),
+            t.radius_sm,
+            Stroke::new(1.5, t.accent_ink),
+            egui::StrokeKind::Outside,
+        );
     }
 
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
 
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, if tooltip.is_empty() { name } else { tooltip }));
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::Role::Button,
+            true,
+            if tooltip.is_empty() { name } else { tooltip },
+        )
+    });
 
     // A sighted keyboard user tabbing to an icon-only button sees the glyph
     // and the focus ring but no text saying what it does (`on_hover_text`
@@ -158,7 +212,11 @@ pub fn button_box(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, 
         resp.show_tooltip_text(tooltip);
     }
 
-    if tooltip.is_empty() { resp } else { resp.on_hover_text(tooltip) }
+    if tooltip.is_empty() {
+        resp
+    } else {
+        resp.on_hover_text(tooltip)
+    }
 }
 
 #[cfg(test)]

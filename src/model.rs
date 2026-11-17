@@ -125,7 +125,11 @@ impl SizingMode {
         }
     }
     pub fn all() -> [SizingMode; 3] {
-        [SizingMode::UniformGrow, SizingMode::PerBlock, SizingMode::UniformSmallest]
+        [
+            SizingMode::UniformGrow,
+            SizingMode::PerBlock,
+            SizingMode::UniformSmallest,
+        ]
     }
 }
 
@@ -191,12 +195,7 @@ impl Settings {
 
 /// Clamp a box to image bounds (Python: `clamp_box`).
 pub fn clamp_box(b: [i32; 4], w: i32, h: i32) -> [i32; 4] {
-    [
-        b[0].max(0),
-        b[1].max(0),
-        b[2].min(w),
-        b[3].min(h),
-    ]
+    [b[0].max(0), b[1].max(0), b[2].min(w), b[3].min(h)]
 }
 
 pub fn color_dist(c1: [u8; 3], c2: [u8; 3]) -> f32 {

@@ -15,7 +15,7 @@ use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, StrokeDash, 
 
 use crate::fonts::{attrs_for, font_system, load_custom_font};
 use crate::inpaint::inpaint_masked;
-use crate::model::{ImageEntry, clamp_box};
+use crate::model::{clamp_box, ImageEntry};
 
 thread_local! {
     static SWASH_CACHE: RefCell<SwashCache> = RefCell::new(SwashCache::new());
@@ -58,7 +58,12 @@ fn measure(
         // fragment actually laid out on this visual line.
         let start = run.glyphs.first().map(|g| g.start).unwrap_or(0);
         let end = run.glyphs.last().map(|g| g.end).unwrap_or(run.text.len());
-        let t = run.text.get(start..end).unwrap_or("").trim_end().to_string();
+        let t = run
+            .text
+            .get(start..end)
+            .unwrap_or("")
+            .trim_end()
+            .to_string();
         if !t.is_empty() || lines.is_empty() {
             lines.push(t);
         }
@@ -92,11 +97,19 @@ pub fn fit_text_to_box(
 
     if start_size <= 12 {
         let (lines, size, step) = eval(12);
-        return FittedText { lines, size, line_step: step };
+        return FittedText {
+            lines,
+            size,
+            line_step: step,
+        };
     }
     if fits(start_size) {
         let (lines, size, step) = eval(start_size);
-        return FittedText { lines, size, line_step: step };
+        return FittedText {
+            lines,
+            size,
+            line_step: step,
+        };
     }
     let mut lo = 13i32;
     let mut hi = start_size - 1;
@@ -105,7 +118,11 @@ pub fn fit_text_to_box(
         let mid = (lo + hi) / 2;
         if fits(mid) {
             let (lines, size, step) = eval(mid);
-            best = Some(FittedText { lines, size, line_step: step });
+            best = Some(FittedText {
+                lines,
+                size,
+                line_step: step,
+            });
             lo = mid + 1;
         } else {
             hi = mid - 1;
@@ -115,7 +132,11 @@ pub fn fit_text_to_box(
         return b;
     }
     let (lines, size, step) = eval(12);
-    FittedText { lines, size, line_step: step }
+    FittedText {
+        lines,
+        size,
+        line_step: step,
+    }
 }
 
 /// Height of the "Agjpqy" reference string at `size` (ascender+descender),
@@ -257,9 +278,15 @@ fn draw_smooth_caption_plate(
     for (i, b) in line_boxes.iter().enumerate() {
         let x1 = unified_left;
         let x2 = b[2];
-        let y1 = if i == 0 { b[1] } else { merged[merged.len() - 1][3] };
+        let y1 = if i == 0 {
+            b[1]
+        } else {
+            merged[merged.len() - 1][3]
+        };
         let y2 = b[3];
-        if !merged.is_empty() && (x2 - merged[merged.len() - 1][2]).abs() < (radius as f32 * 0.7) as i32 {
+        if !merged.is_empty()
+            && (x2 - merged[merged.len() - 1][2]).abs() < (radius as f32 * 0.7) as i32
+        {
             let shared = x2.max(merged[merged.len() - 1][2]);
             let last = merged.len() - 1;
             merged[last][2] = shared;
@@ -299,8 +326,14 @@ fn draw_smooth_caption_plate(
         let p_prev = clean[(i + m - 1) % m];
         let p_curr = clean[i];
         let p_next = clean[(i + 1) % m];
-        let v1 = (p_prev.0 as f32 - p_curr.0 as f32, p_prev.1 as f32 - p_curr.1 as f32);
-        let v2 = (p_next.0 as f32 - p_curr.0 as f32, p_next.1 as f32 - p_curr.1 as f32);
+        let v1 = (
+            p_prev.0 as f32 - p_curr.0 as f32,
+            p_prev.1 as f32 - p_curr.1 as f32,
+        );
+        let v2 = (
+            p_next.0 as f32 - p_curr.0 as f32,
+            p_next.1 as f32 - p_curr.1 as f32,
+        );
         let len1 = (v1.0 * v1.0 + v1.1 * v1.1).sqrt();
         let len2 = (v2.0 * v2.0 + v2.1 * v2.1).sqrt();
         if len1 == 0.0 || len2 == 0.0 {
@@ -333,7 +366,13 @@ fn draw_smooth_caption_plate(
         let mut paint = Paint::default();
         paint.set_color_rgba8(fill[0], fill[1], fill[2], fill[3]);
         paint.anti_alias = true;
-        pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+        pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 }
 
@@ -390,11 +429,7 @@ pub fn uniform_size_for(entry: &ImageEntry) -> i32 {
 
 /// The smallest per-block fitted size for an entry (UniformSmallest mode),
 /// shared by the renderer and the inspector.
-pub fn smallest_size_for(
-    entry: &ImageEntry,
-    wi: i32,
-    custom_family: Option<&'static str>,
-) -> i32 {
+pub fn smallest_size_for(entry: &ImageEntry, wi: i32, custom_family: Option<&'static str>) -> i32 {
     let mut sizes: Vec<i32> = Vec::new();
     for blk in entry
         .blocks
@@ -406,7 +441,10 @@ pub fn smallest_size_for(
         } else {
             blk.line_bboxes.clone()
         };
-        let avg_h = line_bboxes.iter().map(|b| (b[3] - b[1]) as f32).sum::<f32>()
+        let avg_h = line_bboxes
+            .iter()
+            .map(|b| (b[3] - b[1]) as f32)
+            .sum::<f32>()
             / line_bboxes.len() as f32;
         let (start_size, max_w, max_h) = per_block_bounds(blk, avg_h, wi);
         let fitted = fit_text_to_box(blk.new_text.trim(), max_w, max_h, start_size, custom_family);
@@ -433,7 +471,10 @@ pub fn fit_bounds_for(
     } else {
         blk.line_bboxes.clone()
     };
-    let avg_h = line_bboxes.iter().map(|b| (b[3] - b[1]) as f32).sum::<f32>()
+    let avg_h = line_bboxes
+        .iter()
+        .map(|b| (b[3] - b[1]) as f32)
+        .sum::<f32>()
         / line_bboxes.len() as f32;
     match sizing {
         SizingMode::PerBlock => per_block_bounds(blk, avg_h, wi),
@@ -508,7 +549,10 @@ pub fn render_entry(
         } else {
             blk.line_bboxes.clone()
         };
-        let avg_h = line_bboxes.iter().map(|b| (b[3] - b[1]) as f32).sum::<f32>()
+        let avg_h = line_bboxes
+            .iter()
+            .map(|b| (b[3] - b[1]) as f32)
+            .sum::<f32>()
             / line_bboxes.len() as f32;
 
         // Fit bounds per sizing mode — the shared helper, so the inspector's
@@ -561,7 +605,12 @@ pub fn render_entry(
             // PIL textbbox top for "Agjpqy" at (start_x, cur_y) is cur_y;
             // the line's ink spans [cur_y, cur_y + single_h].
             let pill = clamp_box(
-                [start_x - pad_x, cur_y - pad_y, start_x + lw + pad_x, cur_y + single_h + pad_y],
+                [
+                    start_x - pad_x,
+                    cur_y - pad_y,
+                    start_x + lw + pad_x,
+                    cur_y + single_h + pad_y,
+                ],
                 wi,
                 hi,
             );
@@ -582,10 +631,26 @@ pub fn render_entry(
             let old_pad_x = 36.max((avg_h * 0.95) as i32);
             let old_pad_y = 20.max((avg_h * 0.60) as i32);
             for [lx1, ly1, lx2, ly2] in &line_bboxes {
-                let ox1 = if lx1 - old_pad_x < 15 { 0 } else { lx1 - old_pad_x };
-                let oy1 = if ly1 - old_pad_y < 15 { 0 } else { ly1 - old_pad_y };
-                let ox2 = if lx2 + old_pad_x > wi - 15 { wi } else { lx2 + old_pad_x };
-                let oy2 = if ly2 + old_pad_y > hi - 15 { hi } else { ly2 + old_pad_y };
+                let ox1 = if lx1 - old_pad_x < 15 {
+                    0
+                } else {
+                    lx1 - old_pad_x
+                };
+                let oy1 = if ly1 - old_pad_y < 15 {
+                    0
+                } else {
+                    ly1 - old_pad_y
+                };
+                let ox2 = if lx2 + old_pad_x > wi - 15 {
+                    wi
+                } else {
+                    lx2 + old_pad_x
+                };
+                let oy2 = if ly2 + old_pad_y > hi - 15 {
+                    hi
+                } else {
+                    ly2 + old_pad_y
+                };
                 let [ox1, oy1, ox2, oy2] = clamp_box([ox1, oy1, ox2, oy2], wi, hi);
                 for y in oy1..oy2 {
                     for x in ox1..ox2 {
@@ -595,8 +660,7 @@ pub fn render_entry(
             }
         } else {
             for [lx1, ly1, lx2, ly2] in &line_bboxes {
-                let [lx1, ly1, lx2, ly2] =
-                    clamp_box([lx1 - 3, ly1 - 3, lx2 + 3, ly2 + 3], wi, hi);
+                let [lx1, ly1, lx2, ly2] = clamp_box([lx1 - 3, ly1 - 3, lx2 + 3, ly2 + 3], wi, hi);
                 if lx2 <= lx1 || ly2 <= ly1 {
                     continue;
                 }
@@ -723,7 +787,11 @@ pub fn render_entry(
 /// tags. `highlight` (a block id) draws that block in Max Blue instead, so the
 /// preview can show which block the Detected Blocks list has selected.
 /// Returns an RGB image.
-pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry, highlight: Option<usize>) -> RgbImage {
+pub fn render_ocr_diagnostic(
+    img: &RgbImage,
+    entry: &ImageEntry,
+    highlight: Option<usize>,
+) -> RgbImage {
     let (w, h) = (img.width(), img.height());
     let (wi, hi) = (w as i32, h as i32);
     let mut pixmap = Pixmap::new(w, h).expect("pixmap");
@@ -739,7 +807,12 @@ pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry, highlight: Opti
     let badge_size = 13.max((w as f32 * 0.017) as i32);
     let stroke_w = 2.max((w as f32 * 0.0025) as i32) as f32;
 
-    let rect_outline = |pixmap: &mut Pixmap, b: [i32; 4], color: [u8; 4], width: f32, fill: Option<[u8; 4]>, dashed: bool| {
+    let rect_outline = |pixmap: &mut Pixmap,
+                        b: [i32; 4],
+                        color: [u8; 4],
+                        width: f32,
+                        fill: Option<[u8; 4]>,
+                        dashed: bool| {
         let [x1, y1, x2, y2] = clamp_box(b, wi, hi);
         if x2 <= x1 || y2 <= y1 {
             return;
@@ -748,7 +821,9 @@ pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry, highlight: Opti
             let mut paint = Paint::default();
             paint.set_color_rgba8(f[0], f[1], f[2], f[3]);
             paint.anti_alias = true;
-            if let Some(rect) = Rect::from_xywh(x1 as f32, y1 as f32, (x2 - x1) as f32, (y2 - y1) as f32) {
+            if let Some(rect) =
+                Rect::from_xywh(x1 as f32, y1 as f32, (x2 - x1) as f32, (y2 - y1) as f32)
+            {
                 pixmap.fill_rect(rect, &paint, Transform::identity(), None);
             }
         }
@@ -765,8 +840,14 @@ pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry, highlight: Opti
         let mut paint = Paint::default();
         paint.set_color_rgba8(color[0], color[1], color[2], color[3]);
         paint.anti_alias = true;
-        let stroke = Stroke { width, dash: dash.clone(), ..Default::default() };
-        if let Some(rect) = Rect::from_xywh(x1 as f32, y1 as f32, (x2 - x1) as f32, (y2 - y1) as f32) {
+        let stroke = Stroke {
+            width,
+            dash: dash.clone(),
+            ..Default::default()
+        };
+        if let Some(rect) =
+            Rect::from_xywh(x1 as f32, y1 as f32, (x2 - x1) as f32, (y2 - y1) as f32)
+        {
             let path = tiny_skia::PathBuilder::from_rect(rect);
             // A dark halo under the coloured outline, so it holds up on
             // light photo areas: the kept green is 2.28:1 and the dropped
@@ -777,7 +858,11 @@ pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry, highlight: Opti
             let mut halo = Paint::default();
             halo.set_color_rgba8(0, 0, 0, 200);
             halo.anti_alias = true;
-            let halo_stroke = Stroke { width: width + 2.0, dash, ..Default::default() };
+            let halo_stroke = Stroke {
+                width: width + 2.0,
+                dash,
+                ..Default::default()
+            };
             pixmap.stroke_path(&path, &halo, &halo_stroke, Transform::identity(), None);
             pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
         }
@@ -838,7 +923,14 @@ pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry, highlight: Opti
                       label: &str,
                       dashed: bool| {
         let [x1, y1, _, _] = clamp_box(blk.bbox, wi, hi);
-        rect_outline(pixmap, blk.bbox, stroke, stroke_w + width_extra, Some(fill), dashed);
+        rect_outline(
+            pixmap,
+            blk.bbox,
+            stroke,
+            stroke_w + width_extra,
+            Some(fill),
+            dashed,
+        );
         tag(
             pixmap,
             x1,
@@ -945,7 +1037,7 @@ mod tests {
                 bg_color: [18, 18, 18],
                 is_boxed: true,
                 font_size_est: 40,
-                        kept_override: None,
+                kept_override: None,
             }],
             dropped: vec![],
         }
@@ -1038,7 +1130,11 @@ mod tests {
             raw_lines: vec![],
             blocks: vec![
                 mk(1, [24, 36, 1368, 196], "Short line here"),
-                mk(2, [26, 1729, 707, 1777], "Andha group la Siddhu msg vandhurundhudhu"),
+                mk(
+                    2,
+                    [26, 1729, 707, 1777],
+                    "Andha group la Siddhu msg vandhurundhudhu",
+                ),
             ],
             dropped: vec![],
         };
@@ -1050,7 +1146,10 @@ mod tests {
         // (at size 50 the line is ~920px wide): check a pixel well right
         // of the original bbox is plate-dark, not background.
         let p = out.get_pixel(850, 1750);
-        assert!(p[0] < 120, "uniform plate did not grow past the footprint: {p:?}");
+        assert!(
+            p[0] < 120,
+            "uniform plate did not grow past the footprint: {p:?}"
+        );
         // And the wide block must NOT have shrunk: its text is still at
         // the uniform size, so its plate is a single line tall (~50px),
         // not a shrunken multi-line stack.
@@ -1077,15 +1176,16 @@ mod tests {
                 line_bboxes: vec![[24, 40, 700, 100]],
                 original_text: String::new(),
                 // Short words pack the greedy wrap tight to the fit limit
-            // (line 1 lands at 1404px of the 1440px image) — the geometry
-            // that clipped the plates on _3.jpg.
-            new_text: "ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka".to_string(),
+                // (line 1 lands at 1404px of the 1440px image) — the geometry
+                // that clipped the plates on _3.jpg.
+                new_text: "ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka"
+                    .to_string(),
                 confidence: 0.94,
                 text_color: [255, 64, 64],
                 bg_color: [18, 18, 18],
                 is_boxed: true,
                 font_size_est: 51,
-                        kept_override: None,
+                kept_override: None,
             }],
             dropped: vec![],
         };
@@ -1103,7 +1203,6 @@ mod tests {
             }
         }
     }
-
 
     #[test]
     fn diagnostic_draws_without_panic() {

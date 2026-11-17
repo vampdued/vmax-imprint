@@ -25,7 +25,10 @@
 //! 0.37 and to this app; the palette and type are VMAX, not craft's.
 
 use egui::epaint::text::VariationCoords;
-use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, FontTweak, Stroke, TextStyle, Visuals};
+use egui::{
+    Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, FontTweak, Stroke,
+    TextStyle, Visuals,
+};
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -146,7 +149,8 @@ impl Tokens {
 
     /// The tokens of the active theme (defaults to Studio dark before `apply` runs).
     pub fn get(ctx: &egui::Context) -> Tokens {
-        ctx.data(|d| d.get_temp::<Tokens>(tokens_id())).unwrap_or_else(|| Tokens::for_kind(ThemeKind::Studio))
+        ctx.data(|d| d.get_temp::<Tokens>(tokens_id()))
+            .unwrap_or_else(|| Tokens::for_kind(ThemeKind::Studio))
     }
 
     pub fn dark(&self) -> bool {
@@ -191,7 +195,8 @@ const PLEX_FACES: [(&str, f32); 3] = [
 /// Chakra Petch, the brand display face: app title and headings only, never
 /// body copy. Static SemiBold (+ Medium for the 500 weight, Bold for the
 /// title bar). OFL, see `assets/fonts/ChakraPetch-OFL.txt`.
-pub static CHAKRA_PETCH_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/ChakraPetch-SemiBold.ttf");
+pub static CHAKRA_PETCH_SEMIBOLD: &[u8] =
+    include_bytes!("../assets/fonts/ChakraPetch-SemiBold.ttf");
 pub static CHAKRA_PETCH_MEDIUM: &[u8] = include_bytes!("../assets/fonts/ChakraPetch-Medium.ttf");
 pub static CHAKRA_PETCH_BOLD: &[u8] = include_bytes!("../assets/fonts/ChakraPetch-Bold.ttf");
 
@@ -207,20 +212,50 @@ pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
 
     for (name, weight) in PLEX_FACES {
-        let tweak = FontTweak { coords: VariationCoords::new([(*b"wght", weight)]), ..Default::default() };
-        fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_static(IBM_PLEX_SANS).tweak(tweak)));
+        let tweak = FontTweak {
+            coords: VariationCoords::new([(*b"wght", weight)]),
+            ..Default::default()
+        };
+        fonts.font_data.insert(
+            name.to_owned(),
+            Arc::new(FontData::from_static(IBM_PLEX_SANS).tweak(tweak)),
+        );
     }
 
-    fonts.font_data.insert("ChakraPetch".to_owned(), Arc::new(FontData::from_static(CHAKRA_PETCH_SEMIBOLD)));
-    fonts.font_data.insert("ChakraPetch-Medium".to_owned(), Arc::new(FontData::from_static(CHAKRA_PETCH_MEDIUM)));
-    fonts.font_data.insert("ChakraPetch-Bold".to_owned(), Arc::new(FontData::from_static(CHAKRA_PETCH_BOLD)));
+    fonts.font_data.insert(
+        "ChakraPetch".to_owned(),
+        Arc::new(FontData::from_static(CHAKRA_PETCH_SEMIBOLD)),
+    );
+    fonts.font_data.insert(
+        "ChakraPetch-Medium".to_owned(),
+        Arc::new(FontData::from_static(CHAKRA_PETCH_MEDIUM)),
+    );
+    fonts.font_data.insert(
+        "ChakraPetch-Bold".to_owned(),
+        Arc::new(FontData::from_static(CHAKRA_PETCH_BOLD)),
+    );
 
-    fonts.font_data.insert("IBMPlexMono".to_owned(), Arc::new(FontData::from_static(IBM_PLEX_MONO)));
+    fonts.font_data.insert(
+        "IBMPlexMono".to_owned(),
+        Arc::new(FontData::from_static(IBM_PLEX_MONO)),
+    );
 
-    fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "IBMPlexSans".to_owned());
-    fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "IBMPlexMono".to_owned());
+    fonts
+        .families
+        .entry(FontFamily::Proportional)
+        .or_default()
+        .insert(0, "IBMPlexSans".to_owned());
+    fonts
+        .families
+        .entry(FontFamily::Monospace)
+        .or_default()
+        .insert(0, "IBMPlexMono".to_owned());
 
-    let base: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    let base: Vec<String> = fonts
+        .families
+        .get(&FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
     for (fam, stack) in weighted_families(&base) {
         fonts.families.insert(fam, stack);
     }
@@ -233,14 +268,17 @@ pub fn install_fonts(ctx: &egui::Context) {
 /// the proportional stack (so a missing glyph falls back to Plex, never to
 /// a random system font).
 fn weighted_families(base: &[String]) -> Vec<(FontFamily, Vec<String>)> {
-    let mut out: Vec<(FontFamily, Vec<String>)> = [("medium", "IBMPlexSans-Medium"), ("semibold", "IBMPlexSans-SemiBold")]
-        .into_iter()
-        .map(|(fam, primary)| {
-            let mut stack = vec![primary.to_owned()];
-            stack.extend(base.iter().cloned());
-            (FontFamily::Name(fam.into()), stack)
-        })
-        .collect();
+    let mut out: Vec<(FontFamily, Vec<String>)> = [
+        ("medium", "IBMPlexSans-Medium"),
+        ("semibold", "IBMPlexSans-SemiBold"),
+    ]
+    .into_iter()
+    .map(|(fam, primary)| {
+        let mut stack = vec![primary.to_owned()];
+        stack.extend(base.iter().cloned());
+        (FontFamily::Name(fam.into()), stack)
+    })
+    .collect();
     let mut display = vec!["ChakraPetch".to_owned()];
     display.extend(base.iter().cloned());
     out.push((FontFamily::Name("display".into()), display));
@@ -341,7 +379,12 @@ pub enum ControlSize {
 }
 
 impl ControlSize {
-    pub const ALL: [ControlSize; 4] = [ControlSize::Small, ControlSize::Medium, ControlSize::Large, ControlSize::Hero];
+    pub const ALL: [ControlSize; 4] = [
+        ControlSize::Small,
+        ControlSize::Medium,
+        ControlSize::Large,
+        ControlSize::Hero,
+    ];
 
     pub const fn height(self) -> f32 {
         match self {
@@ -399,7 +442,12 @@ pub fn mono(size: f32) -> FontId {
 pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     let t = t.clamp(0.0, 1.0);
     let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
-    Color32::from_rgba_premultiplied(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()), m(a.a(), b.a()))
+    Color32::from_rgba_premultiplied(
+        m(a.r(), b.r()),
+        m(a.g(), b.g()),
+        m(a.b(), b.b()),
+        m(a.a(), b.a()),
+    )
 }
 
 /// A short label (captions, buttons, the title bar): Plex medium at one of the text sizes.
@@ -439,9 +487,17 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind, roomy: bool) {
 
     ctx.data_mut(|d| d.insert_temp(tokens_id(), t));
 
-    ctx.set_theme(if t.dark() { egui::Theme::Dark } else { egui::Theme::Light });
+    ctx.set_theme(if t.dark() {
+        egui::Theme::Dark
+    } else {
+        egui::Theme::Light
+    });
 
-    let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
+    let mut v = if t.dark() {
+        Visuals::dark()
+    } else {
+        Visuals::light()
+    };
 
     // Each glyph on a whole pixel. egui's default draws a glyph at one of four offsets inside a
     // pixel for more even spacing, which softens small text on a display at 100 %.
@@ -459,8 +515,18 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind, roomy: bool) {
     v.error_fg_color = t.danger;
     v.window_corner_radius = t.r_lg();
     v.menu_corner_radius = t.r();
-    v.window_shadow = egui::Shadow { offset: [0, 10], blur: 28, spread: 0, color: t.shadow };
-    v.popup_shadow = egui::Shadow { offset: [0, 8], blur: 24, spread: 0, color: t.shadow };
+    v.window_shadow = egui::Shadow {
+        offset: [0, 10],
+        blur: 28,
+        spread: 0,
+        color: t.shadow,
+    };
+    v.popup_shadow = egui::Shadow {
+        offset: [0, 8],
+        blur: 24,
+        spread: 0,
+        color: t.shadow,
+    };
     v.text_edit_bg_color = Some(t.field);
     v.selection.bg_fill = t.accent_soft;
     v.selection.stroke = Stroke::new(1.0, t.accent);
@@ -501,19 +567,35 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind, roomy: bool) {
 
     ctx.set_visuals(v);
 
-    let control = if roomy { ControlSize::Medium } else { ControlSize::Small };
+    let control = if roomy {
+        ControlSize::Medium
+    } else {
+        ControlSize::Small
+    };
 
     ctx.global_style_mut(|s| {
         s.text_styles = [
-            (TextStyle::Small, FontId::proportional(if roomy { LABEL } else { TINY })),
-            (TextStyle::Body, FontId::proportional(if roomy { BODY } else { LABEL })),
+            (
+                TextStyle::Small,
+                FontId::proportional(if roomy { LABEL } else { TINY }),
+            ),
+            (
+                TextStyle::Body,
+                FontId::proportional(if roomy { BODY } else { LABEL }),
+            ),
             (TextStyle::Button, medium(control.text())),
             // egui panics resolving a missing style, so Heading stays as the
             // framework fallback — but the app's headings go through
             // `theme::heading()`, never `ui.heading()`, so this is the only
             // heading path in practice.
-            (TextStyle::Heading, semibold(if roomy { SECTION } else { CARD })),
-            (TextStyle::Monospace, FontId::monospace(if roomy { LABEL } else { CODE })),
+            (
+                TextStyle::Heading,
+                semibold(if roomy { SECTION } else { CARD }),
+            ),
+            (
+                TextStyle::Monospace,
+                FontId::monospace(if roomy { LABEL } else { CODE }),
+            ),
         ]
         .into();
 
@@ -550,17 +632,29 @@ mod tests {
         assert!(t.dark());
         assert_eq!(t.accent, BRAND);
         // The heading style uses the semibold family.
-        let heading = ctx.global_style().text_styles.get(&TextStyle::Heading).cloned().unwrap();
+        let heading = ctx
+            .global_style()
+            .text_styles
+            .get(&TextStyle::Heading)
+            .cloned()
+            .unwrap();
         assert_eq!(heading.family, FontFamily::Name("semibold".into()));
         // The display helper resolves to the Chakra Petch family.
-        assert_eq!(crate::theme::display(18.0).family, FontFamily::Name("display".into()));
+        assert_eq!(
+            crate::theme::display(18.0).family,
+            FontFamily::Name("display".into())
+        );
     }
 
     /// Relative luminance (WCAG 2.1) of an opaque colour.
     fn luminance(c: Color32) -> f32 {
         let f = |v: u8| {
             let s = v as f32 / 255.0;
-            if s <= 0.03928 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+            if s <= 0.03928 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
         };
         0.2126 * f(c.r()) + 0.7152 * f(c.g()) + 0.0722 * f(c.b())
     }
@@ -592,17 +686,35 @@ mod tests {
                 assert!(contrast(t.text_dim, bg) >= 4.5, "{kind:?} dim/{name}");
             }
             // Faint: canvas and chrome only (see the doc comment above).
-            assert!(contrast(t.text_faint, t.canvas) >= 4.5, "{kind:?} faint/canvas");
-            assert!(contrast(t.text_faint, t.chrome) >= 4.5, "{kind:?} faint/chrome");
+            assert!(
+                contrast(t.text_faint, t.canvas) >= 4.5,
+                "{kind:?} faint/canvas"
+            );
+            assert!(
+                contrast(t.text_faint, t.chrome) >= 4.5,
+                "{kind:?} faint/chrome"
+            );
             // Blue text on every surface it sits on, and white-on-accent.
             for (bg, name) in [(t.canvas, "canvas"), (t.card, "card"), (t.field, "field")] {
-                assert!(contrast(t.accent_ink, bg) >= 4.5, "{kind:?} accent_ink/{name}");
+                assert!(
+                    contrast(t.accent_ink, bg) >= 4.5,
+                    "{kind:?} accent_ink/{name}"
+                );
             }
-            assert!(contrast(Color32::WHITE, t.accent) >= 4.5, "{kind:?} white/accent");
+            assert!(
+                contrast(Color32::WHITE, t.accent) >= 4.5,
+                "{kind:?} white/accent"
+            );
             // Functional text.
             assert!(contrast(t.ok, t.canvas) >= 4.5, "{kind:?} ok/canvas");
-            assert!(contrast(t.warning, t.canvas) >= 4.5, "{kind:?} warning/canvas");
-            assert!(contrast(t.danger, t.canvas) >= 4.5, "{kind:?} danger/canvas");
+            assert!(
+                contrast(t.warning, t.canvas) >= 4.5,
+                "{kind:?} warning/canvas"
+            );
+            assert!(
+                contrast(t.danger, t.canvas) >= 4.5,
+                "{kind:?} danger/canvas"
+            );
             // The focus ring (accent_ink, 1.5px) on the surfaces it rings.
             for (bg, name) in [(t.field, "field"), (t.chrome, "chrome")] {
                 assert!(contrast(t.accent_ink, bg) >= 3.0, "{kind:?} ring/{name}");

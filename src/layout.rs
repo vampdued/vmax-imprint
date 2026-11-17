@@ -9,7 +9,7 @@
 //! 2,000 px). Blocks merge when text colours are < 75 apart and lines are
 //! on the same row or stacked; unboxed blocks under `min_chars` are dropped.
 
-use crate::model::{Block, DroppedItem, RawLine, clamp_box, color_dist};
+use crate::model::{clamp_box, color_dist, Block, DroppedItem, RawLine};
 use image::RgbImage;
 
 /// Sample background / text colours for one line bbox in an RGB image.
@@ -58,7 +58,11 @@ pub fn sample_colors(img_rgb: &RgbImage, bbox: [i32; 4]) -> ([u8; 3], [u8; 3], b
     let mut bg_std = 0.0f64;
     for c in 0..3 {
         let mean = ring.iter().map(|p| p[c] as f64).sum::<f64>() / n;
-        let var = ring.iter().map(|p| (p[c] as f64 - mean).powi(2)).sum::<f64>() / n;
+        let var = ring
+            .iter()
+            .map(|p| (p[c] as f64 - mean).powi(2))
+            .sum::<f64>()
+            / n;
         bg_std += var.sqrt();
     }
     bg_std /= 3.0;
@@ -178,8 +182,8 @@ pub fn group_lines_into_blocks(
             let same_row = v_overlap > avg_h * 0.45 && ((lx1 - px2) as f32).abs() < avg_h * 3.0;
             let v_gap = (ly1 - py2) as f32;
             let h_overlap = (lx2.min(px2) - lx1.max(px1)) as f32;
-            let stacked = (-avg_h * 0.3..=avg_h * 0.85).contains(&v_gap)
-                && h_overlap > -avg_h * 1.5;
+            let stacked =
+                (-avg_h * 0.3..=avg_h * 0.85).contains(&v_gap) && h_overlap > -avg_h * 1.5;
             let similar_color = color_dist(line.text_color, last.text_color) < 75.0;
 
             if (same_row || stacked) && similar_color {
@@ -237,9 +241,8 @@ pub fn block_from_lines(lines: &[&RawLine], id: usize) -> Block {
         .map(|l| l.text.trim())
         .collect::<Vec<_>>()
         .join(" ");
-    let avg_conf = (ls.iter().map(|l| l.score).sum::<f32>() / ls.len().max(1) as f32 * 100.0)
-        .round()
-        / 100.0;
+    let avg_conf =
+        (ls.iter().map(|l| l.score).sum::<f32>() / ls.len().max(1) as f32 * 100.0).round() / 100.0;
     let bg_color = median_rgb(&ls.iter().map(|l| l.bg_color).collect::<Vec<_>>());
     let text_color = median_rgb(&ls.iter().map(|l| l.text_color).collect::<Vec<_>>());
     let is_boxed = ls.iter().filter(|l| l.is_boxed).count() as f32 >= ls.len() as f32 / 2.0;
@@ -299,7 +302,10 @@ mod tests {
 
     #[test]
     fn conf_filter_records_reason() {
-        let raw = vec![line([0, 0, 10, 10], "hi", 0.05), line([0, 20, 10, 30], "hello world hello", 0.9)];
+        let raw = vec![
+            line([0, 0, 10, 10], "hi", 0.05),
+            line([0, 20, 10, 30], "hello world hello", 0.9),
+        ];
         let (blocks, dropped) = group_lines_into_blocks(&raw, 0.6, 12);
         assert_eq!(blocks.len(), 1);
         assert_eq!(dropped.len(), 1);

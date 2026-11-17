@@ -7,7 +7,7 @@
 //! prose, or single quotes. The parser strips those and accepts either
 //! strict JSON or a Python-literal dict.
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
@@ -22,7 +22,10 @@ pub fn parse_flexible_json_or_dict(raw_text: &str) -> Result<Map<String, Value>>
 
     // ```json ... ``` fences
     if let Some(rest) = txt.strip_prefix("```") {
-        let rest = rest.strip_prefix("json").or_else(|| rest.strip_prefix("python")).unwrap_or(rest);
+        let rest = rest
+            .strip_prefix("json")
+            .or_else(|| rest.strip_prefix("python"))
+            .unwrap_or(rest);
         txt = rest.trim_start().to_string();
     }
     if txt.ends_with("```") {
@@ -32,8 +35,14 @@ pub fn parse_flexible_json_or_dict(raw_text: &str) -> Result<Map<String, Value>>
     if let Some(eq) = txt.find('=') {
         let before = &txt[..eq];
         if !before.is_empty()
-            && before.trim().chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-            && txt[eq..].trim_start_matches('=').trim_start().starts_with('{')
+            && before
+                .trim()
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && txt[eq..]
+                .trim_start_matches('=')
+                .trim_start()
+                .starts_with('{')
         {
             txt = txt[eq + 1..].trim_start().to_string();
         }
@@ -58,7 +67,10 @@ pub fn parse_flexible_json_or_dict(raw_text: &str) -> Result<Map<String, Value>>
 /// None, nested dicts. Only what translation maps need — string keys and
 /// string (or numeric) values, one level of nesting.
 fn parse_python_literal(txt: &str) -> Result<Map<String, Value>> {
-    let mut p = PyParser { bytes: txt.as_bytes(), pos: 0 };
+    let mut p = PyParser {
+        bytes: txt.as_bytes(),
+        pos: 0,
+    };
     p.skip_ws();
     let v = p.parse_value()?;
     match v {
@@ -374,7 +386,7 @@ mod tests {
                 bg_color: [0, 0, 0],
                 is_boxed: true,
                 font_size_est: 20,
-                        kept_override: None,
+                kept_override: None,
             }],
             dropped: vec![],
         });

@@ -11,13 +11,13 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc,
     atomic::{AtomicBool, Ordering},
+    Arc,
 };
 use std::time::SystemTime;
 
 use anyhow::Result;
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use egui::{ColorImage, TextureHandle};
 
 use crate::image_io::{is_image_file, load_image, save_image};
@@ -181,11 +181,26 @@ enum FileOutcome {
 enum WorkerMsg {
     Log(String),
     Status(String),
-    Progress { done: usize, total: usize, label: String },
+    Progress {
+        done: usize,
+        total: usize,
+        label: String,
+    },
     OcrReady(Result<Arc<OcrEngine>, String>),
-    ExtractDone { data: ExtractedData, cancelled: bool },
-    FileRendered { file: String, outcome: FileOutcome },
-    RenderDone { rendered: usize, copied: usize, failed: usize, cancelled: bool },
+    ExtractDone {
+        data: ExtractedData,
+        cancelled: bool,
+    },
+    FileRendered {
+        file: String,
+        outcome: FileOutcome,
+    },
+    RenderDone {
+        rendered: usize,
+        copied: usize,
+        failed: usize,
+        cancelled: bool,
+    },
 }
 
 pub struct CaptionStudioApp {
@@ -499,9 +514,10 @@ impl CaptionStudioApp {
         match self.workflow_state().current {
             WorkflowStep::Scan => ("scan", "Scan images".to_string()),
             WorkflowStep::Translate => ("eye", "Review".to_string()),
-            WorkflowStep::Review | WorkflowStep::Render => {
-                ("play", format!("Render {} images", self.workflow_state().images))
-            }
+            WorkflowStep::Review | WorkflowStep::Render => (
+                "play",
+                format!("Render {} images", self.workflow_state().images),
+            ),
         }
     }
 
@@ -567,9 +583,15 @@ impl CaptionStudioApp {
     // ------------------------------------------------------------ actions
 
     fn browse_input(&mut self) {
-        if let Some(folder) = rfd::FileDialog::new().set_title("Select Input Images Folder").pick_folder() {
+        if let Some(folder) = rfd::FileDialog::new()
+            .set_title("Select Input Images Folder")
+            .pick_folder()
+        {
             self.input_dir = folder.to_string_lossy().to_string();
-            self.output_dir = folder.join("translated_output").to_string_lossy().to_string();
+            self.output_dir = folder
+                .join("translated_output")
+                .to_string_lossy()
+                .to_string();
             self.extracted = None;
             self.clear_render_state();
             self.preview_texture = None;
@@ -579,7 +601,10 @@ impl CaptionStudioApp {
     }
 
     fn browse_output(&mut self) {
-        if let Some(folder) = rfd::FileDialog::new().set_title("Select Output Folder").pick_folder() {
+        if let Some(folder) = rfd::FileDialog::new()
+            .set_title("Select Output Folder")
+            .pick_folder()
+        {
             self.output_dir = folder.to_string_lossy().to_string();
             self.save_settings();
         }
@@ -611,8 +636,10 @@ impl CaptionStudioApp {
             return;
         }
         // Preserve translations from the editor, keyed by original text.
-        let mut existing: std::collections::HashMap<String, std::collections::HashMap<String, String>> =
-            std::collections::HashMap::new();
+        let mut existing: std::collections::HashMap<
+            String,
+            std::collections::HashMap<String, String>,
+        > = std::collections::HashMap::new();
         if let Ok(parsed) = parse_flexible_json_or_dict(self.editor_text.trim()) {
             for img in &data.images {
                 if let Some(serde_json::Value::Object(tmap)) = parsed.get(&img.file) {
@@ -702,8 +729,11 @@ impl CaptionStudioApp {
         let mut lost_total = 0usize;
         for img in data.images.iter() {
             if let Some(saved) = existing.get(&img.file) {
-                let kept: std::collections::HashSet<&str> =
-                    img.blocks.iter().map(|b| b.original_text.as_str()).collect();
+                let kept: std::collections::HashSet<&str> = img
+                    .blocks
+                    .iter()
+                    .map(|b| b.original_text.as_str())
+                    .collect();
                 let n = saved.keys().filter(|o| !kept.contains(o.as_str())).count();
                 if n > 0 {
                     lost_total += n;
@@ -717,8 +747,7 @@ impl CaptionStudioApp {
         self.extracted = Some(data);
         self.preview_key.clear();
         let compact = compact_map_from_data(self.extracted.as_ref().unwrap());
-        self.editor_text =
-            serde_json::to_string_pretty(&compact).unwrap_or_default();
+        self.editor_text = serde_json::to_string_pretty(&compact).unwrap_or_default();
         let mut status = format!(
             "Thresholds applied (conf >= {min_conf:.2}, unboxed >= {min_chars} chars): {total_kept} kept, {total_dropped} filtered out."
         );
@@ -737,7 +766,9 @@ impl CaptionStudioApp {
             return;
         }
         match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(self.editor_text.clone())) {
-            Ok(()) => self.status = "Copied JSON to clipboard — paste it into your AI translator.".into(),
+            Ok(()) => {
+                self.status = "Copied JSON to clipboard — paste it into your AI translator.".into()
+            }
             Err(e) => self.status = format!("Couldn't copy to the clipboard ({e}) — try again."),
         }
     }
@@ -759,9 +790,14 @@ impl CaptionStudioApp {
             {
                 Ok(()) => {
                     self.last_save_path = Some(path.to_string_lossy().into_owned());
-                    self.status = format!("Saved metadata to {}", path.file_name().unwrap_or_default().to_string_lossy());
+                    self.status = format!(
+                        "Saved metadata to {}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    );
                 }
-                Err(e) => self.status = format!("Couldn't save ({e}) — check the folder and try again."),
+                Err(e) => {
+                    self.status = format!("Couldn't save ({e}) — check the folder and try again.")
+                }
             }
         }
     }
@@ -774,8 +810,9 @@ impl CaptionStudioApp {
         {
             match std::fs::read_to_string(&path)
                 .map_err(anyhow::Error::from)
-                .and_then(|s| serde_json::from_str::<ExtractedData>(&s).map_err(anyhow::Error::from))
-            {
+                .and_then(|s| {
+                    serde_json::from_str::<ExtractedData>(&s).map_err(anyhow::Error::from)
+                }) {
                 Ok(data) => {
                     let n = data.images.len();
                     self.editor_text = serde_json::to_string_pretty(&compact_map_from_data(&data))
@@ -783,9 +820,15 @@ impl CaptionStudioApp {
                     self.extracted = Some(data);
                     self.clear_render_state();
                     self.preview_key.clear();
-                    self.status = format!("Loaded {n} images from {}", path.file_name().unwrap_or_default().to_string_lossy());
+                    self.status = format!(
+                        "Loaded {n} images from {}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    );
                 }
-                Err(e) => self.status = format!("Couldn't load that JSON ({e}) — check the file and try again."),
+                Err(e) => {
+                    self.status =
+                        format!("Couldn't load that JSON ({e}) — check the file and try again.")
+                }
             }
         }
     }
@@ -810,21 +853,15 @@ impl CaptionStudioApp {
                             }
                         }
                         Err(_) => {
-                            report.push(
-                                "The file isn't valid JSON — nothing was imported.".into(),
-                            );
+                            report.push("The file isn't valid JSON — nothing was imported.".into());
                         }
                     }
                     self.editor_text = text;
                     self.clear_render_state();
                     self.preview_key.clear();
-                    let name = path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy();
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
                     if report.is_empty() {
-                        self.status =
-                            format!("Imported translations from {name}");
+                        self.status = format!("Imported translations from {name}");
                     } else {
                         self.import_report = Some(report);
                         self.status = format!(
@@ -832,7 +869,10 @@ impl CaptionStudioApp {
                         );
                     }
                 }
-                Err(e) => self.status = format!("Couldn't read that file ({e}) — check the file and try again."),
+                Err(e) => {
+                    self.status =
+                        format!("Couldn't read that file ({e}) — check the file and try again.")
+                }
             }
         }
     }
@@ -879,7 +919,14 @@ impl CaptionStudioApp {
         let min_chars = self.safe_minchars();
         let engine = self.ocr.clone().expect("OCR engine ready");
         std::thread::spawn(move || {
-            extract_worker(PathBuf::from(in_dir), engine, min_conf, min_chars, tx, cancel);
+            extract_worker(
+                PathBuf::from(in_dir),
+                engine,
+                min_conf,
+                min_chars,
+                tx,
+                cancel,
+            );
         });
     }
 
@@ -901,7 +948,8 @@ impl CaptionStudioApp {
         let (data, warnings, count) = match self.resolve_editor() {
             Ok(v) => v,
             Err(e) => {
-                self.status = format!("Couldn't parse the JSON — {e}. Fix the marked spot and try again.");
+                self.status =
+                    format!("Couldn't parse the JSON — {e}. Fix the marked spot and try again.");
                 return;
             }
         };
@@ -1045,10 +1093,8 @@ impl CaptionStudioApp {
             )
         });
         let selected = name == self.preview_file;
-        let (rect, resp) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), 52.0),
-            egui::Sense::click(),
-        );
+        let (rect, resp) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 52.0), egui::Sense::click());
         let resp = resp.accessible_name(format!(
             "{} · {} blocks{}",
             name,
@@ -1092,7 +1138,9 @@ impl CaptionStudioApp {
             ui.vertical(|ui| {
                 ui.add(
                     egui::Label::new(
-                        egui::RichText::new(name).size(crate::theme::LABEL).color(t.text),
+                        egui::RichText::new(name)
+                            .size(crate::theme::LABEL)
+                            .color(t.text),
                     )
                     .truncate(),
                 );
@@ -1133,9 +1181,9 @@ impl CaptionStudioApp {
         let Some(data) = data else {
             self.preview_entry = None;
             self.verify_text = match &self.preview_json_error {
-                Some(e) => format!(
-                    "Couldn't preview the JSON — {e}. Fix the marked spot and try again."
-                ),
+                Some(e) => {
+                    format!("Couldn't preview the JSON — {e}. Fix the marked spot and try again.")
+                }
                 None => "Scan & Extract Text or paste translated JSON to preview.".into(),
             };
             return;
@@ -1182,7 +1230,10 @@ impl CaptionStudioApp {
         let img = match load_image(&img_path) {
             Ok(i) => i,
             Err(_) => {
-                self.verify_text = format!("Couldn't read {} — it may have moved or be corrupt.", entry.file);
+                self.verify_text = format!(
+                    "Couldn't read {} — it may have moved or be corrupt.",
+                    entry.file
+                );
                 return;
             }
         };
@@ -1200,7 +1251,8 @@ impl CaptionStudioApp {
         };
         let (w, h) = (rendered.width(), rendered.height());
         let color = ColorImage::from_rgb([w as usize, h as usize], rendered.as_raw());
-        self.preview_texture = Some(ctx.load_texture("preview", color, egui::TextureOptions::LINEAR));
+        self.preview_texture =
+            Some(ctx.load_texture("preview", color, egui::TextureOptions::LINEAR));
         self.preview_size = [w as f32, h as f32];
         self.preview_key = key;
     }
@@ -1542,7 +1594,11 @@ impl CaptionStudioApp {
                 WorkerMsg::Log(m) => self.log(m),
                 WorkerMsg::Status(s) => self.status = s,
                 WorkerMsg::Progress { done, total, label } => {
-                    self.progress = if total == 0 { 0.0 } else { done as f32 / total as f32 };
+                    self.progress = if total == 0 {
+                        0.0
+                    } else {
+                        done as f32 / total as f32
+                    };
                     self.status = label;
                 }
                 WorkerMsg::OcrReady(res) => match res {
@@ -1558,7 +1614,8 @@ impl CaptionStudioApp {
                     }
                     Err(e) => {
                         self.ocr_error = Some(e.clone());
-                        self.status = format!("OCR engine failed to start — restart the app to retry. ({e})");
+                        self.status =
+                            format!("OCR engine failed to start — restart the app to retry. ({e})");
                         self.log_error(format!("OCR engine failed to start: {e}"));
                     }
                 },
@@ -1566,8 +1623,8 @@ impl CaptionStudioApp {
                     self.busy = false;
                     self.progress = 1.0;
                     let n = data.images.len();
-                    self.editor_text =
-                        serde_json::to_string_pretty(&compact_map_from_data(&data)).unwrap_or_default();
+                    self.editor_text = serde_json::to_string_pretty(&compact_map_from_data(&data))
+                        .unwrap_or_default();
                     self.extracted = Some(data);
                     self.preview_key.clear();
                     self.tab = Tab::Json;
@@ -1593,13 +1650,24 @@ impl CaptionStudioApp {
                         self.log_file(LogLevel::Info, file, "copied unchanged".into());
                     }
                 },
-                WorkerMsg::RenderDone { rendered, copied, failed, cancelled } => {
+                WorkerMsg::RenderDone {
+                    rendered,
+                    copied,
+                    failed,
+                    cancelled,
+                } => {
                     self.busy = false;
                     self.progress = 1.0;
                     self.render_summary = Some((rendered, copied, failed));
                     self.last_save_path = Some(self.output_dir.clone());
-                    let prefix = if cancelled { "Stopped — " } else { "Complete — " };
-                    let summary = format!("{prefix}rendered {rendered}, copied {copied} unchanged, failed {failed}");
+                    let prefix = if cancelled {
+                        "Stopped — "
+                    } else {
+                        "Complete — "
+                    };
+                    let summary = format!(
+                        "{prefix}rendered {rendered}, copied {copied} unchanged, failed {failed}"
+                    );
                     self.log(summary.clone());
                     // The leaf folder name only — the full output path
                     // crowded the status bar against the progress bar, and
@@ -1666,8 +1734,13 @@ fn extract_worker(
     }
     img_files.sort();
     if img_files.is_empty() {
-        send(WorkerMsg::Status("No supported images found — add .jpg, .png, or .webp files.".into()));
-        send(WorkerMsg::ExtractDone { data: ExtractedData::default(), cancelled: false });
+        send(WorkerMsg::Status(
+            "No supported images found — add .jpg, .png, or .webp files.".into(),
+        ));
+        send(WorkerMsg::ExtractDone {
+            data: ExtractedData::default(),
+            cancelled: false,
+        });
         return;
     }
     let total = img_files.len();
@@ -1678,7 +1751,11 @@ fn extract_worker(
             cancelled = true;
             break;
         }
-        let name = img_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let name = img_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         send(WorkerMsg::Progress {
             done: idx + 1,
             total,
@@ -1708,7 +1785,9 @@ fn extract_worker(
                     Err(e) => send(WorkerMsg::Log(format!("FAIL {name}: {e}"))),
                 }
             }
-            Err(e) => send(WorkerMsg::Log(format!("SKIP {name}: unreadable image ({e})"))),
+            Err(e) => send(WorkerMsg::Log(format!(
+                "SKIP {name}: unreadable image ({e})"
+            ))),
         }
     }
     // Persist captions.json next to the input images (Python behaviour).
@@ -1729,8 +1808,15 @@ fn render_worker(
 ) {
     use rayon::prelude::*;
     if let Err(e) = std::fs::create_dir_all(&output_dir) {
-        let _ = tx.send(WorkerMsg::Status(format!("Couldn't start the render ({e}) — check the output folder and try again.")));
-        let _ = tx.send(WorkerMsg::RenderDone { rendered: 0, copied: 0, failed: 0, cancelled: false });
+        let _ = tx.send(WorkerMsg::Status(format!(
+            "Couldn't start the render ({e}) — check the output folder and try again."
+        )));
+        let _ = tx.send(WorkerMsg::RenderDone {
+            rendered: 0,
+            copied: 0,
+            failed: 0,
+            cancelled: false,
+        });
         return;
     }
     let total = data.images.len();
@@ -1775,7 +1861,10 @@ fn render_worker(
                 FileOutcome::Failed
             }
         };
-        let _ = tx.send(WorkerMsg::FileRendered { file: name.clone(), outcome: file_outcome });
+        let _ = tx.send(WorkerMsg::FileRendered {
+            file: name.clone(),
+            outcome: file_outcome,
+        });
         let done = completed.fetch_add(1, Ordering::SeqCst) + 1;
         let _ = progress_tx.send(WorkerMsg::Progress {
             done,
@@ -1786,7 +1875,12 @@ fn render_worker(
 
     let (rendered, copied, failed) = *counts.lock().unwrap();
     let cancelled = cancel.load(Ordering::SeqCst);
-    let _ = tx.send(WorkerMsg::RenderDone { rendered, copied, failed, cancelled });
+    let _ = tx.send(WorkerMsg::RenderDone {
+        rendered,
+        copied,
+        failed,
+        cancelled,
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1863,7 +1957,9 @@ impl eframe::App for CaptionStudioApp {
                 .resizable(false)
                 .open(&mut open)
                 .show(&ctx, |ui| {
-                    ui.label(format!("Re-scan {n} images? Your edited translations will be cleared."));
+                    ui.label(format!(
+                        "Re-scan {n} images? Your edited translations will be cleared."
+                    ));
                     ui.horizontal(|ui| {
                         let yes = primary_icon_text_button(ui, "scan", "Re-scan", false);
                         focus_ring(ui, &yes);
@@ -2029,175 +2125,190 @@ impl eframe::App for CaptionStudioApp {
         // Counts + last save path + the status message (the accesskit live
         // region). The progress bar shows ONLY while a job runs (defect 6:
         // at idle it read as a second status line).
-        egui::Panel::bottom("status_bar").exact_size(32.0).show(ui, |ui| {
-            ui.add_enabled_ui(!modal_open, |ui| {
-            ui.horizontal(|ui| {
-                let t = crate::theme::Tokens::get(ui.ctx());
-                // A JSON error replaces the counts (danger colour, full
-                // error on hover) so a broken paste is visible without
-                // switching tabs.
-                if let Some(e) = &self.preview_json_error {
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new("JSON error").color(t.danger),
-                        )
-                        .truncate(),
-                    )
-                    .on_hover_text(e.clone());
-                    ui.separator();
-                } else if self.preview_file_count > 0 {
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(render_counts(
-                                self.preview_file_count,
-                                self.render_summary,
-                            ))
-                            .color(t.text_dim),
-                        )
-                        .truncate(),
-                    );
-                    ui.separator();
-                }
-                // The last save destination (the output folder after a
-                // render, the file after Save captions).
-                if let Some(path) = &self.last_save_path {
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(path).color(t.text_dim))
-                            .truncate(),
-                    )
-                    .on_hover_text(path.clone());
-                    ui.separator();
-                }
-                // A polite live region: a screen reader announces the status
-                // when it changes (batch finished, error) instead of the user
-                // having to go looking for it. The label truncates with an
-                // ellipsis so a long path can't silently clip against the bar.
-                let status_resp = ui.add(egui::Label::new(&self.status).truncate());
-                status_resp.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::Role::Status, true, self.status.clone())
-                });
-                ui.ctx().accesskit_node_builder(status_resp.id, |node| {
-                    node.set_live(egui::accesskit::Live::Polite);
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // A solid accent fill, not the 17%-alpha wash (1.23:1
-                    // against its track — the bar read as empty at 100%),
-                    // and capped at ~220px so it reads as a bar instead of a
-                    // second status line. Only while a job runs.
-                    if self.busy {
-                        ui.add(
-                            egui::ProgressBar::new(self.progress)
-                                .fill(t.accent)
-                                .desired_width(220.0)
-                                .show_percentage(),
-                        );
-                    }
+        egui::Panel::bottom("status_bar")
+            .exact_size(32.0)
+            .show(ui, |ui| {
+                ui.add_enabled_ui(!modal_open, |ui| {
+                    ui.horizontal(|ui| {
+                        let t = crate::theme::Tokens::get(ui.ctx());
+                        // A JSON error replaces the counts (danger colour, full
+                        // error on hover) so a broken paste is visible without
+                        // switching tabs.
+                        if let Some(e) = &self.preview_json_error {
+                            ui.add(
+                                egui::Label::new(egui::RichText::new("JSON error").color(t.danger))
+                                    .truncate(),
+                            )
+                            .on_hover_text(e.clone());
+                            ui.separator();
+                        } else if self.preview_file_count > 0 {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(render_counts(
+                                        self.preview_file_count,
+                                        self.render_summary,
+                                    ))
+                                    .color(t.text_dim),
+                                )
+                                .truncate(),
+                            );
+                            ui.separator();
+                        }
+                        // The last save destination (the output folder after a
+                        // render, the file after Save captions).
+                        if let Some(path) = &self.last_save_path {
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(path).color(t.text_dim))
+                                    .truncate(),
+                            )
+                            .on_hover_text(path.clone());
+                            ui.separator();
+                        }
+                        // A polite live region: a screen reader announces the status
+                        // when it changes (batch finished, error) instead of the user
+                        // having to go looking for it. The label truncates with an
+                        // ellipsis so a long path can't silently clip against the bar.
+                        let status_resp = ui.add(egui::Label::new(&self.status).truncate());
+                        status_resp.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::Status, true, self.status.clone())
+                        });
+                        ui.ctx().accesskit_node_builder(status_resp.id, |node| {
+                            node.set_live(egui::accesskit::Live::Polite);
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            // A solid accent fill, not the 17%-alpha wash (1.23:1
+                            // against its track — the bar read as empty at 100%),
+                            // and capped at ~220px so it reads as a bar instead of a
+                            // second status line. Only while a job runs.
+                            if self.busy {
+                                ui.add(
+                                    egui::ProgressBar::new(self.progress)
+                                        .fill(t.accent)
+                                        .desired_width(220.0)
+                                        .show_percentage(),
+                                );
+                            }
+                        });
+                    });
                 });
             });
-            });
-        });
 
         // --- Activity log (bottom row, SPEC §3: 188px) ---
         // Structured table (Phase 5, item 15): newest first, zebra rows,
         // filters All / Warnings with counts, Copy log, Stop (disabled at
         // idle). Auto-scroll follows the newest line until the user scrolls
         // away from the top.
-        egui::Panel::bottom("activity_log").exact_size(188.0).show(ui, |ui| {
-            ui.add_enabled_ui(!modal_open, |ui| {
-                let t = crate::theme::Tokens::get(ui.ctx());
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("ACTIVITY").font(crate::theme::display(13.0)).color(t.accent_ink));
-                    // Filters with counts (warnings = warn + error lines).
-                    let total = self.log_lines.len();
-                    let warnings = self
-                        .log_lines
-                        .iter()
-                        .filter(|l| l.level != LogLevel::Info)
-                        .count();
-                    let all_label = format!("All ({total})");
-                    let warn_label = format!("Warnings ({warnings})");
-                    if let Some(f) = segmented(
-                        ui,
-                        self.log_filter,
-                        &[
-                            (LogFilter::All, all_label.as_str()),
-                            (LogFilter::Warnings, warn_label.as_str()),
-                        ],
-                    ) {
-                        self.log_filter = f;
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // Stop is only meaningful while a job runs — it stays
-                        // disabled at idle so its state tells the truth.
-                        ui.add_enabled_ui(self.busy, |ui| {
-                            if icon_text_button(ui, "octagon-x", "Stop").clicked() {
-                                self.cancel.store(true, Ordering::SeqCst);
+        egui::Panel::bottom("activity_log")
+            .exact_size(188.0)
+            .show(ui, |ui| {
+                ui.add_enabled_ui(!modal_open, |ui| {
+                    let t = crate::theme::Tokens::get(ui.ctx());
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("ACTIVITY")
+                                .font(crate::theme::display(13.0))
+                                .color(t.accent_ink),
+                        );
+                        // Filters with counts (warnings = warn + error lines).
+                        let total = self.log_lines.len();
+                        let warnings = self
+                            .log_lines
+                            .iter()
+                            .filter(|l| l.level != LogLevel::Info)
+                            .count();
+                        let all_label = format!("All ({total})");
+                        let warn_label = format!("Warnings ({warnings})");
+                        if let Some(f) = segmented(
+                            ui,
+                            self.log_filter,
+                            &[
+                                (LogFilter::All, all_label.as_str()),
+                                (LogFilter::Warnings, warn_label.as_str()),
+                            ],
+                        ) {
+                            self.log_filter = f;
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            // Stop is only meaningful while a job runs — it stays
+                            // disabled at idle so its state tells the truth.
+                            ui.add_enabled_ui(self.busy, |ui| {
+                                if icon_text_button(ui, "octagon-x", "Stop").clicked() {
+                                    self.cancel.store(true, Ordering::SeqCst);
+                                }
+                            });
+                            if icon_text_button(ui, "copy", "Copy log").clicked() {
+                                self.copy_log();
                             }
                         });
-                        if icon_text_button(ui, "copy", "Copy log").clicked() {
-                            self.copy_log();
+                    });
+                    ui.separator();
+                    let visible = log_visible(&self.log_lines, self.log_filter);
+                    let new_lines = self.log_lines.len() != self.log_len_seen;
+                    let out = egui::ScrollArea::vertical().show(ui, |ui| {
+                        for (i, line) in visible.iter().enumerate() {
+                            // Zebra rows: alternate the card fill against the
+                            // panel background so adjacent lines stay distinct.
+                            let frame = egui::Frame::new()
+                                .fill(if i % 2 == 0 {
+                                    t.card
+                                } else {
+                                    egui::Color32::TRANSPARENT
+                                })
+                                .inner_margin(egui::Margin::symmetric(6, 2));
+                            let row = frame.show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    ui.monospace(
+                                        egui::RichText::new(&line.time).color(t.text_faint),
+                                    );
+                                    // The level is a short coloured tag (colour
+                                    // is not the only cue — the tag text names
+                                    // it); the result itself stays plain so the
+                                    // log reads quietly instead of shouting.
+                                    match line.level {
+                                        LogLevel::Warn => {
+                                            ui.colored_label(
+                                                t.warning,
+                                                egui::RichText::new("WARN").monospace().small(),
+                                            );
+                                        }
+                                        LogLevel::Error => {
+                                            ui.colored_label(
+                                                t.danger,
+                                                egui::RichText::new("ERROR").monospace().small(),
+                                            );
+                                        }
+                                        LogLevel::Info => {
+                                            ui.colored_label(
+                                                t.ok,
+                                                egui::RichText::new("INFO").monospace().small(),
+                                            );
+                                        }
+                                    }
+                                    if let Some(f) = &line.file {
+                                        ui.monospace(egui::RichText::new(f).color(t.text_dim));
+                                    }
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(&line.result).monospace(),
+                                        )
+                                        .wrap(),
+                                    );
+                                });
+                            });
+                            // Follow the newest line (the first row) while the
+                            // user hasn't scrolled away from the top.
+                            if i == 0 && new_lines && self.log_follow {
+                                row.response.scroll_to_me(Some(egui::Align::TOP));
+                            }
                         }
                     });
+                    // The user scrolled away from the top (the newest lines):
+                    // stop following until they come back to the top.
+                    self.log_follow = out.state.clamped_offset().y <= 1.0;
+                    self.log_len_seen = self.log_lines.len();
                 });
-                ui.separator();
-                let visible = log_visible(&self.log_lines, self.log_filter);
-                let new_lines = self.log_lines.len() != self.log_len_seen;
-                let out = egui::ScrollArea::vertical().show(ui, |ui| {
-                    for (i, line) in visible.iter().enumerate() {
-                        // Zebra rows: alternate the card fill against the
-                        // panel background so adjacent lines stay distinct.
-                        let frame = egui::Frame::new()
-                            .fill(if i % 2 == 0 {
-                                t.card
-                            } else {
-                                egui::Color32::TRANSPARENT
-                            })
-                            .inner_margin(egui::Margin::symmetric(6, 2));
-                        let row = frame.show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.horizontal(|ui| {
-                                ui.monospace(
-                                    egui::RichText::new(&line.time).color(t.text_faint),
-                                );
-                                // The level is a short coloured tag (colour
-                                // is not the only cue — the tag text names
-                                // it); the result itself stays plain so the
-                                // log reads quietly instead of shouting.
-                                match line.level {
-                                    LogLevel::Warn => {
-                                        ui.colored_label(t.warning, egui::RichText::new("WARN").monospace().small());
-                                    }
-                                    LogLevel::Error => {
-                                        ui.colored_label(t.danger, egui::RichText::new("ERROR").monospace().small());
-                                    }
-                                    LogLevel::Info => {
-                                        ui.colored_label(t.ok, egui::RichText::new("INFO").monospace().small());
-                                    }
-                                }
-                                if let Some(f) = &line.file {
-                                    ui.monospace(egui::RichText::new(f).color(t.text_dim));
-                                }
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(&line.result).monospace(),
-                                    )
-                                    .wrap(),
-                                );
-                            });
-                        });
-                        // Follow the newest line (the first row) while the
-                        // user hasn't scrolled away from the top.
-                        if i == 0 && new_lines && self.log_follow {
-                            row.response.scroll_to_me(Some(egui::Align::TOP));
-                        }
-                    }
-                });
-                // The user scrolled away from the top (the newest lines):
-                // stop following until they come back to the top.
-                self.log_follow = out.state.clamped_offset().y <= 1.0;
-                self.log_len_seen = self.log_lines.len();
             });
-        });
 
         // --- Header (SPEC §3: 60px) ---
         // Brand (316px, aligned with the sidebar) | the 4-step stepper |
@@ -2212,10 +2323,20 @@ impl eframe::App for CaptionStudioApp {
                         egui::vec2(316.0, 60.0),
                         egui::Layout::left_to_right(egui::Align::Center),
                         |ui| {
-                            ui.add(crate::icons::image_sized("vmax-mark", egui::vec2(32.0, 24.0), t.text));
+                            ui.add(crate::icons::image_sized(
+                                "vmax-mark",
+                                egui::vec2(32.0, 24.0),
+                                t.text,
+                            ));
                             ui.vertical(|ui| {
-                                ui.label(crate::theme::heading("Caption Studio", crate::theme::SECTION));
-                                ui.label(crate::theme::label_text("Batch image translator", crate::theme::CAPTION));
+                                ui.label(crate::theme::heading(
+                                    "Caption Studio",
+                                    crate::theme::SECTION,
+                                ));
+                                ui.label(crate::theme::label_text(
+                                    "Batch image translator",
+                                    crate::theme::CAPTION,
+                                ));
                             });
                         },
                     );
@@ -2256,182 +2377,211 @@ impl eframe::App for CaptionStudioApp {
             .exact_size(316.0)
             .resizable(false)
             .show(ui, |ui| {
-            ui.add_enabled_ui(!modal_open, |ui| {
-                // No outer ScrollArea: the fixed sections fit (tuning starts
-                // collapsed), so nothing here needs to scroll at the default
-                // size.
-                if let Some(e) = &self.ocr_error {
-                    ui.colored_label(crate::theme::Tokens::get(ui.ctx()).danger, format!("OCR failed to start — restart the app to retry. ({e})"));
-                } else if !self.ocr_ready {
-                    ui.label("Warming up OCR engine…");
-                }
-                ui.separator();
+                ui.add_enabled_ui(!modal_open, |ui| {
+                    // No outer ScrollArea: the fixed sections fit (tuning starts
+                    // collapsed), so nothing here needs to scroll at the default
+                    // size.
+                    if let Some(e) = &self.ocr_error {
+                        ui.colored_label(
+                            crate::theme::Tokens::get(ui.ctx()).danger,
+                            format!("OCR failed to start — restart the app to retry. ({e})"),
+                        );
+                    } else if !self.ocr_ready {
+                        ui.label("Warming up OCR engine…");
+                    }
+                    ui.separator();
 
-                // Source & Output card (SPEC §2): path rows with the tail
-                // shown + full path on hover, 36px browse buttons; the font
-                // field stays editable (short values, placeholder for the
-                // accepted extensions); the sizing select's popup opens
-                // UPWARD so it never covers the OCR card below (defect 1).
-                sidebar_card(ui, "SOURCE & OUTPUT", |ui| {
-                    if path_row(ui, "Input folder", &self.input_dir).clicked() {
-                        self.browse_input();
-                    }
-                    ui.add_space(8.0);
-                    if path_row(ui, "Output folder", &self.output_dir).clicked() {
-                        self.browse_output();
-                    }
-                    ui.add_space(8.0);
-                    let font_label = ui
-                        .label(crate::theme::label_text("Custom font (optional)", crate::theme::LABEL))
-                        .id;
-                    ui.horizontal(|ui| {
-                        let resp = ui
-                            .add(
-                                egui::TextEdit::singleline(&mut self.font_path)
-                                    .hint_text(".ttf  .otf  .ttc")
-                                    .desired_width(ui.available_width() - 36.0 - ui.spacing().item_spacing.x),
-                            )
-                            .labelled_by(font_label);
-                        focus_ring(ui, &resp);
-                        let path = self.font_path.clone();
-                        if !path.is_empty() {
-                            resp.on_hover_text(path);
+                    // Source & Output card (SPEC §2): path rows with the tail
+                    // shown + full path on hover, 36px browse buttons; the font
+                    // field stays editable (short values, placeholder for the
+                    // accepted extensions); the sizing select's popup opens
+                    // UPWARD so it never covers the OCR card below (defect 1).
+                    sidebar_card(ui, "SOURCE & OUTPUT", |ui| {
+                        if path_row(ui, "Input folder", &self.input_dir).clicked() {
+                            self.browse_input();
                         }
-                        let browse = crate::icons::button_box(ui, "folder", 36.0, false, "Browse for font file");
-                        focus_ring(ui, &browse);
-                        if browse.clicked() {
-                            self.browse_font();
+                        ui.add_space(8.0);
+                        if path_row(ui, "Output folder", &self.output_dir).clicked() {
+                            self.browse_output();
                         }
-                    });
-                    ui.add_space(8.0);
-                    ui.label(crate::theme::label_text("Font sizing", crate::theme::LABEL));
-                    let sizing_btn = ui.add_sized(
-                        egui::vec2(ui.available_width(), 36.0),
-                        egui::Button::new(format!("{} ▾", self.sizing.label())),
-                    );
-                    focus_ring(ui, &sizing_btn);
-                    let mut picked: Option<crate::model::SizingMode> = None;
-                    egui::Popup::menu(&sizing_btn)
-                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                        // Defect 1: the old ComboBox opened downward and
-                        // covered the OCR Thresholds card. This popup opens
-                        // upward (its bottom edge at the button's top edge)
-                        // on the top layer, falling back to downward only
-                        // when it doesn't fit above.
-                        .align(egui::RectAlign::TOP_START)
-                        .align_alternatives(&[egui::RectAlign::BOTTOM_START])
-                        .show(|ui| {
-                            for mode in crate::model::SizingMode::all() {
-                                if ui.selectable_value(&mut self.sizing, mode, mode.label()).clicked() {
-                                    picked = Some(mode);
-                                    egui::Popup::close_id(
-                                        ui.ctx(),
-                                        egui::Popup::default_response_id(&sizing_btn),
-                                    );
-                                }
+                        ui.add_space(8.0);
+                        let font_label = ui
+                            .label(crate::theme::label_text(
+                                "Custom font (optional)",
+                                crate::theme::LABEL,
+                            ))
+                            .id;
+                        ui.horizontal(|ui| {
+                            let resp = ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut self.font_path)
+                                        .hint_text(".ttf  .otf  .ttc")
+                                        .desired_width(
+                                            ui.available_width()
+                                                - 36.0
+                                                - ui.spacing().item_spacing.x,
+                                        ),
+                                )
+                                .labelled_by(font_label);
+                            focus_ring(ui, &resp);
+                            let path = self.font_path.clone();
+                            if !path.is_empty() {
+                                resp.on_hover_text(path);
+                            }
+                            let browse = crate::icons::button_box(
+                                ui,
+                                "folder",
+                                36.0,
+                                false,
+                                "Browse for font file",
+                            );
+                            focus_ring(ui, &browse);
+                            if browse.clicked() {
+                                self.browse_font();
                             }
                         });
-                    if let Some(mode) = picked {
-                        self.sizing = mode;
-                        self.save_settings();
-                        self.preview_key.clear();
-                    }
-                });
-                ui.add_space(12.0);
-
-                // OCR Thresholds card (SPEC §2): always visible; two
-                // sliders with mono value outputs; dragging schedules a
-                // debounced (50 ms) instant re-filter — no Apply button
-                // anymore. Reset restores .60/12; Inspect boxes switches
-                // the stage to OCR mode.
-                sidebar_card(ui, "OCR THRESHOLDS", |ui| {
-                    ui.label(crate::theme::label_text("Minimum confidence", crate::theme::LABEL));
-                    ui.horizontal(|ui| {
-                        let slider_w = (ui.available_width() - 52.0).max(60.0);
-                        let conf_resp = ui.add_sized(
-                            egui::vec2(slider_w, 28.0),
-                            egui::Slider::new(&mut self.conf, 0.0..=1.0)
-                                .step_by(0.01)
-                                .show_value(false),
+                        ui.add_space(8.0);
+                        ui.label(crate::theme::label_text("Font sizing", crate::theme::LABEL));
+                        let sizing_btn = ui.add_sized(
+                            egui::vec2(ui.available_width(), 36.0),
+                            egui::Button::new(format!("{} ▾", self.sizing.label())),
                         );
-                        focus_ring(ui, &conf_resp);
-                        ui.monospace(format!("{:.2}", self.conf));
-                        if conf_resp.changed() && self.extracted.is_some() {
-                            self.thresholds_changed_at = Some(std::time::Instant::now());
-                            ui.ctx()
-                                .request_repaint_after(std::time::Duration::from_millis(60));
-                        }
-                    });
-                    ui.add_space(4.0);
-                    ui.label(crate::theme::label_text("Minimum text length", crate::theme::LABEL));
-                    ui.horizontal(|ui| {
-                        let slider_w = (ui.available_width() - 52.0).max(60.0);
-                        let min_resp = ui.add_sized(
-                            egui::vec2(slider_w, 28.0),
-                            egui::Slider::new(&mut self.minchars, 1..=40).show_value(false),
-                        );
-                        focus_ring(ui, &min_resp);
-                        ui.monospace(format!("{}", self.minchars));
-                        if min_resp.changed() && self.extracted.is_some() {
-                            self.thresholds_changed_at = Some(std::time::Instant::now());
-                            ui.ctx()
-                                .request_repaint_after(std::time::Duration::from_millis(60));
-                        }
-                    });
-                    ui.add_space(4.0);
-                    ui.label(crate::theme::label_text(
-                        "Changes apply instantly to the preview.",
-                        crate::theme::CAPTION,
-                    ));
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        if icon_text_button(ui, "rotate-ccw", "Reset").clicked() {
-                            self.conf = crate::model::default_conf();
-                            self.minchars = crate::model::default_minchars();
+                        focus_ring(ui, &sizing_btn);
+                        let mut picked: Option<crate::model::SizingMode> = None;
+                        egui::Popup::menu(&sizing_btn)
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                            // Defect 1: the old ComboBox opened downward and
+                            // covered the OCR Thresholds card. This popup opens
+                            // upward (its bottom edge at the button's top edge)
+                            // on the top layer, falling back to downward only
+                            // when it doesn't fit above.
+                            .align(egui::RectAlign::TOP_START)
+                            .align_alternatives(&[egui::RectAlign::BOTTOM_START])
+                            .show(|ui| {
+                                for mode in crate::model::SizingMode::all() {
+                                    if ui
+                                        .selectable_value(&mut self.sizing, mode, mode.label())
+                                        .clicked()
+                                    {
+                                        picked = Some(mode);
+                                        egui::Popup::close_id(
+                                            ui.ctx(),
+                                            egui::Popup::default_response_id(&sizing_btn),
+                                        );
+                                    }
+                                }
+                            });
+                        if let Some(mode) = picked {
+                            self.sizing = mode;
                             self.save_settings();
-                            if self.extracted.is_some() {
+                            self.preview_key.clear();
+                        }
+                    });
+                    ui.add_space(12.0);
+
+                    // OCR Thresholds card (SPEC §2): always visible; two
+                    // sliders with mono value outputs; dragging schedules a
+                    // debounced (50 ms) instant re-filter — no Apply button
+                    // anymore. Reset restores .60/12; Inspect boxes switches
+                    // the stage to OCR mode.
+                    sidebar_card(ui, "OCR THRESHOLDS", |ui| {
+                        ui.label(crate::theme::label_text(
+                            "Minimum confidence",
+                            crate::theme::LABEL,
+                        ));
+                        ui.horizontal(|ui| {
+                            let slider_w = (ui.available_width() - 52.0).max(60.0);
+                            let conf_resp = ui.add_sized(
+                                egui::vec2(slider_w, 28.0),
+                                egui::Slider::new(&mut self.conf, 0.0..=1.0)
+                                    .step_by(0.01)
+                                    .show_value(false),
+                            );
+                            focus_ring(ui, &conf_resp);
+                            ui.monospace(format!("{:.2}", self.conf));
+                            if conf_resp.changed() && self.extracted.is_some() {
                                 self.thresholds_changed_at = Some(std::time::Instant::now());
                                 ui.ctx()
                                     .request_repaint_after(std::time::Duration::from_millis(60));
                             }
-                        }
-                        if icon_text_button(ui, "search", "Inspect boxes").clicked() {
-                            self.preview_mode = PreviewMode::Ocr;
-                            self.tab = Tab::Preview;
-                            self.preview_key.clear();
-                        }
-                    });
-                });
-                ui.add_space(12.0);
-
-                // Project card (SPEC §2): the 2×2 grid, now complete —
-                // Scan again joins Save / Load / Open output. Scan again
-                // with edits asks first (confirm modal, §9 copy); without
-                // edits it scans straight away.
-                sidebar_card(ui, "PROJECT", |ui| {
-                    egui::Grid::new("project_grid").num_columns(2).spacing([8.0, 8.0]).show(ui, |ui| {
-                        if icon_text_button(ui, "save", "Save captions").clicked() {
-                            self.save_full_json();
-                        }
-                        if icon_text_button(ui, "folder-open", "Load captions").clicked() {
-                            self.load_full_json();
-                        }
-                        ui.end_row();
-                        if icon_text_button(ui, "scan", "Scan again").clicked() {
-                            if self.has_translations() {
-                                self.confirm_rescan = true;
-                            } else {
-                                self.start_extract();
+                        });
+                        ui.add_space(4.0);
+                        ui.label(crate::theme::label_text(
+                            "Minimum text length",
+                            crate::theme::LABEL,
+                        ));
+                        ui.horizontal(|ui| {
+                            let slider_w = (ui.available_width() - 52.0).max(60.0);
+                            let min_resp = ui.add_sized(
+                                egui::vec2(slider_w, 28.0),
+                                egui::Slider::new(&mut self.minchars, 1..=40).show_value(false),
+                            );
+                            focus_ring(ui, &min_resp);
+                            ui.monospace(format!("{}", self.minchars));
+                            if min_resp.changed() && self.extracted.is_some() {
+                                self.thresholds_changed_at = Some(std::time::Instant::now());
+                                ui.ctx()
+                                    .request_repaint_after(std::time::Duration::from_millis(60));
                             }
-                        }
-                        if icon_text_button(ui, "folder-open", "Open output").clicked() {
-                            self.open_output_folder();
-                        }
-                        ui.end_row();
+                        });
+                        ui.add_space(4.0);
+                        ui.label(crate::theme::label_text(
+                            "Changes apply instantly to the preview.",
+                            crate::theme::CAPTION,
+                        ));
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            if icon_text_button(ui, "rotate-ccw", "Reset").clicked() {
+                                self.conf = crate::model::default_conf();
+                                self.minchars = crate::model::default_minchars();
+                                self.save_settings();
+                                if self.extracted.is_some() {
+                                    self.thresholds_changed_at = Some(std::time::Instant::now());
+                                    ui.ctx().request_repaint_after(
+                                        std::time::Duration::from_millis(60),
+                                    );
+                                }
+                            }
+                            if icon_text_button(ui, "search", "Inspect boxes").clicked() {
+                                self.preview_mode = PreviewMode::Ocr;
+                                self.tab = Tab::Preview;
+                                self.preview_key.clear();
+                            }
+                        });
+                    });
+                    ui.add_space(12.0);
+
+                    // Project card (SPEC §2): the 2×2 grid, now complete —
+                    // Scan again joins Save / Load / Open output. Scan again
+                    // with edits asks first (confirm modal, §9 copy); without
+                    // edits it scans straight away.
+                    sidebar_card(ui, "PROJECT", |ui| {
+                        egui::Grid::new("project_grid")
+                            .num_columns(2)
+                            .spacing([8.0, 8.0])
+                            .show(ui, |ui| {
+                                if icon_text_button(ui, "save", "Save captions").clicked() {
+                                    self.save_full_json();
+                                }
+                                if icon_text_button(ui, "folder-open", "Load captions").clicked() {
+                                    self.load_full_json();
+                                }
+                                ui.end_row();
+                                if icon_text_button(ui, "scan", "Scan again").clicked() {
+                                    if self.has_translations() {
+                                        self.confirm_rescan = true;
+                                    } else {
+                                        self.start_extract();
+                                    }
+                                }
+                                if icon_text_button(ui, "folder-open", "Open output").clicked() {
+                                    self.open_output_folder();
+                                }
+                                ui.end_row();
+                            });
                     });
                 });
             });
-        });
 
         // --- Inspector (right column, SPEC §3: fixed 380px) ---
         // The Detected Blocks list moved out of the Preview tab: the stage
@@ -2442,43 +2592,35 @@ impl eframe::App for CaptionStudioApp {
             .exact_size(380.0)
             .resizable(false)
             .show(ui, |ui| {
-            ui.add_enabled_ui(!modal_open, |ui| {
-                ui.label(crate::theme::heading("Detected Blocks", crate::theme::CARD));
-                let copy_resp = ui.small_button("Copy block list");
-                focus_ring(ui, &copy_resp);
-                if copy_resp.clicked() {
-                    match arboard::Clipboard::new()
-                        .and_then(|mut cb| cb.set_text(self.verify_text.clone()))
-                    {
-                        Ok(()) => {
-                            self.status = "Block list copied to clipboard.".into()
-                        }
-                        Err(_) => {
-                            self.status =
-                                "Couldn't copy the block list — try again.".into()
+                ui.add_enabled_ui(!modal_open, |ui| {
+                    ui.label(crate::theme::heading("Detected Blocks", crate::theme::CARD));
+                    let copy_resp = ui.small_button("Copy block list");
+                    focus_ring(ui, &copy_resp);
+                    if copy_resp.clicked() {
+                        match arboard::Clipboard::new()
+                            .and_then(|mut cb| cb.set_text(self.verify_text.clone()))
+                        {
+                            Ok(()) => self.status = "Block list copied to clipboard.".into(),
+                            Err(_) => {
+                                self.status = "Couldn't copy the block list — try again.".into()
+                            }
                         }
                     }
-                }
-                // Block cards (editable translations, Keep/Filter toggles,
-                // fit indicator), so a card can be clicked to highlight its
-                // box. When there is no entry yet (no scan, no JSON), the
-                // guidance text stays.
-                let entry = self.preview_entry.clone();
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    match &entry {
-                        Some(entry)
-                            if !entry.blocks.is_empty()
-                                || !entry.dropped.is_empty() =>
-                        {
+                    // Block cards (editable translations, Keep/Filter toggles,
+                    // fit indicator), so a card can be clicked to highlight its
+                    // box. When there is no entry yet (no scan, no JSON), the
+                    // guidance text stays.
+                    let entry = self.preview_entry.clone();
+                    egui::ScrollArea::vertical().show(ui, |ui| match &entry {
+                        Some(entry) if !entry.blocks.is_empty() || !entry.dropped.is_empty() => {
                             self.show_block_cards(ui, entry);
                         }
                         _ => {
                             ui.monospace(&self.verify_text);
                         }
-                    }
+                    });
                 });
             });
-        });
 
         // --- Right column: tabbed workspace ---
         // The central workspace sits on `canvas` (the main reading surface),
@@ -2764,7 +2906,6 @@ impl eframe::App for CaptionStudioApp {
             });
         });
     }
-
 }
 
 /// Step the selection within a (possibly filtered) name list, wrapping.
@@ -2797,7 +2938,11 @@ fn step_preview(current: &mut String, names: &[String], delta: i32) {
 /// A segmented control (mockup `.seg`): adjacent buttons, the selected one
 /// solid accent with white text, the rest card with a border. Returns the
 /// picked value, if the user clicked one.
-fn segmented<T: PartialEq + Copy>(ui: &mut egui::Ui, current: T, options: &[(T, &str)]) -> Option<T> {
+fn segmented<T: PartialEq + Copy>(
+    ui: &mut egui::Ui,
+    current: T,
+    options: &[(T, &str)],
+) -> Option<T> {
     let t = crate::theme::Tokens::get(ui.ctx());
     let mut picked = None;
     ui.horizontal(|ui| {
@@ -2809,14 +2954,27 @@ fn segmented<T: PartialEq + Copy>(ui: &mut egui::Ui, current: T, options: &[(T, 
             let radius = if n == 1 {
                 egui::CornerRadius::same(r)
             } else if i == 0 {
-                egui::CornerRadius { nw: r, ne: 0, sw: r, se: 0 }
+                egui::CornerRadius {
+                    nw: r,
+                    ne: 0,
+                    sw: r,
+                    se: 0,
+                }
             } else if i == n - 1 {
-                egui::CornerRadius { nw: 0, ne: r, sw: 0, se: r }
+                egui::CornerRadius {
+                    nw: 0,
+                    ne: r,
+                    sw: 0,
+                    se: r,
+                }
             } else {
                 egui::CornerRadius::ZERO
             };
-            let text = egui::RichText::new(*label)
-                .color(if selected { egui::Color32::WHITE } else { t.text });
+            let text = egui::RichText::new(*label).color(if selected {
+                egui::Color32::WHITE
+            } else {
+                t.text
+            });
             let btn = egui::Button::new(text)
                 .fill(if selected { t.accent } else { t.card })
                 .stroke(if selected {
@@ -2843,7 +3001,11 @@ fn status_chip(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
         .corner_radius(egui::CornerRadius::same(4))
         .inner_margin(egui::Margin::symmetric(6, 2));
     frame.show(ui, |ui| {
-        ui.label(egui::RichText::new(text).size(crate::theme::CAPTION).color(color));
+        ui.label(
+            egui::RichText::new(text)
+                .size(crate::theme::CAPTION)
+                .color(color),
+        );
     });
 }
 
@@ -2872,7 +3034,11 @@ fn file_status(entry: &crate::model::ImageEntry, rendered: bool, failed: bool) -
     if entry.blocks.iter().all(|b| !b.kept()) {
         return FileStatus::NoText;
     }
-    if entry.blocks.iter().any(|b| b.kept() && b.new_text.trim().is_empty()) {
+    if entry
+        .blocks
+        .iter()
+        .any(|b| b.kept() && b.new_text.trim().is_empty())
+    {
         return FileStatus::Untranslated;
     }
     FileStatus::Ready
@@ -3026,7 +3192,10 @@ fn filter_file_names<'a>(names: &'a [String], query: &str) -> Vec<&'a String> {
     if q.is_empty() {
         return names.iter().collect();
     }
-    names.iter().filter(|n| n.to_lowercase().contains(&q)).collect()
+    names
+        .iter()
+        .filter(|n| n.to_lowercase().contains(&q))
+        .collect()
 }
 
 /// Natural ordering for file names: digit runs compare by value, so
@@ -3119,16 +3288,18 @@ fn step_button(
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 40.0), egui::Sense::click());
     let resp = resp.accessible_name(format!("Step {number}: {label}, {subtitle}"));
     let painter = ui.painter_at(rect);
-    let bg = if resp.hovered() {
-        t.hover
-    } else {
-        t.card
-    };
+    let bg = if resp.hovered() { t.hover } else { t.card };
     let border = match state {
         StepState::Current => t.accent,
         _ => t.card_border,
     };
-    painter.rect(rect, t.radius_sm, bg, egui::Stroke::new(1.0, border), egui::StrokeKind::Inside);
+    painter.rect(
+        rect,
+        t.radius_sm,
+        bg,
+        egui::Stroke::new(1.0, border),
+        egui::StrokeKind::Inside,
+    );
     let circle_center = egui::pos2(rect.min.x + 21.0, rect.center().y);
     let (circle_fill, circle_text) = match state {
         StepState::Done => (t.ok, egui::Color32::BLACK),
@@ -3265,7 +3436,11 @@ fn path_row(ui: &mut egui::Ui, label: &str, path: &str) -> egui::Response {
                         ui.label(
                             egui::RichText::new(shown)
                                 .font(egui::FontId::proportional(crate::theme::BODY))
-                                .color(if path.is_empty() { t.text_faint } else { t.text }),
+                                .color(if path.is_empty() {
+                                    t.text_faint
+                                } else {
+                                    t.text
+                                }),
                         );
                     },
                 );
@@ -3283,7 +3458,11 @@ fn path_row(ui: &mut egui::Ui, label: &str, path: &str) -> egui::Response {
 
 fn icon_text_button(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Response {
     let t = crate::theme::Tokens::get(ui.ctx());
-    let tint = if ui.is_enabled() { t.text } else { t.text_faint };
+    let tint = if ui.is_enabled() {
+        t.text
+    } else {
+        t.text_faint
+    };
     let image = crate::icons::image(icon, crate::theme::ControlSize::Small.icon(), tint);
     let resp = ui.add(egui::Button::image_and_text(image, label));
     focus_ring(ui, &resp);
@@ -3294,10 +3473,23 @@ fn icon_text_button(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Respons
 /// steps (Scan, Render, "Verify in Preview") get this so they read as the
 /// thing to do, not as one more secondary button. `full_width` makes it the
 /// panel's full width at the default control height (Scan and Render).
-fn primary_icon_text_button(ui: &mut egui::Ui, icon: &str, label: &str, full_width: bool) -> egui::Response {
+fn primary_icon_text_button(
+    ui: &mut egui::Ui,
+    icon: &str,
+    label: &str,
+    full_width: bool,
+) -> egui::Response {
     let t = crate::theme::Tokens::get(ui.ctx());
-    let size = if full_width { crate::theme::ControlSize::Medium } else { crate::theme::ControlSize::Small };
-    let tint = if ui.is_enabled() { egui::Color32::WHITE } else { t.text_faint };
+    let size = if full_width {
+        crate::theme::ControlSize::Medium
+    } else {
+        crate::theme::ControlSize::Small
+    };
+    let tint = if ui.is_enabled() {
+        egui::Color32::WHITE
+    } else {
+        t.text_faint
+    };
     let image = crate::icons::image(icon, size.icon(), tint);
     let button = egui::Button::image_and_text(image, label).fill(t.accent);
     let resp = if full_width {
@@ -3344,7 +3536,15 @@ fn json_highlight_job(text: &str, t: &crate::theme::Tokens) -> egui::text::Layou
     let font = egui::FontId::monospace(crate::theme::CODE);
     let mut job = LayoutJob::default();
     let push = |job: &mut LayoutJob, s: &str, color: egui::Color32| {
-        job.append(s, 0.0, TextFormat { font_id: font.clone(), color, ..Default::default() });
+        job.append(
+            s,
+            0.0,
+            TextFormat {
+                font_id: font.clone(),
+                color,
+                ..Default::default()
+            },
+        );
     };
     let bytes = text.as_bytes();
     let n = bytes.len();
@@ -3427,8 +3627,14 @@ fn json_highlight_job(text: &str, t: &crate::theme::Tokens) -> egui::text::Layou
                 // ends mid-character.
                 let start = i;
                 loop {
-                    let Some(ch) = text[i..].chars().next() else { break };
-                    if matches!(ch, '"' | '{' | '}' | '[' | ']' | ':' | ',' | '-' | 't' | 'f' | 'n') || ch.is_ascii_digit() {
+                    let Some(ch) = text[i..].chars().next() else {
+                        break;
+                    };
+                    if matches!(
+                        ch,
+                        '"' | '{' | '}' | '[' | ']' | ':' | ',' | '-' | 't' | 'f' | 'n'
+                    ) || ch.is_ascii_digit()
+                    {
                         break;
                     }
                     i += ch.len_utf8();
@@ -3471,7 +3677,8 @@ mod tests {
     #[test]
     fn json_highlight_colours_keys_values_numbers_and_empty_strings() {
         let t = crate::theme::Tokens::for_kind(crate::theme::ThemeKind::Studio);
-        let text = "{\n  \"meme.png\": {\n    \"0\": \"Hello\",\n    \"1\": \"\",\n    \"2\": 42\n  }\n}";
+        let text =
+            "{\n  \"meme.png\": {\n    \"0\": \"Hello\",\n    \"1\": \"\",\n    \"2\": 42\n  }\n}";
         let job = json_highlight_job(text, &t);
         // The job covers the whole input, section by section, with no gaps.
         assert_eq!(job.text, text);
@@ -3541,17 +3748,35 @@ mod tests {
             }
         }
         // Failed wins over rendered.
-        assert_eq!(file_status(&entry(vec![("one", "uno")]), true, true), FileStatus::Failed);
-        assert_eq!(file_status(&entry(vec![("one", "uno")]), true, false), FileStatus::Rendered);
+        assert_eq!(
+            file_status(&entry(vec![("one", "uno")]), true, true),
+            FileStatus::Failed
+        );
+        assert_eq!(
+            file_status(&entry(vec![("one", "uno")]), true, false),
+            FileStatus::Rendered
+        );
         // No blocks at all: no text (even unrendered).
-        assert_eq!(file_status(&entry(vec![]), false, false), FileStatus::NoText);
+        assert_eq!(
+            file_status(&entry(vec![]), false, false),
+            FileStatus::NoText
+        );
         // A block with no translation yet.
-        assert_eq!(file_status(&entry(vec![("one", "")]), false, false), FileStatus::Untranslated);
+        assert_eq!(
+            file_status(&entry(vec![("one", "")]), false, false),
+            FileStatus::Untranslated
+        );
         // All translated, not rendered: ready.
-        assert_eq!(file_status(&entry(vec![("one", "uno")]), false, false), FileStatus::Ready);
+        assert_eq!(
+            file_status(&entry(vec![("one", "uno")]), false, false),
+            FileStatus::Ready
+        );
         // A translation equal to the original still counts as translated
         // for the chip (it is not empty); the render copies it unchanged.
-        assert_eq!(file_status(&entry(vec![("one", "one")]), false, false), FileStatus::Ready);
+        assert_eq!(
+            file_status(&entry(vec![("one", "one")]), false, false),
+            FileStatus::Ready
+        );
         // A block the user filtered out needs no translation: the file
         // reads as "no text", not "untranslated".
         let mut e = entry(vec![("one", "")]);
@@ -3561,7 +3786,11 @@ mod tests {
 
     #[test]
     fn step_in_names_wraps_and_ignores_an_empty_list() {
-        let names = vec!["b.jpg".to_string(), "a.jpg".to_string(), "c.jpg".to_string()];
+        let names = vec![
+            "b.jpg".to_string(),
+            "a.jpg".to_string(),
+            "c.jpg".to_string(),
+        ];
         let refs: Vec<&String> = names.iter().collect();
         let mut cur = "c.jpg".to_string();
         step_in_names(&mut cur, &refs, 1);
@@ -3610,7 +3839,13 @@ mod tests {
         names.sort_by(|a, b| natural_cmp(a, b));
         assert_eq!(
             names,
-            vec!["1 of 75.png", "2 of 75.png", "9 of 75.png", "10 of 75.png", "13 of 75.png"]
+            vec![
+                "1 of 75.png",
+                "2 of 75.png",
+                "9 of 75.png",
+                "10 of 75.png",
+                "13 of 75.png"
+            ]
         );
         // Leading zeros tie-break, non-digit runs stay lexicographic.
         assert_eq!(natural_cmp("01.jpg", "1.jpg"), std::cmp::Ordering::Greater);
@@ -3651,14 +3886,22 @@ mod tests {
         assert_eq!(wf.current, WorkflowStep::Scan);
         assert_eq!(
             wf.states,
-            [StepState::Current, StepState::Todo, StepState::Todo, StepState::Todo]
+            [
+                StepState::Current,
+                StepState::Todo,
+                StepState::Todo,
+                StepState::Todo
+            ]
         );
         assert_eq!(wf.subtitles[0], "No images yet");
         // Scanned, one of three translated (a translation equal to the
         // original does NOT count): Translate is current.
         let data = crate::model::ExtractedData {
             images: vec![
-                entry("a.png", vec![("one", "uno"), ("two", ""), ("three", "three")]),
+                entry(
+                    "a.png",
+                    vec![("one", "uno"), ("two", ""), ("three", "three")],
+                ),
                 entry("b.png", vec![]),
             ],
         };
@@ -3666,7 +3909,12 @@ mod tests {
         assert_eq!(wf.current, WorkflowStep::Translate);
         assert_eq!(
             wf.states,
-            [StepState::Done, StepState::Current, StepState::Todo, StepState::Todo]
+            [
+                StepState::Done,
+                StepState::Current,
+                StepState::Todo,
+                StepState::Todo
+            ]
         );
         assert_eq!(wf.subtitles[1], "1 of 3 translated");
         assert_eq!(wf.subtitles[2], "1 unchanged");
@@ -3687,7 +3935,12 @@ mod tests {
         assert_eq!(wf.current, WorkflowStep::Render);
         assert_eq!(
             wf.states,
-            [StepState::Done, StepState::Done, StepState::Done, StepState::Current]
+            [
+                StepState::Done,
+                StepState::Done,
+                StepState::Done,
+                StepState::Current
+            ]
         );
         assert_eq!(wf.subtitles[3], "1 rendered · 1 failed");
     }
