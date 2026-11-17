@@ -520,12 +520,19 @@ impl CaptionStudioApp {
         derive_workflow_state(self.resolved_data().as_ref(), self.render_summary)
     }
 
-    /// The header primary for the current step (SPEC §2): Scan Images →
-    /// Review in Preview → Render N images. Translate's primary goes to
-    /// Review (and jumps to the first file with an untranslated block).
-    /// Once every step is done the workflow is complete, so the primary
-    /// becomes "Open Output Folder" — the next thing to do — instead of
-    /// pointing back at Review or offering another render.
+    /// The header primary for the current step (SPEC §2). Once there is
+    /// scanned data the primary is the final action — "Render N Images" —
+    /// and it is NOT gated on every block being translated. Rendering
+    /// leaves untranslated blocks untouched (their original text stays,
+    /// render.rs), and start_render asks "Render anyway?" when nothing
+    /// differs, so there is no reason to hide the final action behind
+    /// 100% translation. The old gate ("Review in Preview" until all
+    /// blocks were translated) meant the render button never appeared
+    /// until every block was translated, and there was no other render
+    /// button anywhere — so a user who had scanned but not yet
+    /// translated could not render at all. The stepper still shows the
+    /// true workflow status (Translate current, "N of M translated");
+    /// the primary is the action, not the status.
     fn header_primary(&self) -> (&'static str, String) {
         let wf = self.workflow_state();
         if wf.states.iter().all(|s| matches!(s, StepState::Done)) {
@@ -533,14 +540,17 @@ impl CaptionStudioApp {
         }
         match wf.current {
             WorkflowStep::Scan => ("scan", "Scan Images".to_string()),
-            WorkflowStep::Translate => ("eye", "Review in Preview".to_string()),
-            WorkflowStep::Review | WorkflowStep::Render => {
+            WorkflowStep::Translate | WorkflowStep::Review | WorkflowStep::Render => {
                 ("play", format!("Render {} Images", wf.images))
             }
         }
     }
 
-    /// Run the header primary's action for the current step.
+    /// Run the header primary's action for the current step. Once there
+    /// is scanned data the action is Render (see header_primary) — the
+    /// old Translate branch jumped to the Preview tab and the first
+    /// untranslated file, which the "Live Preview & OCR Check" tab and
+    /// the file list's "Needs Text" chips now cover.
     fn run_header_primary(&mut self) {
         if self
             .workflow_state()
@@ -553,30 +563,9 @@ impl CaptionStudioApp {
         }
         match self.workflow_state().current {
             WorkflowStep::Scan => self.start_extract(),
-            WorkflowStep::Translate => {
-                self.tab = Tab::Preview;
-                // Jump to the first file with an untranslated block.
-                if let Ok((data, _, _)) = self.resolve_editor() {
-                    if let Some(entry) = data.images.iter().find(|e| {
-                        e.blocks.iter().any(|b| {
-                            let t = b.new_text.trim();
-                            t.is_empty() || t == b.original_text.trim()
-                        })
-                    }) {
-                        self.set_preview_file(entry.file.clone());
-                    }
-                } else if let Some(data) = &self.extracted {
-                    if let Some(entry) = data.images.iter().find(|e| {
-                        e.blocks.iter().any(|b| {
-                            let t = b.new_text.trim();
-                            t.is_empty() || t == b.original_text.trim()
-                        })
-                    }) {
-                        self.set_preview_file(entry.file.clone());
-                    }
-                }
+            WorkflowStep::Translate | WorkflowStep::Review | WorkflowStep::Render => {
+                self.start_render()
             }
-            WorkflowStep::Review | WorkflowStep::Render => self.start_render(),
         }
     }
 
