@@ -996,3 +996,66 @@ later Fit shot (08, 09, 10, …) even though the image was at Fit.
   editor stretches with the log closed, the toolbar buttons are one
   height, the file-list rows have breathing room, and the stepper no
   longer acts like a button.
+
+## 22. Build record — round-2 follow-ups, the critic's D1–D4 + C4 (2026-11-17, branch `feature/redesign-handoff`, commit `884f736`)
+
+On his "yes to all" to the five follow-ups surfaced after the round-2
+push. The critic subagent's report (design-critique / ux-copy /
+design-system over the round-2 shots) had confirmed all 20 captured
+and pinned the remaining duplicates; the parent implemented the five
+he approved.
+
+- **A3 — segmented widths + right inset:** the mode group (Original /
+  OCR Boxes / Rendered) and the zoom group (100% / Fit) were
+  label-sized, so widths varied within each group, and both groups sat
+  flush against the central panel's right edge. The `segmented`
+  helper now measures the widest label (button font, `layout_no_wrap`)
+  and gives every button in the group that width plus the button's own
+  horizontal padding; the preview toolbar adds a 12px space at the
+  start of its right-to-left layout so the groups sit inside the
+  toolbar. (The 32px height from §21 stands.)
+- **D1 — "Scan again" removed outright:** it duplicated the header
+  primary "Scan images" (both visible at once). The PROJECT section is
+  now Save / Load on the first row and Open output full-width on the
+  second. Removed with it: the re-scan confirm modal, the
+  `confirm_rescan` field, `has_translations`, and the shot-test's
+  `ModalRescan` shot — the run is now **19 shots**, and shots 15–20
+  renumbered 14–19 (the test is renamed
+  `shot_test_covers_nineteen_named_shots_in_order`). Re-scanning is
+  the header primary's job.
+- **D3 — "Inspect boxes" removed:** verified in code that it only did
+  `preview_mode = Ocr; tab = Preview; preview_key.clear()` — exactly
+  what the toolbar's "OCR Boxes" mode already does. The thresholds
+  section keeps just Reset.
+- **D4 — Paste/Import unified:** the "Import Translated JSON…"
+  top-level button is gone; file import lives inside the paste dialog
+  as "Import from file…" next to "Paste from clipboard". One door for
+  loading translations, source picked inside. `load_translated_file`
+  now returns whether a file was picked, so cancelling the picker
+  leaves the dialog (and any pasted text) alone instead of closing it.
+- **C4 — header primary after render:** once all four steps are Done
+  the primary becomes "Open output" (folder-open icon, calls
+  `open_output_folder`) instead of pointing back at Review or offering
+  another render. A failed render still leaves Render current with
+  "Render N images", so re-render stays available.
+- **F10 caret — still open, mechanism narrowed but unidentified:**
+  pixel analysis of shot 20 rules out a TextEdit caret (the line is
+  solid grey 128, 2px wide; egui's default text cursor is light blue
+  192,222,255, and no TextEdit holds focus in the shot-test — the
+  filter and font fields show no caret) and rules out the scrollbar
+  (different x and colour, content doesn't overflow). The Label draws
+  no caret and the focus ring is blue, not grey. No guessed fix was
+  applied; the line only appears in shot 20 (empty image, single-line
+  message ending near the panel's right edge) and not in shot 01 (the
+  same label, two-line guidance text).
+
+- `cargo test` green: **48/48** (the shot-count test updated to 19).
+  Same pre-existing warnings, no new ones. `rustfmt --edition 2021`
+  on `ui.rs` only.
+- NOT pushed — commit `884f736` is 1 ahead of origin; push on his
+  word + a fresh token.
+- His Windows run is the gate: rebuild from the branch, re-run the
+  shot-test (now 19 shots), and confirm the segmented groups are one
+  width with a right inset, "Scan again" / "Inspect boxes" / the
+  Import button are gone, the paste dialog offers file import, and the
+  primary reads "Open output" after a clean render.
