@@ -719,8 +719,46 @@ eframe 0.37; the `__screenshot` feature is only for eframe's own
   The unintended reformat of `fonts.rs` / `image_io.rs` / `inpaint.rs` /
   `ocr.rs` was reverted with `git checkout`; only `ui.rs` + `main.rs`
   carry changes. Format single non-root files only.
-- NOT pushed; push only on his word (a fresh token is needed).
+- PUSHED 2026-11-17 ~17:51 IST (`1e4ede0`, his word + fresh token).
 - His Windows run: rebuild from the branch, then
   `scripts\shot-test.bat <his images folder> [output] [translated JSON]`
   (or the `caption-studio.exe --shot-test ...` command). Upload the
   output folder; the 20 PNGs + `shots.txt` are the review set.
+
+## 18. Build record — log panel close + resize not staying (2026-11-17, branch `feature/redesign-handoff`, commit `92e7a3d`)
+
+His report after running the shot-test: the bottom log panel "isn't
+properly closed in the first place", and dragging it to resize does not
+stay — on release it goes back to the previous size. Diagnosis (read
+egui 0.37 `containers/panel.rs`): the resizable panel persists its size
+in egui's `PanelState`, stored on the release frame only, and the
+mechanism is correct in the library — but in practice the released size
+did not stick for him (and the invisible 5px grab strip is easy to miss
+at 125% scaling, so a drag can also land on the log content instead of
+the handle and do nothing). Rather than debug the persistence from here
+(no GUI on this VM), the height is now App-managed and deterministic.
+
+- The panel uses `.exact_size(self.log_height)` — no `.resizable(true)`,
+  no `.default_size` — so egui's panel state no longer decides the size.
+- New field `log_height: f32` (default 188.0) + a hand-drawn grip strip
+  at the panel's top edge (8px hit area, a 48×3px grip bar, accent on
+  hover/drag, `ResizeVertical` cursor). Drag up/down resizes 64–480px;
+  dragging down past 48px closes the panel (drag-to-close); double-click
+  resets to 188px.
+- Pure `log_height_after_drag(height, delta_y) -> Option<f32>` (`None` =
+  close) + test; the drag handler uses it.
+- `log_height` and `show_log` are now `Settings` fields (`~/.caption_replacer.json`,
+  serde defaults 188.0 / true, so old settings files still load), loaded
+  in `App::new` and written by `save_settings()`. The Close (X), Show
+  log, double-click reset, drag-to-close and drag-stop paths all call
+  `save_settings()`, so the height and the closed state survive a
+  restart.
+- The shot-test is untouched: it sets `show_log` directly, and the
+  panel renders at `log_height` (188px by default).
+- `cargo test` green: **47/47** (was 46; +`log_height_after_drag_resizes_and_closes`).
+  Same pre-existing warnings, no new ones. `rustfmt --edition 2021` on
+  `ui.rs` + `model.rs` only (the crate-root trap from §17 still applies).
+- NOT pushed; push only on his word (a fresh token is needed).
+- A pixel-peep review of the 20 shot-test PNGs (design-critique /
+  ux-copy / design-system, esp. the preview panel) is running in
+  parallel; its findings land in the next build.
