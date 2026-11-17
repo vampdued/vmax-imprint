@@ -1,0 +1,1181 @@
+{
+  "variables": {
+    "templates": [
+      "poster",
+      "bleed",
+      "type"
+    ],
+    "font_sets": [
+      "chakra-plex"
+    ],
+    "font_sets_skipped": {
+      "inter-black": [
+        "InterDisplay-Black.otf",
+        "Inter-Bold.otf",
+        "Inter-Medium.otf"
+      ],
+      "inter-extrabold": [
+        "InterDisplay-ExtraBold.otf",
+        "Inter-SemiBold.otf",
+        "Inter-Regular.otf"
+      ]
+    },
+    "themes": [
+      "midnight",
+      "graphite",
+      "daylight",
+      "max-blue"
+    ],
+    "aspects": {
+      "16x9": [
+        "1920x1080",
+        "1280x720"
+      ],
+      "9x16": [
+        "1080x1920",
+        "720x1280"
+      ],
+      "4x5": [
+        "1080x1350"
+      ],
+      "1x1": [
+        "1080x1080"
+      ],
+      "1.91x1": [
+        "1200x630"
+      ]
+    }
+  },
+  "totals": {
+    "processed": 84,
+    "first_try": 76,
+    "after_retries": 8,
+    "needs_manual_review": 0
+  },
+  "assets": [
+    {
+      "name": "poster/16x9/midnight__chakra-plex__1920x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/16x9/midnight__chakra-plex__1920x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/16x9/midnight__chakra-plex__1280x720",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/16x9/midnight__chakra-plex__1280x720.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/9x16/midnight__chakra-plex__1080x1920",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/9x16/midnight__chakra-plex__1080x1920.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/9x16/midnight__chakra-plex__720x1280",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/9x16/midnight__chakra-plex__720x1280.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/4x5/midnight__chakra-plex__1080x1350",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/4x5/midnight__chakra-plex__1080x1350.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/1x1/midnight__chakra-plex__1080x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/1x1/midnight__chakra-plex__1080x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/1.91x1/midnight__chakra-plex__1200x630",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/1.91x1/midnight__chakra-plex__1200x630.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/16x9/graphite__chakra-plex__1920x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/16x9/graphite__chakra-plex__1920x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/16x9/graphite__chakra-plex__1280x720",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/16x9/graphite__chakra-plex__1280x720.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/9x16/graphite__chakra-plex__1080x1920",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/9x16/graphite__chakra-plex__1080x1920.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/9x16/graphite__chakra-plex__720x1280",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/9x16/graphite__chakra-plex__720x1280.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/4x5/graphite__chakra-plex__1080x1350",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/4x5/graphite__chakra-plex__1080x1350.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/1x1/graphite__chakra-plex__1080x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/1x1/graphite__chakra-plex__1080x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/1.91x1/graphite__chakra-plex__1200x630",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/1.91x1/graphite__chakra-plex__1200x630.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/16x9/daylight__chakra-plex__1920x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/16x9/daylight__chakra-plex__1920x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/16x9/daylight__chakra-plex__1280x720",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/16x9/daylight__chakra-plex__1280x720.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/9x16/daylight__chakra-plex__1080x1920",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/9x16/daylight__chakra-plex__1080x1920.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/9x16/daylight__chakra-plex__720x1280",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/9x16/daylight__chakra-plex__720x1280.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/4x5/daylight__chakra-plex__1080x1350",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/4x5/daylight__chakra-plex__1080x1350.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/1x1/daylight__chakra-plex__1080x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/1x1/daylight__chakra-plex__1080x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/1.91x1/daylight__chakra-plex__1200x630",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/1.91x1/daylight__chakra-plex__1200x630.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/16x9/max-blue__chakra-plex__1920x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/16x9/max-blue__chakra-plex__1920x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/16x9/max-blue__chakra-plex__1280x720",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/16x9/max-blue__chakra-plex__1280x720.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/9x16/max-blue__chakra-plex__1080x1920",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/9x16/max-blue__chakra-plex__1080x1920.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/9x16/max-blue__chakra-plex__720x1280",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/9x16/max-blue__chakra-plex__720x1280.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/4x5/max-blue__chakra-plex__1080x1350",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/4x5/max-blue__chakra-plex__1080x1350.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/1x1/max-blue__chakra-plex__1080x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/1x1/max-blue__chakra-plex__1080x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "poster/1.91x1/max-blue__chakra-plex__1200x630",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/poster/1.91x1/max-blue__chakra-plex__1200x630.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/16x9/midnight__chakra-plex__1920x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/16x9/midnight__chakra-plex__1920x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/16x9/midnight__chakra-plex__1280x720",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/16x9/midnight__chakra-plex__1280x720.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/9x16/midnight__chakra-plex__1080x1920",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/9x16/midnight__chakra-plex__1080x1920.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/9x16/midnight__chakra-plex__720x1280",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/9x16/midnight__chakra-plex__720x1280.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/4x5/midnight__chakra-plex__1080x1350",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/4x5/midnight__chakra-plex__1080x1350.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/1x1/midnight__chakra-plex__1080x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/1x1/midnight__chakra-plex__1080x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/1.91x1/midnight__chakra-plex__1200x630",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/1.91x1/midnight__chakra-plex__1200x630.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/16x9/graphite__chakra-plex__1920x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/16x9/graphite__chakra-plex__1920x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/16x9/graphite__chakra-plex__1280x720",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/16x9/graphite__chakra-plex__1280x720.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/9x16/graphite__chakra-plex__1080x1920",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/9x16/graphite__chakra-plex__1080x1920.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/9x16/graphite__chakra-plex__720x1280",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/9x16/graphite__chakra-plex__720x1280.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/4x5/graphite__chakra-plex__1080x1350",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/4x5/graphite__chakra-plex__1080x1350.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/1x1/graphite__chakra-plex__1080x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/1x1/graphite__chakra-plex__1080x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/1.91x1/graphite__chakra-plex__1200x630",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/1.91x1/graphite__chakra-plex__1200x630.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/16x9/daylight__chakra-plex__1920x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/16x9/daylight__chakra-plex__1920x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/16x9/daylight__chakra-plex__1280x720",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/16x9/daylight__chakra-plex__1280x720.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/9x16/daylight__chakra-plex__1080x1920",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/9x16/daylight__chakra-plex__1080x1920.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/9x16/daylight__chakra-plex__720x1280",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/9x16/daylight__chakra-plex__720x1280.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/4x5/daylight__chakra-plex__1080x1350",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/4x5/daylight__chakra-plex__1080x1350.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/1x1/daylight__chakra-plex__1080x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/1x1/daylight__chakra-plex__1080x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/1.91x1/daylight__chakra-plex__1200x630",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/1.91x1/daylight__chakra-plex__1200x630.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/16x9/max-blue__chakra-plex__1920x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/16x9/max-blue__chakra-plex__1920x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/16x9/max-blue__chakra-plex__1280x720",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/16x9/max-blue__chakra-plex__1280x720.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/9x16/max-blue__chakra-plex__1080x1920",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/9x16/max-blue__chakra-plex__1080x1920.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/9x16/max-blue__chakra-plex__720x1280",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/9x16/max-blue__chakra-plex__720x1280.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/4x5/max-blue__chakra-plex__1080x1350",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/4x5/max-blue__chakra-plex__1080x1350.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/1x1/max-blue__chakra-plex__1080x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/1x1/max-blue__chakra-plex__1080x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "bleed/1.91x1/max-blue__chakra-plex__1200x630",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/bleed/1.91x1/max-blue__chakra-plex__1200x630.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/16x9/midnight__chakra-plex__1920x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/16x9/midnight__chakra-plex__1920x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/16x9/midnight__chakra-plex__1280x720",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/16x9/midnight__chakra-plex__1280x720.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/9x16/midnight__chakra-plex__1080x1920",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/9x16/midnight__chakra-plex__1080x1920.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/9x16/midnight__chakra-plex__720x1280",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/9x16/midnight__chakra-plex__720x1280.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/4x5/midnight__chakra-plex__1080x1350",
+      "status": "pass_retry",
+      "attempts": 6,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/4x5/midnight__chakra-plex__1080x1350.jpg",
+      "fixes": [
+        {
+          "retry": 1,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.90x"
+          ]
+        },
+        {
+          "retry": 2,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "density 1: dropped the 'credits' row"
+          ]
+        },
+        {
+          "retry": 3,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.81x"
+          ]
+        },
+        {
+          "retry": 4,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "density 2: dropped the 'film' row"
+          ]
+        },
+        {
+          "retry": 5,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.73x"
+          ]
+        }
+      ],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/1x1/midnight__chakra-plex__1080x1080",
+      "status": "pass_retry",
+      "attempts": 6,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/1x1/midnight__chakra-plex__1080x1080.jpg",
+      "fixes": [
+        {
+          "retry": 1,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.90x"
+          ]
+        },
+        {
+          "retry": 2,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "density 1: dropped the 'credits' row"
+          ]
+        },
+        {
+          "retry": 3,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.81x"
+          ]
+        },
+        {
+          "retry": 4,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "density 2: dropped the 'film' row"
+          ]
+        },
+        {
+          "retry": 5,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.73x"
+          ]
+        }
+      ],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/1.91x1/midnight__chakra-plex__1200x630",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/1.91x1/midnight__chakra-plex__1200x630.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/16x9/graphite__chakra-plex__1920x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/16x9/graphite__chakra-plex__1920x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/16x9/graphite__chakra-plex__1280x720",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/16x9/graphite__chakra-plex__1280x720.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/9x16/graphite__chakra-plex__1080x1920",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/9x16/graphite__chakra-plex__1080x1920.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/9x16/graphite__chakra-plex__720x1280",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/9x16/graphite__chakra-plex__720x1280.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/4x5/graphite__chakra-plex__1080x1350",
+      "status": "pass_retry",
+      "attempts": 6,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/4x5/graphite__chakra-plex__1080x1350.jpg",
+      "fixes": [
+        {
+          "retry": 1,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.90x"
+          ]
+        },
+        {
+          "retry": 2,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "density 1: dropped the 'credits' row"
+          ]
+        },
+        {
+          "retry": 3,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.81x"
+          ]
+        },
+        {
+          "retry": 4,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "density 2: dropped the 'film' row"
+          ]
+        },
+        {
+          "retry": 5,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.73x"
+          ]
+        }
+      ],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/1x1/graphite__chakra-plex__1080x1080",
+      "status": "pass_retry",
+      "attempts": 6,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/1x1/graphite__chakra-plex__1080x1080.jpg",
+      "fixes": [
+        {
+          "retry": 1,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.90x"
+          ]
+        },
+        {
+          "retry": 2,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "density 1: dropped the 'credits' row"
+          ]
+        },
+        {
+          "retry": 3,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.81x"
+          ]
+        },
+        {
+          "retry": 4,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "density 2: dropped the 'film' row"
+          ]
+        },
+        {
+          "retry": 5,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.73x"
+          ]
+        }
+      ],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/1.91x1/graphite__chakra-plex__1200x630",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/1.91x1/graphite__chakra-plex__1200x630.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/16x9/daylight__chakra-plex__1920x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/16x9/daylight__chakra-plex__1920x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/16x9/daylight__chakra-plex__1280x720",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/16x9/daylight__chakra-plex__1280x720.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/9x16/daylight__chakra-plex__1080x1920",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/9x16/daylight__chakra-plex__1080x1920.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/9x16/daylight__chakra-plex__720x1280",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/9x16/daylight__chakra-plex__720x1280.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/4x5/daylight__chakra-plex__1080x1350",
+      "status": "pass_retry",
+      "attempts": 6,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/4x5/daylight__chakra-plex__1080x1350.jpg",
+      "fixes": [
+        {
+          "retry": 1,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.90x"
+          ]
+        },
+        {
+          "retry": 2,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "density 1: dropped the 'credits' row"
+          ]
+        },
+        {
+          "retry": 3,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.81x"
+          ]
+        },
+        {
+          "retry": 4,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "density 2: dropped the 'film' row"
+          ]
+        },
+        {
+          "retry": 5,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.73x"
+          ]
+        }
+      ],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/1x1/daylight__chakra-plex__1080x1080",
+      "status": "pass_retry",
+      "attempts": 6,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/1x1/daylight__chakra-plex__1080x1080.jpg",
+      "fixes": [
+        {
+          "retry": 1,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.90x"
+          ]
+        },
+        {
+          "retry": 2,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "density 1: dropped the 'credits' row"
+          ]
+        },
+        {
+          "retry": 3,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.81x"
+          ]
+        },
+        {
+          "retry": 4,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "density 2: dropped the 'film' row"
+          ]
+        },
+        {
+          "retry": 5,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.73x"
+          ]
+        }
+      ],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/1.91x1/daylight__chakra-plex__1200x630",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/1.91x1/daylight__chakra-plex__1200x630.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/16x9/max-blue__chakra-plex__1920x1080",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/16x9/max-blue__chakra-plex__1920x1080.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/16x9/max-blue__chakra-plex__1280x720",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/16x9/max-blue__chakra-plex__1280x720.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/9x16/max-blue__chakra-plex__1080x1920",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/9x16/max-blue__chakra-plex__1080x1920.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/9x16/max-blue__chakra-plex__720x1280",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/9x16/max-blue__chakra-plex__720x1280.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/4x5/max-blue__chakra-plex__1080x1350",
+      "status": "pass_retry",
+      "attempts": 6,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/4x5/max-blue__chakra-plex__1080x1350.jpg",
+      "fixes": [
+        {
+          "retry": 1,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.90x"
+          ]
+        },
+        {
+          "retry": 2,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "density 1: dropped the 'credits' row"
+          ]
+        },
+        {
+          "retry": 3,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.81x"
+          ]
+        },
+        {
+          "retry": 4,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "density 2: dropped the 'film' row"
+          ]
+        },
+        {
+          "retry": 5,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.73x"
+          ]
+        }
+      ],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/1x1/max-blue__chakra-plex__1080x1080",
+      "status": "pass_retry",
+      "attempts": 6,
+      "brand": "logo",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/1x1/max-blue__chakra-plex__1080x1080.jpg",
+      "fixes": [
+        {
+          "retry": 1,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.90x"
+          ]
+        },
+        {
+          "retry": 2,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "density 1: dropped the 'credits' row"
+          ]
+        },
+        {
+          "retry": 3,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.81x"
+          ]
+        },
+        {
+          "retry": 4,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "density 2: dropped the 'film' row"
+          ]
+        },
+        {
+          "retry": 5,
+          "failed": [
+            "margin"
+          ],
+          "fixes": [
+            "scaled type to 0.73x"
+          ]
+        }
+      ],
+      "failure_reasons": []
+    },
+    {
+      "name": "type/1.91x1/max-blue__chakra-plex__1200x630",
+      "status": "pass_first",
+      "attempts": 1,
+      "brand": "icon",
+      "path": "/home/hatch/workspace/caption-studio/docs/release-graphics/v1.0.4/type/1.91x1/max-blue__chakra-plex__1200x630.jpg",
+      "fixes": [],
+      "failure_reasons": []
+    }
+  ]
+}
