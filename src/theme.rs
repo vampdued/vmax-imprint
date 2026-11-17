@@ -1,15 +1,20 @@
-//! Design system: two themes (Studio dark, Studio Light), colour tokens, radii and type.
+//! VMAX brand system: two themes (Midnight dark, Daylight light), colour
+//! tokens, radii and type.
 //!
-//! Ported from `storytold/craft-anything`'s `crates/ui-egui/src/theme.rs`
-//! (MIT OR Apache-2.0), adapted to stock egui 0.37 and to this app: the
-//! craft-fonts build input and the confidence palette are dropped (this app
-//! has neither), and the theme is applied once at startup rather than
-//! switched at runtime. The caption *rendering* fonts (`fonts.rs`, DejaVu /
+//! The brand kit is VMAX v1.1 (`~/workspace/user/files/vmax-brand-kit.zip`):
+//! Black #000000, White #FFFFFF, Max Blue #2F5BFF, Graphite #17181B, Steel
+//! #9AA1AD, blue-text-on-dark #8FA8FF. Chakra Petch for display (headings,
+//! app title), IBM Plex Sans for everything people read, JetBrains Mono
+//! for code. The caption *rendering* fonts (`fonts.rs`, DejaVu /
 //! cosmic-text) are untouched — this only styles the egui UI chrome.
 //!
-//! A calm desktop look: neutral graphite (or near-white) surfaces, lightly
-//! rounded cards and controls, sentence-case Figtree throughout, and the
-//! indigo app colour for highlights, progress, links and selection.
+//! A calm desktop look: black/graphite surfaces, lightly rounded cards and
+//! controls, sentence-case Plex throughout, and Max Blue — in small,
+//! deliberate amounts — for highlights, progress, links and selection.
+//!
+//! Structure ported from `storytold/craft-anything`'s
+//! `crates/ui-egui/src/theme.rs` (MIT OR Apache-2.0), adapted to stock egui
+//! 0.37 and to this app; the palette and type are VMAX, not craft's.
 
 use egui::epaint::text::VariationCoords;
 use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, FontTweak, Stroke, TextStyle, Visuals};
@@ -30,22 +35,23 @@ impl ThemeKind {
 
     pub fn label(self) -> &'static str {
         match self {
-            ThemeKind::Studio => "Studio (dark)",
-            ThemeKind::StudioLight => "Studio Light",
+            ThemeKind::Studio => "Midnight (dark)",
+            ThemeKind::StudioLight => "Daylight",
         }
     }
 
     /// The value stored in settings, if a theme switch is ever added.
     pub fn id(self) -> &'static str {
         match self {
-            ThemeKind::Studio => "studio",
-            ThemeKind::StudioLight => "studio-light",
+            ThemeKind::Studio => "midnight",
+            ThemeKind::StudioLight => "daylight",
         }
     }
 
     pub fn from_id(s: &str) -> ThemeKind {
         match s.trim().to_ascii_lowercase().replace(['_', ' '], "-").as_str() {
-            "studio-light" | "light" => ThemeKind::StudioLight,
+            // "studio-light" is the pre-VMAX id; both map to Daylight.
+            "studio-light" | "light" | "daylight" => ThemeKind::StudioLight,
             _ => ThemeKind::Studio,
         }
     }
@@ -75,9 +81,9 @@ pub struct Tokens {
     /// The icon glyph colour at rest (hovered icons use `text`).
     pub icon_rest: Color32,
     pub accent: Color32,
-    /// Indigo that reads as text on the theme's surfaces.
+    /// Max Blue that reads as text on the theme's surfaces.
     pub accent_ink: Color32,
-    /// Indigo wash for soft highlights.
+    /// Max Blue wash for soft highlights.
     pub accent_soft: Color32,
     pub separator: Color32,
     pub shadow: Color32,
@@ -89,77 +95,83 @@ pub struct Tokens {
     pub radius_lg: f32,
 }
 
-/// The app colour: deep indigo (#1659c4). White on it passes WCAG AA; white on
-/// the brighter #2d81ff doesn't, so that blue is only ever a wash or a stroke,
-/// never a background behind text.
-pub const BRAND: Color32 = Color32::from_rgb(0x16, 0x59, 0xc4);
+/// The app colour: Max Blue (#2F5BFF). White on it passes WCAG AA (5.2:1),
+/// so it is the button fill; the lighter #8FA8FF is the small-blue-text
+/// colour on dark surfaces, never a background behind text.
+pub const BRAND: Color32 = Color32::from_rgb(0x2f, 0x5b, 0xff);
+
+/// Max Blue's supporting colours, from the VMAX kit.
+pub const BLUE_TEXT_ON_DARK: Color32 = Color32::from_rgb(0x8f, 0xa8, 0xff);
+pub const GRAPHITE: Color32 = Color32::from_rgb(0x17, 0x18, 0x1b);
+pub const STEEL: Color32 = Color32::from_rgb(0x9a, 0xa1, 0xad);
 
 impl Tokens {
     pub fn for_kind(kind: ThemeKind) -> Self {
         match kind {
-            // Warm near-black (#121316), #101014 for the sidebar, cards and
-            // controls warm ink (#f2f1ee) laid over the background at 4-15%.
+            // VMAX midnight: black chrome, graphite canvas, raised surfaces
+            // as white overlays on graphite (the kit defines only six
+            // colours, so the steps between them are derived: card +4%,
+            // raised +8%, field +12% white over graphite). Text is white,
+            // secondary text is Steel; the accent is Max Blue.
             ThemeKind::Studio => Tokens {
                 kind,
-                chrome: Color32::from_rgb(0x10, 0x10, 0x14),
-                // A visible step above chrome (#101014) so the central
-                // workspace reads as its own surface; the old #121316 was
-                // 2 LSB away and the seam was invisible (pixel-sampled).
-                canvas: Color32::from_rgb(0x15, 0x16, 0x19),
-                card: Color32::from_rgb(0x1b, 0x1c, 0x1f),
-                card_border: Color32::from_rgb(0x34, 0x34, 0x36),
-                raised: Color32::from_rgb(0x22, 0x23, 0x25),
-                // A visible step above `raised` (#222325 — the old field was
-                // 1 LSB away, so controls were indistinguishable from cards).
-                field: Color32::from_rgb(0x26, 0x27, 0x2b),
-                field_border: Color32::from_rgb(0x6c, 0x6c, 0x6c),
-                hover: Color32::from_rgb(0x2a, 0x2b, 0x2e),
-                pressed: Color32::from_rgb(0x33, 0x34, 0x37),
-                text: Color32::from_rgb(0xf2, 0xf1, 0xee),
-                text_dim: Color32::from_rgb(0xb3, 0xb3, 0xb2),
-                text_faint: Color32::from_rgb(0x8d, 0x8d, 0x8d),
-                icon_rest: Color32::from_rgb(0xa8, 0xa8, 0xa6),
+                chrome: Color32::BLACK,
+                canvas: GRAPHITE,
+                card: mix(GRAPHITE, Color32::WHITE, 0.04),
+                card_border: mix(GRAPHITE, Color32::WHITE, 0.14),
+                raised: mix(GRAPHITE, Color32::WHITE, 0.08),
+                // A visible step above `raised`, so controls read as
+                // something to use rather than more card.
+                field: mix(GRAPHITE, Color32::WHITE, 0.12),
+                field_border: mix(STEEL, GRAPHITE, 0.35),
+                hover: mix(GRAPHITE, Color32::WHITE, 0.10),
+                pressed: mix(GRAPHITE, Color32::WHITE, 0.16),
+                text: Color32::WHITE,
+                text_dim: STEEL,
+                text_faint: mix(STEEL, GRAPHITE, 0.20),
+                icon_rest: STEEL,
                 accent: BRAND,
-                accent_ink: Color32::from_rgb(0x74, 0xaa, 0xff),
-                accent_soft: Color32::from_rgba_unmultiplied(0x2d, 0x81, 0xff, 44),
-                separator: Color32::from_rgb(0x24, 0x25, 0x27),
+                accent_ink: BLUE_TEXT_ON_DARK,
+                accent_soft: Color32::from_rgba_unmultiplied(0x2f, 0x5b, 0xff, 44),
+                separator: mix(GRAPHITE, Color32::WHITE, 0.08),
                 shadow: Color32::from_black_alpha(120),
                 danger: Color32::from_rgb(0xff, 0x62, 0x59),
                 warning: Color32::from_rgb(0xe0, 0xa2, 0x3a),
-                code_bg: Color32::from_rgb(0x06, 0x06, 0x07),
+                code_bg: Color32::BLACK,
                 radius_sm: RADIUS_SM,
                 radius: RADIUS,
                 radius_lg: RADIUS_LG,
             },
 
-            // Warm paper (#f2f1ee), sunken #e9e8e4 for the sidebar, raised
-            // #faf9f7 for cards, ink #101014.
+            // VMAX daylight: white canvas, black text, Steel-free muted
+            // graphite for secondary text, Max Blue accent. (The kit's
+            // daylight theme: bg #FFFFFF, text #000000, muted #17181B.)
             ThemeKind::StudioLight => Tokens {
                 kind,
-                chrome: Color32::from_rgb(0xe9, 0xe8, 0xe4),
-                canvas: Color32::from_rgb(0xf2, 0xf1, 0xee),
-                card: Color32::from_rgb(0xfa, 0xf9, 0xf7),
-                card_border: Color32::from_rgb(0xce, 0xcd, 0xcb),
-                // A step above `card` (#faf9f7), not a copy of `chrome` —
+                chrome: Color32::from_rgb(0xf4, 0xf4, 0xf5),
+                canvas: Color32::WHITE,
+                card: Color32::WHITE,
+                card_border: Color32::from_rgb(0xd9, 0xd9, 0xdb),
+                // A step above `card` (#ffffff), not a copy of `chrome` —
                 // the old value was identical to chrome and code_bg.
-                raised: Color32::from_rgb(0xff, 0xff, 0xff),
+                raised: Color32::from_rgb(0xf4, 0xf4, 0xf5),
                 field: Color32::WHITE,
-                field_border: Color32::from_rgb(0x86, 0x85, 0x85),
-                hover: Color32::from_rgb(0xe4, 0xe4, 0xe1),
-                pressed: Color32::from_rgb(0xdb, 0xda, 0xd8),
-                text: Color32::from_rgb(0x10, 0x10, 0x14),
-                text_dim: Color32::from_rgb(0x3d, 0x3d, 0x40),
+                field_border: Color32::from_rgb(0x8a, 0x8a, 0x8e),
+                hover: Color32::from_rgb(0xef, 0xef, 0xf0),
+                pressed: Color32::from_rgb(0xe4, 0xe4, 0xe6),
+                text: Color32::BLACK,
+                text_dim: GRAPHITE,
                 text_faint: Color32::from_rgb(0x5d, 0x5c, 0x5e),
                 icon_rest: Color32::from_rgb(0x4f, 0x4f, 0x52),
                 accent: BRAND,
                 accent_ink: BRAND,
-                accent_soft: Color32::from_rgba_unmultiplied(0x2d, 0x81, 0xff, 28),
+                accent_soft: Color32::from_rgba_unmultiplied(0x2f, 0x5b, 0xff, 28),
                 separator: Color32::from_rgb(0xdb, 0xda, 0xd8),
                 shadow: Color32::from_black_alpha(20),
                 danger: Color32::from_rgb(0xb3, 0x26, 0x1e),
                 warning: Color32::from_rgb(0x9a, 0x67, 0x00),
                 // A step below `chrome` so code reads as sunken, not a copy of it.
-                code_bg: Color32::from_rgb(0xe4, 0xe3, 0xdf),
+                code_bg: Color32::from_rgb(0xf0, 0xf0, 0xf1),
                 radius_sm: RADIUS_SM,
                 radius: RADIUS,
                 radius_lg: RADIUS_LG,
@@ -200,30 +212,44 @@ fn tokens_id() -> egui::Id {
 
 // ---- fonts -------------------------------------------------------------------------------------
 
-/// Figtree, a variable font: one file set to each weight used here.
-/// OFL, see `assets/fonts/Figtree-OFL.txt`.
-pub static FIGTREE: &[u8] = include_bytes!("../assets/fonts/Figtree-Variable.ttf");
+/// IBM Plex Sans, variable (wght 100–700): the brand body face — everything
+/// people read. OFL, see `assets/fonts/IBMPlexSans-OFL.txt`.
+pub static IBM_PLEX_SANS: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Variable.ttf");
 
 /// The faces cut from it: text, labels, and headings and emphasis.
-const FIGTREE_FACES: [(&str, f32); 3] = [("Figtree", 400.0), ("Figtree-Medium", 500.0), ("Figtree-SemiBold", 600.0)];
+const PLEX_FACES: [(&str, f32); 3] = [
+    ("IBMPlexSans", 400.0),
+    ("IBMPlexSans-Medium", 500.0),
+    ("IBMPlexSans-SemiBold", 600.0),
+];
+
+/// Chakra Petch, the brand display face: app title and headings only, never
+/// body copy. Static SemiBold (+ Bold for the title bar). OFL, see
+/// `assets/fonts/ChakraPetch-OFL.txt`.
+pub static CHAKRA_PETCH_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/ChakraPetch-SemiBold.ttf");
+pub static CHAKRA_PETCH_BOLD: &[u8] = include_bytes!("../assets/fonts/ChakraPetch-Bold.ttf");
 
 /// JetBrains Mono (code). OFL, see `assets/fonts/JetBrainsMono-OFL.txt`.
 pub static JETBRAINS_MONO: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf");
 
-/// Install Figtree (three weights: text, labels, and semibold for headings)
-/// and JetBrains Mono (code). The default egui fonts stay behind them as
-/// fallbacks (emoji, CJK, and anything Figtree does not cover).
+/// Install IBM Plex Sans (three weights: text, labels, and semibold for
+/// headings), Chakra Petch (display) and JetBrains Mono (code). The default
+/// egui fonts stay behind them as fallbacks (emoji, CJK, and anything Plex
+/// does not cover).
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
 
-    for (name, weight) in FIGTREE_FACES {
+    for (name, weight) in PLEX_FACES {
         let tweak = FontTweak { coords: VariationCoords::new([(*b"wght", weight)]), ..Default::default() };
-        fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_static(FIGTREE).tweak(tweak)));
+        fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_static(IBM_PLEX_SANS).tweak(tweak)));
     }
+
+    fonts.font_data.insert("ChakraPetch".to_owned(), Arc::new(FontData::from_static(CHAKRA_PETCH_SEMIBOLD)));
+    fonts.font_data.insert("ChakraPetch-Bold".to_owned(), Arc::new(FontData::from_static(CHAKRA_PETCH_BOLD)));
 
     fonts.font_data.insert("JetBrainsMono".to_owned(), Arc::new(FontData::from_static(JETBRAINS_MONO)));
 
-    fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "Figtree".to_owned());
+    fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "IBMPlexSans".to_owned());
     fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "JetBrainsMono".to_owned());
 
     let base: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
@@ -234,17 +260,23 @@ pub fn install_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-/// The medium and semibold families: Figtree's own weight first, then the
-/// whole proportional stack.
+/// The medium and semibold families: Plex's own weight first, then the
+/// whole proportional stack. `display` is Chakra Petch semibold first, then
+/// the proportional stack (so a missing glyph falls back to Plex, never to
+/// a random system font).
 fn weighted_families(base: &[String]) -> Vec<(FontFamily, Vec<String>)> {
-    [("medium", "Figtree-Medium"), ("semibold", "Figtree-SemiBold")]
+    let mut out: Vec<(FontFamily, Vec<String>)> = [("medium", "IBMPlexSans-Medium"), ("semibold", "IBMPlexSans-SemiBold")]
         .into_iter()
         .map(|(fam, primary)| {
             let mut stack = vec![primary.to_owned()];
             stack.extend(base.iter().cloned());
             (FontFamily::Name(fam.into()), stack)
         })
-        .collect()
+        .collect();
+    let mut display = vec!["ChakraPetch".to_owned()];
+    display.extend(base.iter().cloned());
+    out.push((FontFamily::Name("display".into()), display));
+    out
 }
 
 pub fn medium(size: f32) -> FontId {
@@ -255,8 +287,13 @@ pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("semibold".into()))
 }
 
+/// The display face: Chakra Petch semibold at `size`.
+pub fn display(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("display".into()))
+}
+
 /// The type scale: every text size in the interface is one of these.
-/// Headings (`heading`, Figtree semibold), largest first: a screen's title, a step or a dialog's
+/// Headings (`heading`, Chakra Petch semibold), largest first: a screen's title, a step or a dialog's
 /// title, a card's or a list item's title.
 pub const TITLE: f32 = 26.0;
 pub const SECTION: f32 = 18.0;
@@ -381,9 +418,9 @@ pub fn leading(size: f32) -> f32 {
     (size * 1.45).round()
 }
 
-/// A heading: Figtree semibold, at one of the heading sizes above.
+/// A heading: Chakra Petch semibold, at one of the heading sizes above.
 pub fn heading(text: impl Into<String>, size: f32) -> egui::RichText {
-    egui::RichText::new(text).font(semibold(size))
+    egui::RichText::new(text).font(display(size))
 }
 
 pub fn mono(size: f32) -> FontId {
@@ -397,7 +434,7 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     Color32::from_rgba_premultiplied(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()), m(a.a(), b.a()))
 }
 
-/// A short label (captions, buttons, the title bar): Figtree medium at one of the text sizes.
+/// A short label (captions, buttons, the title bar): Plex medium at one of the text sizes.
 pub fn label_text(text: &str, size: f32) -> egui::RichText {
     egui::RichText::new(text).font(medium(size))
 }
@@ -546,6 +583,8 @@ mod tests {
         // The heading style uses the semibold family.
         let heading = ctx.global_style().text_styles.get(&TextStyle::Heading).cloned().unwrap();
         assert_eq!(heading.family, FontFamily::Name("semibold".into()));
+        // The display helper resolves to the Chakra Petch family.
+        assert_eq!(crate::theme::display(18.0).family, FontFamily::Name("display".into()));
     }
 
     #[test]
@@ -556,8 +595,37 @@ mod tests {
         let t = Tokens::get(&ctx);
         assert_eq!(t.kind, ThemeKind::StudioLight);
         assert!(!t.dark());
-        assert_eq!(t.text, Color32::from_rgb(0x10, 0x10, 0x14));
-        assert_eq!(t.canvas, Color32::from_rgb(0xf2, 0xf1, 0xee));
+        assert_eq!(t.text, Color32::BLACK);
+        assert_eq!(t.canvas, Color32::WHITE);
+    }
+
+    /// Relative luminance (WCAG 2.1) of an opaque colour.
+    fn luminance(c: Color32) -> f32 {
+        let f = |v: u8| {
+            let s = v as f32 / 255.0;
+            if s <= 0.03928 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * f(c.r()) + 0.7152 * f(c.g()) + 0.0722 * f(c.b())
+    }
+
+    fn contrast(a: Color32, b: Color32) -> f32 {
+        let (l1, l2) = (luminance(a), luminance(b));
+        let (hi, lo) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    /// The VMAX accessible pairs must hold in both themes: body text and
+    /// secondary text on the canvas, white on the accent (buttons), and
+    /// the small-blue-text colour on the canvas.
+    #[test]
+    fn vmax_contrast_pairs_pass_aa() {
+        for kind in ThemeKind::ALL {
+            let t = Tokens::for_kind(kind);
+            assert!(contrast(t.text, t.canvas) >= 4.5, "{kind:?} text/canvas");
+            assert!(contrast(t.text_dim, t.canvas) >= 4.5, "{kind:?} dim/canvas");
+            assert!(contrast(Color32::WHITE, t.accent) >= 4.5, "{kind:?} white/accent");
+            assert!(contrast(t.accent_ink, t.canvas) >= 4.5, "{kind:?} accent_ink/canvas");
+        }
     }
 
     #[test]

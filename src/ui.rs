@@ -122,8 +122,8 @@ pub struct CaptionStudioApp {
 
 impl CaptionStudioApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Craft-style UI chrome (ported theme/font/icon patterns): Figtree +
-        // JetBrains Mono, Studio dark tokens, and the Lucide SVG loader.
+        // Craft-style UI chrome (ported theme/font/icon patterns): Plex +
+        // Chakra Petch, Midnight tokens, and the Lucide SVG loader.
         // The caption *rendering* fonts (fonts.rs) are untouched.
         crate::theme::install_fonts(&cc.egui_ctx);
         crate::theme::apply(&cc.egui_ctx, crate::theme::ThemeKind::Studio, false);
