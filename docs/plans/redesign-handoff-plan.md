@@ -890,3 +890,109 @@ remain deferred.
   shot-test, and confirm the "Drag to pan" hint at 100%/zoomed, the
   empty-image message as plain text, and the PROJECT card staying put
   while OCR warms up.
+
+## 21. Build record — round-2 annotations + duplicate-button unification (2026-11-17, branch `feature/redesign-handoff`, commit `57072a0`)
+
+He ran the shot-test again from the pushed branch (`09381d0`) and
+uploaded a second output zip (`shot-test-output__3__1_15q6.zip`,
+extracted to `~/workspace/work/shot-test-review-2/`). `shots.txt`:
+all 20 captured, none missed/skipped. His markings this round are
+**YELLOW** (green last round), on shots 01 and 03 only. A critic
+subagent reviewed all 20 PNGs in parallel (design-critique / ux-copy /
+design-system + the duplicate-button audit); its report is the
+second opinion behind the fixes below.
+
+**Earlier fixes verified present in round 2:** F1 live zoom ("200%"
+in the toolbar at 200%, "100%" at 100%); F2 OCR tags de-collided
+(kept labels above their boxes, DROP labels stacked); F4 row chips
+clear of the selection stroke; F5 tail-ellipsis filenames (the "_N.jpg"
+suffix visible); F11 sizing popup opaque and button-width; F15/F17
+status-bar right block first ("Show log" + progress no longer
+overlapping); F18 bulk-edit modal capped, opaque, regenerated from
+resolved data; F3 "Drag to pan" hint at the stage's bottom-right at
+100%/200%; F10 empty-image message as a plain dim label; F12 warm-up
+in the status bar ("Warming up OCR engine…" replaces the status text).
+**F10 caveat, still open:** the caret after "unchanged." is STILL
+visible in shot 20 (round 2) — the message is now a plain `ui.label`,
+so the caret is not from the message widget; it is a focus artifact
+from another TextEdit (no TextEdit in the inspector holds it; the
+focused widget could not be pinned down from static analysis). The
+plain-label change stands (it no longer reads as an editable field),
+but the stray caret itself is not yet fixed.
+
+**His annotations and the fixes (all in `src/ui.rs`, commit `57072a0`):**
+- **Shot 01 — "no consistent size (height)"** (Output folder + Custom
+  font fields boxed): the Custom font field is a bare singleline
+  `TextEdit`, which sizes to its text and came out a different height
+  from the 36px `path_row` fields. It is now forced to 36px with
+  `add_sized(vec2(field_w, 36.0), …)`. The `path_row` label is now
+  `.truncate()` as a safety net — the tail-ellipsis already fits the
+  text, but a wrapped second line would have made the field taller
+  than 36px.
+- **Shot 01 — "the border isn't not responsive"** (big box around the
+  dead space below the JSON editor, arrow pointing up): the JSON
+  TextEdit had a fixed `.desired_rows(30)`, so when the log was
+  closed the central panel grew but the editor stayed 30 rows and
+  left a dead gap below it. The editor now fills the rest of the
+  central panel (`add_sized(ui.available_size(), …)`); the outer
+  `ScrollArea` is gone (the multiline TextEdit scrolls internally).
+- **Shot 03 — "buttons are not consisntent shape and properly within
+  the view"** (mode group + zoom group boxed): the segmented buttons
+  came out ~24px tall, shorter than the 32px Medium chevron buttons
+  beside them in the same toolbar. The `segmented` helper now sets
+  `.min_size(vec2(0.0, 32.0))` on every button, so all segmented
+  groups (mode, zoom, log filter) are 32px like the chevrons.
+- **Shot 03 — "the image and content ate overflowing"** (thumbnail +
+  "untranslated" + "ready" chips boxed): the 44px thumbnail and the
+  two-line text column filled the 60px row edge-to-edge. Rows are now
+  64px, so the thumbnail and the status chip have clear breathing
+  room above the row's bottom border.
+
+**Duplicate-button unification (his ask: "lots of duplicate buttons
+for the same operation — find them and unify them, and remove the
+unwanted duplicate buttons and comments"):**
+- **"Verify in Preview" removed** from the JSON tab toolbar. It did
+  exactly what the header primary "Review" already does (go to the
+  preview, and jump to the first untranslated block) and what the
+  "Live Preview & OCR Check" tab does — three ways to one place.
+- **The header stepper is status-only now.** Its clicks duplicated the
+  header primary (Scan ran a scan, Render ran a render) and the tabs
+  (Translate opened the JSON tab, Review opened the preview). The
+  click handler and `run_step` are removed; `step_button` no longer
+  takes `Sense::click()`, shows no hover background, and gets no
+  focus ring. Navigation lives in the tabs; the action lives in the
+  header primary. This is a deliberate deviation from SPEC §5
+  ("stepper items are clickable") — the user's duplicate-button call
+  overrides it.
+- **"Scan again" disabled until a scan exists** (`extracted.is_some()`).
+  Before the first scan the header primary "Scan images" is the only
+  live scan button, so the two never read as duplicates; once a scan
+  exists the header primary has moved on to Review/Render and "Scan
+  again" is the re-scan (with its confirm modal when edits exist).
+- **Stale comments cleaned:** the `primary_icon_text_button` doc no
+  longer names "Verify in Preview" as a primary; the `run_step` doc
+  and the stepper-click comment are gone; the PROJECT-section comment
+  notes the disabled-until-scanned rule.
+- **Kept, not duplicates:** "Copy JSON for AI" vs "Copy block list"
+  (full compact map vs the current image's block list — different
+  content); "Save captions" vs "Copy JSON for AI" (file vs clipboard,
+  full captions.json vs compact map); the header primary itself (one
+  per step, the step's main action, including "Review" which jumps to
+  the first untranslated block — an action, not just navigation).
+
+**Shot-test harness fix (same commit):** the clean slate in
+`shot_apply` now also resets `preview_zoom = 1.0`. It reset
+`preview_zoom_fit = true` but left the manual zoom at 2.0 from the
+zoomed-pan shot, so the toolbar's zoom button read "200%" on every
+later Fit shot (08, 09, 10, …) even though the image was at Fit.
+
+- `cargo test` green: **48/48** (no new tests — all six fixes are
+  presentation / wiring-only). Same pre-existing warnings, no new
+  ones. `rustfmt --edition 2021` on `ui.rs` only.
+- NOT pushed — commit `57072a0` is 1 ahead of origin; push on his
+  word + a fresh token.
+- His Windows run is the gate: rebuild from the branch, re-run the
+  shot-test, and confirm the path rows are one height, the JSON
+  editor stretches with the log closed, the toolbar buttons are one
+  height, the file-list rows have breathing room, and the stepper no
+  longer acts like a button.
