@@ -1,7 +1,8 @@
 # Caption Studio — VMAX brand + UI/UX polish plan
 
 **Status:** APPROVED 2026-11-17 — Phase 1 BUILT + PUSHED 2026-11-17 (origin/main `6b537e8`).
-Phase 2 IN PROGRESS. Phase 3 not started.
+Phase 2 BUILT + PUSHED 2026-11-17 (origin/main `a4b4aab`). Phase 3 BUILT 2026-11-17,
+LOCAL ONLY (`e11adab` + graphics `fddbf8d`) — push is his call.
 **Date:** 2026-11-17
 **Reviewed:** 6 screenshots from his Windows run (1920×1080, app maximised) +
 `src/theme.rs`, `src/render.rs`, `src/ui.rs`, `src/icons.rs` + VMAX Brand Kit v1.1
@@ -358,3 +359,69 @@ crispness check); release post generated from the pipeline.
   (API 200); pushed `6b537e8..a4b4aab`, origin/main verified at `a4b4aab`.
   Token via `GH_TOKEN` env only, never saved; remote token-free, the
   `gh auth git-credential` helper removed again afterwards.
+
+## 9. Phase 3 build record (2026-11-17, LOCAL ONLY — `e11adab` + graphics `fddbf8d`)
+
+- Theme switch (§3.4): `Settings.theme` ("midnight"/"daylight", serde
+  default "midnight" so old settings files still load), `ThemeKind::from_id`
+  / `id()` round-trip test, `new()` applies the saved theme, an Appearance
+  section in the left panel (Midnight / Daylight segmented control, applies
+  immediately + saves). No preview re-render on switch — only chrome changes.
+- Fit / 100% toggle (§2.6): in the View row; 100% shows the full-res texture
+  at native resolution (display scale only, never a re-render), the ScrollArea
+  pans it. Session-only, not persisted.
+- Contrast + focus-ring pass (§3.1): measured both themes in code, not by eye.
+  The real finding: Midnight `text_faint` is 4.84:1 on canvas but 4.39:1 on
+  card and 3.40:1 on field — below AA — so the JSON editor now uses
+  `text_dim` (4.79:1 on field) for empty strings and punctuation, and faint is
+  canvas/chrome-only by rule (documented on the token + in the test).
+  `vmax_contrast_pairs_pass_aa` now asserts every pair the UI actually uses:
+  text/dim on canvas+card+field, faint on canvas+chrome, accent_ink on
+  canvas+card+field, white/accent, warning/danger on canvas, the focus ring
+  (accent_ink ≥3:1 on field+chrome) and control edges (field_border ≥3:1 on
+  card+chrome). Two stale comments corrected with the measured values: the
+  focus ring is 5.47:1 on field / 9.21:1 on chrome in Midnight (the ui.rs
+  comment said 6.69/8.08 — wrong; the icons.rs comment had it right), and the
+  field border is 3.28:1 on card / 4.28:1 on chrome in Midnight (not 3.62:1).
+  Focus ring added to every control that lacked one: folder fields, sizing
+  combo, DragValues, tabs, View/Zoom, file-picker button, dropdown rows, Copy
+  button, JSON editor, block rows, About + Close. No new a11y-agent findings
+  had landed, so the pass is the contrast test + this ring coverage.
+- About dialog (§3.3): title-bar About button (right end of the title row) +
+  modal Window with the horizontal VMAX lockup (`assets/icons/vmax-lockup.svg`,
+  the kit's white lockup, tinted with the text colour so it reads white on
+  Midnight and black on Daylight) + "Caption Studio" + version from
+  `CARGO_PKG_VERSION` + the app subtitle + Close; Escape closes it, and the
+  panels behind are disabled while it is open (same modal pattern as the
+  confirm dialog).
+- Release graphics (§3.6): `docs/release-graphics/v1.0.4/` — 84 assets (3
+  templates × chakra-plex × 4 themes × 7 sizes) + 3 contact sheets +
+  `report.json` + `release.json` (the copy used) + README with the re-run
+  command. Pipeline is the kit's `vmax_release_v2.py` — it is NOT in the zip
+  he sent for Phase 1/2; it came from the v1.1.0 zip
+  (`vmax-brand-kit-v1.1_0_q4cx.zip`, `vmax-brand-kit/release/`). Fonts: the
+  repo's Chakra Petch Bold/SemiBold + IBMPlexSans-Medium instantiated from
+  the variable font with fontTools. Cover: the app icon — the kit's
+  `vmax-icon-white-1024.png` is the *white tile*, so the cover is that file
+  with RGB inverted, composited on black (first run used the white tile by
+  mistake — caught by viewing the output, re-run with the black tile).
+  Result: 76 passed QA first try, 8 after auto-fix, 0 failed; on the tight
+  `type` templates (4x5, 1x1) the auto-fix dropped the credits row then the
+  film row to satisfy margins. Copy in `release.json` is a DRAFT — tag, title,
+  badges and foot are his to correct at tag time, then re-run.
+- Verification: `cargo test` 32/32 green (was 31/31; +1 theme id round-trip),
+  same 6 pre-existing warnings, no new ones; `cargo fmt` NOT run repo-wide.
+  Release graphics verified by viewing: poster 16x9 midnight (white mark on
+  black, title/credits/badges/foot all read cleanly), type 1x1 midnight,
+  bleed 16x9 midnight.
+- Not verified here: the GUI on Windows (theme switch live-apply, daylight
+  rendering, About dialog, 100% zoom pan, focus rings by keyboard Tab) — his
+  Windows eyeball is the gate, at 125% scaling (the standing crispness check).
+- Commits: the four code items landed as ONE commit (`e11adab`) — the
+  hunk-split attempt to keep them separate was abandoned: the edits
+  interleave in `ui.rs` at the line level, and the split theme patch failed
+  `git apply --cached --check` at two hunks (the contrast-test +
+  round-trip-test edit is one hunk that straddles both items, and the
+  `new()` hunk's offsets don't line up when applied alone). The graphics
+  are a separate commit (`fddbf8d`). The plan-doc update is its own
+  commit. Nothing pushed — push + v1.0.4 tag still his call.
