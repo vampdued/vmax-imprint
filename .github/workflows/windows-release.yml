@@ -40,8 +40,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
+      # Retry the build: ort's static lib comes from pyke's CDN, which
+      # occasionally serves a bad file (checksum mismatch) — v1.0.2's
+      # first Windows build failed exactly that way. Cargo resumes cleanly.
       - name: Build release exe
-        run: cargo build --release --locked --target x86_64-pc-windows-msvc
+        shell: pwsh
+        run: |
+          $attempt = 0
+          do {
+            $attempt++
+            cargo build --release --locked --target x86_64-pc-windows-msvc
+            if ($LASTEXITCODE -eq 0) { break }
+            Write-Host "build attempt $attempt failed, retrying in 10s..."
+            Start-Sleep -Seconds 10
+          } while ($attempt -lt 3)
+          if ($LASTEXITCODE -ne 0) { throw "cargo build failed after $attempt attempts" }
       - name: Check single-exe (no app DLLs beside it)
         shell: pwsh
         run: |

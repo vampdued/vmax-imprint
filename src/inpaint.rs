@@ -2,14 +2,15 @@
 //!
 //! Python used `cv2.inpaint(..., cv2.INPAINT_TELEA)` on the ROI that bounds
 //! all masked pixels, after dilating the mask once with a 5x5 kernel.
-//! There is no OpenCV in this single-exe Rust build, so the fill is an
-//! iterative diffusion (Laplace) inpaint: unknown pixels are repeatedly
-//! replaced by the mean of their known neighbours, with known pixels held
-//! fixed. On the flat / softly-graded caption plates this app removes, the
-//! result is visually the same as Telea (smooth continuation of the
-//! background); on textured photos it is a smooth blur rather than
-//! Telea's edge-following fill. The ROI cropping and the 5x5 dilation are
-//! kept exactly as in Python.
+//! There is no OpenCV in this single-exe Rust build, so the fill is a
+//! front-propagation (Telea-style) inpaint: unknown pixels are filled in
+//! order of distance from the nearest known pixel, each from the mean of
+//! its already-known neighbours, then a few Jacobi smoothing passes soften
+//! the seams. This propagates local colours inward (the wall's beige
+//! gradient, a sharp dark/light edge), where the earlier pure-Jacobi
+//! diffusion never converged on wide masked bands and left a flat band of
+//! the ROI mean colour. The ROI cropping and the 5x5 dilation are kept
+//! exactly as in Python.
 
 use image::{Rgb, RgbImage};
 
@@ -119,16 +120,83 @@ pub fn inpaint_masked(img: &mut RgbImage, mask: &[u8]) {
         }
     }
 
-    // Jacobi diffusion. Iterations scale with the largest masked run so a
-    // 100px-tall plate converges; 400 is the cap (each pass is O(ROI)).
-    let masked_n = local_mask.iter().filter(|&&m| m > 0).count();
-    let iterations = if masked_n == 0 {
-        0
-    } else {
-        // ~2 passes per pixel of the widest masked span.
-        let span = (rw.max(rh) as f32).sqrt() as usize * 8 + 40;
-        span.min(400)
-    };
+    // Front-propagation fill, Telea-style: unknown pixels are filled in
+    // order of distance from the nearest known pixel, each from the mean
+    // of its already-known neighbours. This propagates LOCAL colours
+    // inward (the wall's beige gradient, the door's dark red), where the
+    // old pure-Jacobi diffusion never converged on wide masked bands and
+    // left a flat band of the ROI mean colour. Each pixel is filled once
+    // (a queue, not repeated full-ROI passes), then a few Jacobi passes
+    // below smooth the seams.
+    let mut filled = vec![false; rw * rh];
+    for y in 0..rh {
+        for x in 0..rw {
+            filled[y * rw + x] = local_mask[y * rw + x] == 0;
+        }
+    }
+    let mut queue: std::collections::VecDeque<(usize, usize)> = std::collections::VecDeque::new();
+    for y in 0..rh {
+        for x in 0..rw {
+            if filled[y * rw + x] {
+                continue;
+            }
+            let adjacent_known = [(1i32, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| {
+                let nx = x as i32 + dx;
+                let ny = y as i32 + dy;
+                nx >= 0
+                    && ny >= 0
+                    && (nx as usize) < rw
+                    && (ny as usize) < rh
+                    && filled[ny as usize * rw + nx as usize]
+            });
+            if adjacent_known {
+                queue.push_back((x, y));
+            }
+        }
+    }
+    while let Some((x, y)) = queue.pop_front() {
+        let i = y * rw + x;
+        if filled[i] {
+            continue;
+        }
+        let mut sum = [0f32; 3];
+        let mut n = 0f32;
+        for (dx, dy) in [(1i32, 0), (-1, 0), (0, 1), (0, -1)] {
+            let nx = x as i32 + dx;
+            let ny = y as i32 + dy;
+            if nx >= 0 && ny >= 0 && (nx as usize) < rw && (ny as usize) < rh {
+                let ni = ny as usize * rw + nx as usize;
+                if filled[ni] {
+                    let nb = buf[ni];
+                    for c in 0..3 {
+                        sum[c] += nb[c];
+                    }
+                    n += 1.0;
+                }
+            }
+        }
+        if n > 0.0 {
+            for c in 0..3 {
+                buf[i][c] = sum[c] / n;
+            }
+            filled[i] = true;
+            for (dx, dy) in [(1i32, 0), (-1, 0), (0, 1), (0, -1)] {
+                let nx = x as i32 + dx;
+                let ny = y as i32 + dy;
+                if nx >= 0 && ny >= 0 && (nx as usize) < rw && (ny as usize) < rh {
+                    let ni = ny as usize * rw + nx as usize;
+                    if !filled[ni] {
+                        queue.push_back((nx as usize, ny as usize));
+                    }
+                }
+            }
+        }
+    }
+
+    // A few Jacobi smoothing passes over the filled pixels only, to soften
+    // the fill seams; known (original) pixels stay fixed. The front fill
+    // above already converged, so this is polish, not the fill itself.
+    let iterations = 30;
     let mut next = buf.clone();
     for _ in 0..iterations {
         for y in 0..rh {
@@ -207,5 +275,31 @@ mod tests {
         assert!((p[0] as i32 - 10).abs() <= 2);
         assert!((p[1] as i32 - 120).abs() <= 2);
         assert!((p[2] as i32 - 200).abs() <= 2);
+    }
+
+    #[test]
+    fn inpaint_preserves_local_colours_across_a_band() {
+        // Two-tone image, sharp black/white edge at x=30; mask a band
+        // straddling the edge. The fill must keep the edge (left side
+        // dark, right side bright), not smear the ROI mean grey across
+        // the whole band the way the old unconverged diffusion did.
+        let mut img = RgbImage::new(60, 20);
+        for y in 0..20 {
+            for x in 0..60 {
+                let v = if x < 30 { 0u8 } else { 255u8 };
+                img.put_pixel(x, y, Rgb([v, v, v]));
+            }
+        }
+        let mut mask = vec![0u8; 60 * 20];
+        for y in 0..20 {
+            for x in 25..35 {
+                mask[y as usize * 60 + x as usize] = 255;
+            }
+        }
+        inpaint_masked(&mut img, &mask);
+        let left = img.get_pixel(27, 10);
+        let right = img.get_pixel(33, 10);
+        assert!(left[0] < 60, "left of edge went grey: {left:?}");
+        assert!(right[0] > 195, "right of edge went grey: {right:?}");
     }
 }

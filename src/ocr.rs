@@ -11,12 +11,14 @@
 //! 1. If the longest side exceeds 1600px, downscale proportionally
 //!    (bilinear) for inference; detected coordinates are mapped back to
 //!    native resolution.
-//! 2. Detection: DBNet — resize so the longest side is <= 960px, pad dims
-//!    to multiples of 32, normalise (ImageNet mean/std), run the det model,
-//!    threshold the probability map at 0.3, label connected components,
+//! 2. Detection: DBNet — resize per RapidOCR (shorter side to 736 if
+//!    smaller, else no resize; dims rounded to multiples of 32), normalise
+//!    (ImageNet mean/std), run the det model, threshold the probability
+//!    map at 0.3, dilate the binary mask 2x2, label connected components,
 //!    take the minimum-area rectangle of each, score it by the mean
-//!    probability inside the box (fast mode), drop boxes scoring < 0.6,
-//!    then unclip the polygon (Vatti-style offset, ratio 1.5).
+//!    probability inside the box (fast mode), drop boxes scoring < 0.5,
+//!    then unclip the polygon (Vatti-style offset, ratio 1.6); drop boxes
+//!    whose width or height is <= 3px.
 //! 3. Recognition: rectify each box with a perspective warp to height 48,
 //!    run the rec model, CTC greedy-decode with the dictionary
 //!    (index 0 = blank, character `i` = `dict[i-1]`).
@@ -38,9 +40,22 @@ pub const MAX_OCR_DIM: u32 = 1600;
 /// Detection probability-map threshold (RapidOCR `det_db_thresh`).
 const DET_THRESH: f32 = 0.3;
 /// Detection box score threshold (RapidOCR `det_db_box_thresh`).
-const DET_BOX_THRESH: f32 = 0.6;
-/// Detection unclip ratio (RapidOCR `det_db_unclip_ratio`).
-const DET_UNCLIP_RATIO: f32 = 1.5;
+/// Detection box threshold — RapidOCR `TextDetector` default `box_thresh`
+/// (0.5; the `DBPostProcess` class default 0.7 is overridden by the
+/// detector's own config, and the app calls the engine with no kwargs).
+/// This port's scores match RapidOCR's fast-mode scores, so 0.5 is the
+/// honest equivalent. (0.7 was tried in cycle 2 and dropped a real block
+/// in _14; 0.6 was the pre-cycle-2 value.)
+const DET_BOX_THRESH: f32 = 0.5;
+/// Detection unclip ratio (RapidOCR `TextDetector` default 1.6; again the
+/// `DBPostProcess` class default 2.0 is overridden by the detector config).
+const DET_UNCLIP_RATIO: f32 = 1.6;
+/// Detection resize: RapidOCR `DetPreProcess` with `limit_side_len` 736 and
+/// `limit_type` "min" — if the shorter side is < 736, upscale so it equals
+/// 736; otherwise no resize. (The old "longest side <= 960" rule ran det at
+/// ~2.8x fewer pixels than RapidOCR, which is why boxes were a few px off
+/// per line and the fit size wobbled between blocks.)
+const DET_LIMIT_SIDE: f32 = 736.0;
 /// Raw detections below this score are discarded entirely (Python: 0.10).
 const RAW_MIN_SCORE: f32 = 0.10;
 
@@ -203,13 +218,17 @@ impl OcrEngine {
     /// Detect text boxes. Returns quads in the input image's coordinates.
     fn detect(&self, img: &RgbImage) -> Result<Vec<[(f32, f32); 4]>> {
         let (w, h) = (img.width() as usize, img.height() as usize);
-        // RapidOCR det preprocess: longest side <= 960, dims -> multiple of 32.
-        let max_side = w.max(h);
-        let ratio = if max_side > 960 { 960.0 / max_side as f32 } else { 1.0 };
-        let mut dw = ((w as f32 * ratio).round() as usize).max(32);
-        let mut dh = ((h as f32 * ratio).round() as usize).max(32);
-        dw = dw.div_ceil(32) * 32;
-        dh = dh.div_ceil(32) * 32;
+        // RapidOCR det preprocess (config.yaml: limit_side_len 736,
+        // limit_type "min"): upscale only if the shorter side is < 736,
+        // otherwise no resize; dims rounded to multiples of 32.
+        let min_side = w.min(h);
+        let ratio = if (min_side as f32) < DET_LIMIT_SIDE {
+            DET_LIMIT_SIDE / min_side as f32
+        } else {
+            1.0
+        };
+        let mut dw = (((w as f32 * ratio) as usize as f32 / 32.0).round() as usize * 32).max(32);
+        let mut dh = (((h as f32 * ratio) as usize as f32 / 32.0).round() as usize * 32).max(32);
         let resized = image::imageops::resize(
             img,
             dw as u32,
@@ -219,9 +238,11 @@ impl OcrEngine {
         let scale_x = dw as f32 / w as f32;
         let scale_y = dh as f32 / h as f32;
 
-        // Normalise to ImageNet mean/std, CHW.
-        let mean = [0.485f32, 0.456, 0.406];
-        let std = [0.229f32, 0.224, 0.225];
+        // Normalise to RapidOCR mean/std 0.5 (NOT ImageNet — the det
+        // model was exported for (x/255 - 0.5)/0.5; ImageNet stats shift
+        // the prob map and move every box by a few px).
+        let mean = [0.5f32, 0.5, 0.5];
+        let std = [0.5f32, 0.5, 0.5];
         let mut input = vec![0f32; 3 * dh * dw];
         for y in 0..dh {
             for x in 0..dw {
@@ -255,8 +276,27 @@ impl OcrEngine {
         let map_scale_x = dw as f32 / pw as f32;
         let map_scale_y = dh as f32 / ph as f32;
 
-        // Binary map + connected components.
+        // Binary map + 2x2 dilation (RapidOCR `use_dilation: true`) +
+        // connected components. Dilation expands each foreground pixel
+        // down-right by 1px (OpenCV 2x2 ones kernel, default anchor).
         let binary: Vec<bool> = prob.iter().map(|&p| p > DET_THRESH).collect();
+        let mut dilated = binary.clone();
+        for y in 0..ph {
+            for x in 0..pw {
+                if binary[y * pw + x] {
+                    if y + 1 < ph {
+                        dilated[(y + 1) * pw + x] = true;
+                    }
+                    if x + 1 < pw {
+                        dilated[y * pw + x + 1] = true;
+                    }
+                    if y + 1 < ph && x + 1 < pw {
+                        dilated[(y + 1) * pw + x + 1] = true;
+                    }
+                }
+            }
+        }
+        let binary = dilated;
         if ocr_debug() {
             let mx = prob.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
             eprintln!(
@@ -308,6 +348,13 @@ impl OcrEngine {
             let quad: [(f32, f32); 4] = quad.map(|(x, y)| {
                 (x.clamp(0.0, w as f32 - 1.0), y.clamp(0.0, h as f32 - 1.0))
             });
+            // RapidOCR `filter_tag_det_res`: drop boxes whose width or
+            // height (adjacent edges from point 0) is <= 3px.
+            let ew = ((quad[1].0 - quad[0].0).powi(2) + (quad[1].1 - quad[0].1).powi(2)).sqrt();
+            let eh = ((quad[3].0 - quad[0].0).powi(2) + (quad[3].1 - quad[0].1).powi(2)).sqrt();
+            if ew <= 3.0 || eh <= 3.0 {
+                continue;
+            }
             quads.push(quad);
         }
         if ocr_debug() {
@@ -592,7 +639,7 @@ fn polygon_perimeter(poly: &[(f32, f32); 4]) -> f32 {
 }
 
 /// Vatti-style unclipping: offset a convex quad outward by
-/// `area * ratio / perimeter` (RapidOCR `det_db_unclip_ratio` = 1.5),
+/// `area * ratio / perimeter` (RapidOCR `TextDetector` default 1.6),
 /// by shifting each edge along its outward normal and intersecting
 /// adjacent shifted lines.
 fn unclip_polygon(quad: &[(f32, f32); 4], ratio: f32) -> [(f32, f32); 4] {
