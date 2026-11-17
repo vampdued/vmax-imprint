@@ -852,7 +852,7 @@ too, so they are fixed first and re-checked at 125%.
 - `cargo test` green: **48/48** (was 47; +`diag_labels_stack_instead_of_overlapping`).
   Same pre-existing warnings, no new ones. `rustfmt --edition 2021`
   on `ui.rs` + `render.rs` only.
-- NOT pushed; push only on his word (a fresh token is needed).
+- PUSHED 2026-11-17 ~18:52 IST (`abdbe69`, his word + fresh token).
 - His Windows run is the gate: rebuild from the branch, re-run the
   shot-test, and confirm the log-panel drag/close, the row chips, the
   toolbar zoom label, the OCR labels, the sizing popup, the status bar,
