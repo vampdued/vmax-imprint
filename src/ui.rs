@@ -2956,62 +2956,121 @@ impl eframe::App for CaptionStudioApp {
                     self.refresh_preview(&ctx, data.as_ref());
                     let names = self.file_names();
                     let cur_idx = names.iter().position(|n| n == &self.preview_file).unwrap_or(0);
-                    // --- Toolbar: prev/next, "N of M", segmented modes,
-                    // Fit/100% (mockup `.bar`). ---
-                    ui.horizontal(|ui| {
-                        if crate::icons::button(ui, "chevron-left", crate::theme::ControlSize::Medium, false, "Previous file").clicked() {
-                            step_preview(&mut self.preview_file, &names, -1);
-                            self.selected_block = None;
-                            self.preview_key.clear();
-                        }
-                        ui.label(crate::theme::label_text(
-                            &format!("{} of {}", if names.is_empty() { 0 } else { cur_idx + 1 }, names.len()),
-                            crate::theme::LABEL,
-                        ));
-                        if crate::icons::button(ui, "chevron-right", crate::theme::ControlSize::Medium, false, "Next file").clicked() {
-                            step_preview(&mut self.preview_file, &names, 1);
-                            self.selected_block = None;
-                            self.preview_key.clear();
-                        }
-                        // The mode + zoom controls ride at the right end.
-                        // Disabled until a preview exists — with zero images
-                        // the segmented groups lit up ("Rendered", "Fit")
-                        // over an empty stage.
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            // A right inset, so the groups sit inside the
-                            // toolbar instead of flush against the panel's
-                            // right edge (shot 03: "not properly within
-                            // the view"). In a right-to-left layout the
-                            // first item lands at the right edge.
-                            ui.add_space(12.0);
-                            ui.add_enabled_ui(!names.is_empty(), |ui| {
-                            // The manual-zoom button shows the LIVE zoom
-                            // (e.g. "200%"), not a fixed "100%" — the old
-                            // label lit up at any manual zoom and lied
-                            // about the level. Clicking it resets to 100%.
-                            let zoom_pct =
-                                format!("{}%", (self.preview_zoom * 100.0).round() as i32);
-                            if let Some(fit) = segmented(
-                                ui,
-                                self.preview_zoom_fit,
-                                &[(true, "Fit"), (false, zoom_pct.as_str())],
-                            ) {
-                                self.preview_zoom_fit = fit;
-                                self.preview_zoom = 1.0;
-                                self.preview_pan = egui::Vec2::ZERO;
-                            }
-                            ui.separator();
-                            if let Some(mode) = segmented(ui, self.preview_mode, &[
-                                (PreviewMode::Rendered, "Rendered"),
-                                (PreviewMode::Ocr, "OCR Boxes"),
-                                (PreviewMode::Original, "Original"),
-                            ]) {
-                                self.preview_mode = mode;
+                    // --- Docked stage header bar (SPEC §3.1): a dedicated
+                    // 40px bar above the stage, t.card with a 1px bottom
+                    // stroke, so the view/zoom controls no longer float
+                    // over the canvas. Left: prev / "N of M" / next + the
+                    // active file name. Right: mode + zoom groups.
+                    let bar = egui::Frame::new()
+                        .fill(t.card)
+                        .inner_margin(egui::Margin::symmetric(8, 4));
+                    let bar_resp = bar.show(ui, |ui| {
+                        ui.set_min_height(32.0);
+                        ui.horizontal(|ui| {
+                            if crate::icons::button(ui, "chevron-left", crate::theme::ControlSize::Medium, false, "Previous file").clicked() {
+                                step_preview(&mut self.preview_file, &names, -1);
+                                self.selected_block = None;
                                 self.preview_key.clear();
                             }
+                            ui.label(crate::theme::label_text(
+                                &format!("{} of {}", if names.is_empty() { 0 } else { cur_idx + 1 }, names.len()),
+                                crate::theme::LABEL,
+                            ));
+                            if crate::icons::button(ui, "chevron-right", crate::theme::ControlSize::Medium, false, "Next file").clicked() {
+                                step_preview(&mut self.preview_file, &names, 1);
+                                self.selected_block = None;
+                                self.preview_key.clear();
+                            }
+                            // The active file name, truncated, with the full
+                            // name on hover. Its width is bounded by the
+                            // right-hand groups' reserved width, so a long
+                            // name truncates instead of pushing the mode /
+                            // zoom groups off the bar.
+                            if !self.preview_file.is_empty() {
+                                let zoom_pct = format!(
+                                    "{}%",
+                                    (self.preview_zoom * 100.0).round() as i32
+                                );
+                                let mode_w = segmented_button_width(
+                                    ui,
+                                    &["Original", "Detected Boxes", "Rendered"],
+                                ) * 3.0;
+                                let zoom_w = segmented_button_width(
+                                    ui,
+                                    &["Fit View", zoom_pct.as_str()],
+                                ) * 2.0;
+                                let right_reserve = mode_w
+                                    + zoom_w
+                                    + 1.0
+                                    + 12.0
+                                    + ui.spacing().item_spacing.x * 4.0;
+                                let name_w = (ui.available_width() - right_reserve).max(0.0);
+                                ui.add_sized(
+                                    egui::vec2(name_w, 32.0),
+                                    egui::Label::new(
+                                        egui::RichText::new(&self.preview_file)
+                                            .size(crate::theme::LABEL)
+                                            .color(t.text),
+                                    )
+                                    .truncate()
+                                    .selectable(false),
+                                )
+                                .on_hover_text(&self.preview_file);
+                            }
+                            // The mode + zoom controls ride at the right end.
+                            // Disabled until a preview exists — with zero images
+                            // the segmented groups lit up ("Rendered", "Fit")
+                            // over an empty stage.
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                // A right inset, so the groups sit inside the
+                                // bar instead of flush against the panel's
+                                // right edge (shot 03: "not properly within
+                                // the view"). In a right-to-left layout the
+                                // first item lands at the right edge.
+                                ui.add_space(12.0);
+                                ui.add_enabled_ui(!names.is_empty(), |ui| {
+                                // The manual-zoom button shows the LIVE zoom
+                                // (e.g. "200%"), not a fixed "100%" — the old
+                                // label lit up at any manual zoom and lied
+                                // about the level. Clicking it resets to 100%.
+                                let zoom_pct =
+                                    format!("{}%", (self.preview_zoom * 100.0).round() as i32);
+                                if let Some(fit) = segmented(
+                                    ui,
+                                    self.preview_zoom_fit,
+                                    &[(true, "Fit View"), (false, zoom_pct.as_str())],
+                                ) {
+                                    self.preview_zoom_fit = fit;
+                                    self.preview_zoom = 1.0;
+                                    self.preview_pan = egui::Vec2::ZERO;
+                                }
+                                // 16px vertical divider between the mode
+                                // and zoom groups.
+                                let (div, _) = ui.allocate_exact_size(
+                                    egui::vec2(1.0, 16.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(div, 0.0, t.card_border);
+                                if let Some(mode) = segmented(ui, self.preview_mode, &[
+                                    (PreviewMode::Rendered, "Rendered"),
+                                    (PreviewMode::Ocr, "Detected Boxes"),
+                                    (PreviewMode::Original, "Original"),
+                                ]) {
+                                    self.preview_mode = mode;
+                                    self.preview_key.clear();
+                                }
+                                });
                             });
                         });
                     });
+                    // The bar's bottom stroke: 1px card_border along its
+                    // bottom edge (a Frame stroke would box all four sides).
+                    let bar_rect = bar_resp.response.rect;
+                    ui.painter().hline(
+                        bar_rect.x_range(),
+                        bar_rect.bottom(),
+                        egui::Stroke::new(1.0, t.card_border),
+                    );
                     // --- Workspace: file list (230px) | stage. ---
                     let rest = ui.available_size();
                     let (filter_id, stage_resp) = ui
@@ -3337,9 +3396,30 @@ fn step_preview(current: &mut String, names: &[String], delta: i32) {
     *current = names[next].clone();
 }
 
+/// The per-button width of a segmented group: the widest label plus the
+/// button's horizontal padding on both sides. The docked stage header bar
+/// uses it to reserve the right-hand groups' width before laying out the
+/// (flexible, truncating) file name, so a long name can never push the
+/// mode/zoom groups off the bar.
+fn segmented_button_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+    let max_text_w = labels
+        .iter()
+        .map(|label| {
+            ui.ctx().fonts_mut(|f| {
+                f.layout_no_wrap((*label).to_string(), font_id.clone(), t.text)
+                    .size()
+                    .x
+            })
+        })
+        .fold(0.0, f32::max);
+    max_text_w + ui.spacing().button_padding.x * 2.0
+}
+
 /// A segmented control (mockup `.seg`): adjacent buttons, the selected one
-/// solid accent with white text, the rest card with a border. Returns the
-/// picked value, if the user clicked one.
+/// solid accent with white text, the rest on the unified `t.raised` track
+/// with a border. Returns the picked value, if the user clicked one.
 fn segmented<T: PartialEq + Copy>(
     ui: &mut egui::Ui,
     current: T,
@@ -3352,18 +3432,8 @@ fn segmented<T: PartialEq + Copy>(
     // control instead of label-sized buttons (shot 03: "not consistent
     // shape"). The button's own horizontal padding is added back so the
     // widest label doesn't touch the button's edges.
-    let font_id = egui::TextStyle::Button.resolve(ui.style());
-    let max_text_w = options
-        .iter()
-        .map(|(_, label)| {
-            ui.ctx().fonts_mut(|f| {
-                f.layout_no_wrap((*label).to_string(), font_id.clone(), t.text)
-                    .size()
-                    .x
-            })
-        })
-        .fold(0.0, f32::max);
-    let btn_w = max_text_w + ui.spacing().button_padding.x * 2.0;
+    let labels: Vec<&str> = options.iter().map(|(_, label)| *label).collect();
+    let btn_w = segmented_button_width(ui, &labels);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         let n = options.len();
@@ -3400,7 +3470,7 @@ fn segmented<T: PartialEq + Copy>(
                 // (shot 03: "not consistent shape"), so the two groups
                 // and the toolbar read as different controls.
                 .min_size(egui::vec2(btn_w, 32.0))
-                .fill(if selected { t.accent } else { t.card })
+                .fill(if selected { t.accent } else { t.raised })
                 .stroke(if selected {
                     egui::Stroke::NONE
                 } else {
