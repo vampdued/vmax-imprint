@@ -1,6 +1,7 @@
 # Caption Studio — VMAX brand + UI/UX polish plan
 
-**Status:** DRAFT — awaiting his approval. No code changed.
+**Status:** APPROVED 2026-11-17 — Phase 1 BUILT (local, unpushed, 26 tests green).
+Phases 2–3 not started. No code changed after this point without a new approval.
 **Date:** 2026-11-17
 **Reviewed:** 6 screenshots from his Windows run (1920×1080, app maximised) +
 `src/theme.rs`, `src/render.rs`, `src/ui.rs`, `src/icons.rs` + VMAX Brand Kit v1.1
@@ -282,3 +283,30 @@ crispness check); release post generated from the pipeline.
 - No new dependencies except the two OFL fonts and the VMAX SVG/PNG assets.
 - No push/tag until he says so (standing rule) — Phase 1 verification needs
   a tag (e.g. v1.0.4) for the Windows exe, which is his call.
+
+## 7. Phase 1 build record (2026-11-17, local only — NOT pushed)
+
+- `a8781cd` clip fix: fit width = width available from the text origin +
+  a shared shrink-until-it-fits guard; regression test
+  `uniform_grow_keeps_text_inside_image` (fails on old code — ink at
+  x=1437; passes with the fix).
+- `b70492e` brand tokens + fonts: Max Blue accent, Midnight/Daylight
+  token sets, Chakra Petch (display) + IBM Plex Sans variable (body),
+  Figtree removed; contrast tests for the VMAX pairs (white on Max Blue
+  5.17:1, Steel on graphite 6.83:1).
+- `9f9ba9f` title bar + app icon: interlock mark at 32px beside the title,
+  eframe window icon from the embedded PNG, black-tile `vmax-icon.ico`
+  (256/48/32/16) embedded into the Windows exe by build.rs via winres
+  (Windows targets only; Linux builds never invoke it).
+- `32f08da` copy: 10 error strings now name the next step (retry, check
+  the folder/file, fix the marked JSON spot, restart the app).
+- Verification: `cargo test` 26/26 green, same 6 pre-existing warnings,
+  no new ones; `cargo fmt` NOT run repo-wide (the codebase isn't
+  fmt-clean — a full run churned 961 lines, reverted; only the new
+  build.rs line was hand-formatted).
+- Not verified here: the GUI on Windows (no Windows machine on this VM),
+  the mark SVG through the egui loader (usvg supports masks; the asset
+  itself is the kit's production file), the winres embedding (needs the
+  Windows runner).
+- Still his call: the v1.0.4 tag for the Windows exe, so he can eyeball
+  Phase 1 on his machine (top/bottom plates on `_3.jpg` must read fully).
