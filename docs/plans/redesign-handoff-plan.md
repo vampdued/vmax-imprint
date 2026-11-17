@@ -323,9 +323,9 @@ Verified against local main `cebd449` (files: `src/ui.rs`, `src/theme.rs`,
 - Tests 31/31 green (was 32: deleted `light_theme_applies` +
   `theme_ids_round_trip`, added `natural_sort_orders_numbers_by_value`);
   same 6 pre-existing warnings, no new ones.
-- **Main is pushed-pending:** local main `94116a4` (5 commits ahead of
-  origin `a4b4aab`) still needs his fresh token to push. The redesign
-  branch stays local until he says push.
+- **Pushed 2026-11-17** — main `94116a4` + branch `adfb8aa` (his token,
+  used once, remote verified token-free, helper cleaned; see §9).
+
 
 ## 8. Build record — Phase 1 (2026-11-17, branch `feature/redesign-handoff`, commit `aff26b9`)
 
@@ -349,14 +349,36 @@ Verified against local main `cebd449` (files: `src/ui.rs`, `src/theme.rs`,
   planned. Aria-current on the stepper is an egui limitation (no
   AccessKit equivalent surfaced); the current step is marked by the blue
   border + blue circle + focus ring instead.
-- **Main is pushed-pending:** local main `94116a4` (5 commits ahead of
-  origin `a4b4aab`) still needs his fresh token to push. The redesign
-  branch stays local until he says push.
-- Target stack/runtime: **Rust + eframe/egui 0.37** (in-process backend).
-- Existing backend API/CLI: in-process functions + worker threads over
-  channels; headless `--ocr-test` exists. No HTTP/CLI boundary to keep.
-- Minimum window: proposed 1280×720 (Q6).
-- Light theme: SPEC says never; Q2 is the decision.
-- File-name scheme: real filenames, natural-sorted; "N of 75.png" is the
-  mockup's sample data.
-- Settings persist: `~/.caption_replacer.json` (add window size keys).
+- **Pushed 2026-11-17** — main `94116a4` + branch `adfb8aa` (his token,
+  used once, remote verified token-free, helper cleaned; see §9).
+
+## 9. Build record — Phase 2 (2026-11-17, branch `feature/redesign-handoff`, commit `64dc1c6`)
+
+- **Pushed 2026-11-17 (his token, used once, remote verified token-free,
+  credential helper cleaned):** main `94116a4` + branch
+  `feature/redesign-handoff` at `adfb8aa` (Phase 0 + Phase 1 + records).
+  The branch keeps being pushed only on his word.
+- Sidebar is now three cards (SOURCE & OUTPUT / OCR THRESHOLDS /
+  PROJECT) instead of CollapsingHeaders. Folder rows show the path tail
+  with a leading "…" + full path on hover + 36px browse buttons; the path
+  is set via Browse, not typed (a TextEdit can't show a leading ellipsis).
+- Defect 1 fixed by construction: the sizing popup is a `Popup::menu`
+  aligned `TOP_START` (opens upward, `BOTTOM_START` fallback) — the old
+  ComboBox opened downward over the OCR card. egui's `Popup::menu`
+  already renders on the top layer (`Order::Foreground`); direction was
+  the defect, not layering.
+- Thresholds are real sliders (conf .01 step, length 1–40) with mono
+  outputs; drag → 50 ms-debounced instant re-filter (repaint requested
+  at 60 ms so it fires after the drag ends); Apply button removed; Reset
+  (.60/12) + Inspect boxes kept; re-filter warns when a translated block
+  becomes filtered (log + status) and saves settings.
+- Scan again is in the Project grid with the §9 confirm modal
+  ("Re-scan N images? Your edited translations will be cleared." /
+  Re-scan / Keep edits); no edits → scans straight away.
+- New `rotate-ccw` Lucide icon (Reset). `resolved_data()` shared by the
+  stepper and the Scan-again edit check.
+- Tests 33/33 green (+tail-ellipsis test); same 6 pre-existing warnings.
+- `cargo fmt` was run once and reformatted 12 files — reverted everywhere
+  except the two touched files, whose fmt churn was then removed by
+  re-applying the edits to pristine files. Formatting the touched files
+  is a Phase 7 step, not a per-phase one.
