@@ -97,23 +97,77 @@ enum LogLevel {
     Error,
 }
 
-/// One Activity Log line: its text plus the level that decides its colour.
+/// One Activity Log line (redesign Phase 5, item 15): when it happened
+/// (local HH:MM:SS), its severity, the image it is about (when it is about
+/// one — a render outcome, a per-file warning), and what happened.
 #[derive(Debug, Clone)]
 struct LogLine {
-    text: String,
+    time: String,
     level: LogLevel,
+    file: Option<String>,
+    result: String,
 }
 
 impl LogLine {
-    fn info(text: String) -> Self {
-        LogLine { text, level: LogLevel::Info }
+    fn new(level: LogLevel, file: Option<String>, result: String) -> Self {
+        LogLine {
+            time: chrono::Local::now().format("%H:%M:%S").to_string(),
+            level,
+            file,
+            result,
+        }
     }
-    fn warn(text: String) -> Self {
-        LogLine { text, level: LogLevel::Warn }
+
+    fn info(result: String) -> Self {
+        LogLine::new(LogLevel::Info, None, result)
     }
-    fn error(text: String) -> Self {
-        LogLine { text, level: LogLevel::Error }
+
+    fn warn(result: String) -> Self {
+        LogLine::new(LogLevel::Warn, None, result)
     }
+
+    fn error(result: String) -> Self {
+        LogLine::new(LogLevel::Error, None, result)
+    }
+
+    /// A per-file line (a render outcome, a per-file warning).
+    fn file(level: LogLevel, file: String, result: String) -> Self {
+        LogLine::new(level, Some(file), result)
+    }
+
+    /// The line as plain text (for Copy log): `HH:MM:SS LEVEL [file] result`.
+    fn to_text(&self) -> String {
+        let level = match self.level {
+            LogLevel::Info => "INFO",
+            LogLevel::Warn => "WARN",
+            LogLevel::Error => "ERROR",
+        };
+        match &self.file {
+            Some(f) => format!("{} {level} {f} — {}", self.time, self.result),
+            None => format!("{} {level} {}", self.time, self.result),
+        }
+    }
+}
+
+/// The log filter (Phase 5, item 15): All lines, or only Warnings
+/// (warnings + errors).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogFilter {
+    All,
+    Warnings,
+}
+
+/// The lines the log table shows, newest first, under a filter. Pure so
+/// the ordering + filter are unit-tested without building the app.
+fn log_visible<'a>(lines: &'a [LogLine], filter: LogFilter) -> Vec<&'a LogLine> {
+    lines
+        .iter()
+        .rev()
+        .filter(|l| match filter {
+            LogFilter::All => true,
+            LogFilter::Warnings => l.level != LogLevel::Info,
+        })
+        .collect()
 }
 
 /// One file's outcome in a render run (for the file-list status chips).
@@ -204,6 +258,16 @@ pub struct CaptionStudioApp {
     /// The editor JSON's parse error, if it failed to resolve.
     preview_json_error: Option<String>,
     log_lines: Vec<LogLine>,
+    /// The log filter (All / Warnings) from the log bar.
+    log_filter: LogFilter,
+    /// Whether the log follows new lines (true while the user hasn't
+    /// scrolled away from the top, where the newest lines are).
+    log_follow: bool,
+    /// How many log lines the last frame saw (new lines = a follow scroll).
+    log_len_seen: usize,
+    /// The last save destination (the output folder after a render, the
+    /// file after Save captions), shown in the status bar.
+    last_save_path: Option<String>,
     status: String,
     progress: f32,
     busy: bool,
@@ -287,6 +351,10 @@ impl CaptionStudioApp {
             preview_untranslated: 0,
             preview_json_error: None,
             log_lines: Vec::new(),
+            log_filter: LogFilter::All,
+            log_follow: true,
+            log_len_seen: 0,
+            last_save_path: None,
             status: "Choose an input folder, then click Scan & Extract Text.".to_string(),
             progress: 0.0,
             busy: false,
@@ -325,6 +393,12 @@ impl CaptionStudioApp {
 
     fn log_error(&mut self, msg: String) {
         self.log_at(LogLine::error(msg));
+    }
+
+    /// A per-file log line (a render outcome, a per-file warning): the file
+    /// shows in its own column.
+    fn log_file(&mut self, level: LogLevel, file: String, result: String) {
+        self.log_at(LogLine::file(level, file, result));
     }
 
     fn log_at(&mut self, line: LogLine) {
@@ -476,10 +550,12 @@ impl CaptionStudioApp {
 
     /// Copy the activity log to the clipboard.
     fn copy_log(&mut self) {
+        // In display order (newest first, matching the table).
         let text = self
             .log_lines
             .iter()
-            .map(|l| l.text.clone())
+            .rev()
+            .map(|l| l.to_text())
             .collect::<Vec<_>>()
             .join("\n");
         match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text)) {
@@ -682,6 +758,7 @@ impl CaptionStudioApp {
                 .and_then(|s| std::fs::write(&path, s).map_err(anyhow::Error::from))
             {
                 Ok(()) => {
+                    self.last_save_path = Some(path.to_string_lossy().into_owned());
                     self.status = format!("Saved metadata to {}", path.file_name().unwrap_or_default().to_string_lossy());
                 }
                 Err(e) => self.status = format!("Couldn't save ({e}) — check the folder and try again."),
@@ -1502,21 +1579,25 @@ impl CaptionStudioApp {
                 WorkerMsg::FileRendered { file, outcome } => match outcome {
                     FileOutcome::Rendered => {
                         self.failed_files.remove(&file);
-                        self.rendered_files.insert(file);
+                        self.rendered_files.insert(file.clone());
+                        self.log_file(LogLevel::Info, file, "rendered".into());
                     }
                     FileOutcome::Failed => {
                         self.rendered_files.remove(&file);
-                        self.failed_files.insert(file);
+                        self.failed_files.insert(file.clone());
+                        self.log_file(LogLevel::Error, file, "failed".into());
                     }
                     FileOutcome::Copied => {
                         // Copied unchanged (no translated blocks): the chip
                         // derives from the block counts, so nothing to store.
+                        self.log_file(LogLevel::Info, file, "copied unchanged".into());
                     }
                 },
                 WorkerMsg::RenderDone { rendered, copied, failed, cancelled } => {
                     self.busy = false;
                     self.progress = 1.0;
                     self.render_summary = Some((rendered, copied, failed));
+                    self.last_save_path = Some(self.output_dir.clone());
                     let prefix = if cancelled { "Stopped — " } else { "Complete — " };
                     let summary = format!("{prefix}rendered {rendered}, copied {copied} unchanged, failed {failed}");
                     self.log(summary.clone());
@@ -1944,10 +2025,49 @@ impl eframe::App for CaptionStudioApp {
             || self.show_bulk_edit
             || self.import_report.is_some();
 
-        // --- Status bar ---
-        egui::Panel::bottom("status_bar").show(ui, |ui| {
+        // --- Status bar (SPEC §3: exact 32px) ---
+        // Counts + last save path + the status message (the accesskit live
+        // region). The progress bar shows ONLY while a job runs (defect 6:
+        // at idle it read as a second status line).
+        egui::Panel::bottom("status_bar").exact_size(32.0).show(ui, |ui| {
             ui.add_enabled_ui(!modal_open, |ui| {
             ui.horizontal(|ui| {
+                let t = crate::theme::Tokens::get(ui.ctx());
+                // A JSON error replaces the counts (danger colour, full
+                // error on hover) so a broken paste is visible without
+                // switching tabs.
+                if let Some(e) = &self.preview_json_error {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new("JSON error").color(t.danger),
+                        )
+                        .truncate(),
+                    )
+                    .on_hover_text(e.clone());
+                    ui.separator();
+                } else if self.preview_file_count > 0 {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(render_counts(
+                                self.preview_file_count,
+                                self.render_summary,
+                            ))
+                            .color(t.text_dim),
+                        )
+                        .truncate(),
+                    );
+                    ui.separator();
+                }
+                // The last save destination (the output folder after a
+                // render, the file after Save captions).
+                if let Some(path) = &self.last_save_path {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(path).color(t.text_dim))
+                            .truncate(),
+                    )
+                    .on_hover_text(path.clone());
+                    ui.separator();
+                }
                 // A polite live region: a screen reader announces the status
                 // when it changes (batch finished, error) instead of the user
                 // having to go looking for it. The label truncates with an
@@ -1963,43 +2083,14 @@ impl eframe::App for CaptionStudioApp {
                     // A solid accent fill, not the 17%-alpha wash (1.23:1
                     // against its track — the bar read as empty at 100%),
                     // and capped at ~220px so it reads as a bar instead of a
-                    // second status line.
-                    let t = crate::theme::Tokens::get(ui.ctx());
-                    ui.add(
-                        egui::ProgressBar::new(self.progress)
-                            .fill(t.accent)
-                            .desired_width(220.0)
-                            .show_percentage(),
-                    );
-                    // Counts for the dataset the preview shows, left of the
-                    // bar: file count + how many blocks still have no
-                    // translation. A JSON error replaces the counts (danger
-                    // colour, full error on hover) so a broken paste is
-                    // visible without switching tabs.
-                    if self.preview_file_count > 0 || self.preview_json_error.is_some() {
-                        match &self.preview_json_error {
-                            Some(e) => {
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new("JSON error").color(t.danger),
-                                    )
-                                    .truncate(),
-                                )
-                                .on_hover_text(e.clone());
-                            }
-                            None => {
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(format!(
-                                            "{} files · {} untranslated",
-                                            self.preview_file_count, self.preview_untranslated
-                                        ))
-                                        .color(t.text_dim),
-                                    )
-                                    .truncate(),
-                                );
-                            }
-                        }
+                    // second status line. Only while a job runs.
+                    if self.busy {
+                        ui.add(
+                            egui::ProgressBar::new(self.progress)
+                                .fill(t.accent)
+                                .desired_width(220.0)
+                                .show_percentage(),
+                        );
                     }
                 });
             });
@@ -2007,15 +2098,34 @@ impl eframe::App for CaptionStudioApp {
         });
 
         // --- Activity log (bottom row, SPEC §3: 188px) ---
-        // Moved out of the sidebar in the redesign: the log is a full-width
-        // strip above the status bar, with its bar (ACTIVITY + Copy log +
-        // Stop) and the lines below. Filters and newest-first ordering are
-        // Phase 5; the lines render exactly as before for now.
+        // Structured table (Phase 5, item 15): newest first, zebra rows,
+        // filters All / Warnings with counts, Copy log, Stop (disabled at
+        // idle). Auto-scroll follows the newest line until the user scrolls
+        // away from the top.
         egui::Panel::bottom("activity_log").exact_size(188.0).show(ui, |ui| {
             ui.add_enabled_ui(!modal_open, |ui| {
+                let t = crate::theme::Tokens::get(ui.ctx());
                 ui.horizontal(|ui| {
-                    let t = crate::theme::Tokens::get(ui.ctx());
                     ui.label(egui::RichText::new("ACTIVITY").font(crate::theme::display(13.0)).color(t.accent_ink));
+                    // Filters with counts (warnings = warn + error lines).
+                    let total = self.log_lines.len();
+                    let warnings = self
+                        .log_lines
+                        .iter()
+                        .filter(|l| l.level != LogLevel::Info)
+                        .count();
+                    let all_label = format!("All ({total})");
+                    let warn_label = format!("Warnings ({warnings})");
+                    if let Some(f) = segmented(
+                        ui,
+                        self.log_filter,
+                        &[
+                            (LogFilter::All, all_label.as_str()),
+                            (LogFilter::Warnings, warn_label.as_str()),
+                        ],
+                    ) {
+                        self.log_filter = f;
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Stop is only meaningful while a job runs — it stays
                         // disabled at idle so its state tells the truth.
@@ -2030,16 +2140,29 @@ impl eframe::App for CaptionStudioApp {
                     });
                 });
                 ui.separator();
-                // Severity is a short coloured tag that can't wrap away from
-                // its message; the message itself stays in the plain text
-                // colour so the log reads quietly instead of shouting in
-                // amber.
-                let t = crate::theme::Tokens::get(ui.ctx());
-                egui::ScrollArea::vertical()
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        for line in &self.log_lines {
+                let visible = log_visible(&self.log_lines, self.log_filter);
+                let new_lines = self.log_lines.len() != self.log_len_seen;
+                let out = egui::ScrollArea::vertical().show(ui, |ui| {
+                    for (i, line) in visible.iter().enumerate() {
+                        // Zebra rows: alternate the card fill against the
+                        // panel background so adjacent lines stay distinct.
+                        let frame = egui::Frame::new()
+                            .fill(if i % 2 == 0 {
+                                t.card
+                            } else {
+                                egui::Color32::TRANSPARENT
+                            })
+                            .inner_margin(egui::Margin::symmetric(6, 2));
+                        let row = frame.show(ui, |ui| {
+                            ui.set_width(ui.available_width());
                             ui.horizontal(|ui| {
+                                ui.monospace(
+                                    egui::RichText::new(&line.time).color(t.text_faint),
+                                );
+                                // The level is a short coloured tag (colour
+                                // is not the only cue — the tag text names
+                                // it); the result itself stays plain so the
+                                // log reads quietly instead of shouting.
                                 match line.level {
                                     LogLevel::Warn => {
                                         ui.colored_label(t.warning, egui::RichText::new("WARN").monospace().small());
@@ -2047,12 +2170,32 @@ impl eframe::App for CaptionStudioApp {
                                     LogLevel::Error => {
                                         ui.colored_label(t.danger, egui::RichText::new("ERROR").monospace().small());
                                     }
-                                    LogLevel::Info => {}
+                                    LogLevel::Info => {
+                                        ui.colored_label(t.ok, egui::RichText::new("INFO").monospace().small());
+                                    }
                                 }
-                                ui.monospace(&line.text);
+                                if let Some(f) = &line.file {
+                                    ui.monospace(egui::RichText::new(f).color(t.text_dim));
+                                }
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&line.result).monospace(),
+                                    )
+                                    .wrap(),
+                                );
                             });
+                        });
+                        // Follow the newest line (the first row) while the
+                        // user hasn't scrolled away from the top.
+                        if i == 0 && new_lines && self.log_follow {
+                            row.response.scroll_to_me(Some(egui::Align::TOP));
                         }
-                    });
+                    }
+                });
+                // The user scrolled away from the top (the newest lines):
+                // stop following until they come back to the top.
+                self.log_follow = out.state.clamped_offset().y <= 1.0;
+                self.log_len_seen = self.log_lines.len();
             });
         });
 
@@ -2764,6 +2907,14 @@ fn per_image_json(data: Option<&crate::model::ExtractedData>, file: &str) -> Str
     let mut doc = serde_json::Map::new();
     doc.insert(file.to_string(), serde_json::Value::Object(map));
     serde_json::to_string_pretty(&serde_json::Value::Object(doc)).unwrap_or_default()
+}
+
+/// The status-bar counts (Phase 5, item 16): `N images · N rendered ·
+/// N copied unchanged · N failed` for the last render run (0s when no run
+/// has finished yet).
+fn render_counts(images: usize, summary: Option<(usize, usize, usize)>) -> String {
+    let (rendered, copied, failed) = summary.unwrap_or((0, 0, 0));
+    format!("{images} images · {rendered} rendered · {copied} copied unchanged · {failed} failed")
 }
 
 /// (file count, untranslated-block count) for a dataset. A block counts as
@@ -3635,6 +3786,41 @@ mod tests {
         assert!(text.contains("\"2\": \"x\""));
         assert_eq!(per_image_json(Some(&data), "missing.png"), "");
         assert_eq!(per_image_json(None, "a.png"), "");
+    }
+
+    #[test]
+    fn log_visible_is_newest_first_and_warnings_filter_info() {
+        let lines = vec![
+            LogLine::info("first".into()),
+            LogLine::warn("second".into()),
+            LogLine::file(LogLevel::Error, "a.png".into(), "failed".into()),
+        ];
+        let all = log_visible(&lines, LogFilter::All);
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].result, "failed");
+        assert_eq!(all[2].result, "first");
+        let warnings = log_visible(&lines, LogFilter::Warnings);
+        assert_eq!(warnings.len(), 2);
+        assert!(warnings.iter().all(|l| l.level != LogLevel::Info));
+        // The per-file line carries its file; the plain text form names
+        // the time, level, file and result.
+        let text = lines[2].to_text();
+        assert!(text.contains("ERROR"));
+        assert!(text.contains("a.png"));
+        assert!(text.contains("failed"));
+        assert_eq!(text.split(' ').count(), 5); // HH:MM:SS + LEVEL + file + — + result
+    }
+
+    #[test]
+    fn render_counts_reads_the_last_run() {
+        assert_eq!(
+            render_counts(12, None),
+            "12 images · 0 rendered · 0 copied unchanged · 0 failed"
+        );
+        assert_eq!(
+            render_counts(12, Some((10, 2, 0))),
+            "12 images · 10 rendered · 2 copied unchanged · 0 failed"
+        );
     }
 
     #[test]
