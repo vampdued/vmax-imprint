@@ -2646,14 +2646,32 @@ impl eframe::App for CaptionStudioApp {
                                         // sidebar text from showing through
                                         // on the first open frame.
                                         .width(sizing_btn.rect.width())
-                                        .frame(egui::Frame::popup(ui.style()).fill(t.card))
-                                        // Defect 1: the old ComboBox opened downward and
-                                        // covered the OCR Thresholds card. This popup opens
-                                        // upward (its bottom edge at the button's top edge)
-                                        // on the top layer, falling back to downward only
-                                        // when it doesn't fit above.
-                                        .align(egui::RectAlign::TOP_START)
-                                        .align_alternatives(&[egui::RectAlign::BOTTOM_START])
+                                        .frame(
+                                            egui::Frame::popup(ui.style())
+                                                .fill(t.card)
+                                                .stroke(egui::Stroke::new(1.0, t.card_border))
+                                                .corner_radius(t.radius_lg)
+                                                .shadow(egui::epaint::Shadow {
+                                                    // egui 0.37's Shadow has no
+                                                    // `extrusion` field — the spec's
+                                                    // 8px extrusion is `spread` here
+                                                    // (expand in all directions).
+                                                    offset: [0, 8],
+                                                    blur: 16,
+                                                    spread: 8,
+                                                    color: egui::Color32::from_black_alpha(160),
+                                                }),
+                                        )
+                                        // Natural downward opening: the menu
+                                        // drops from the button's bottom edge,
+                                        // falling back to upward only when it
+                                        // doesn't fit below. (It used to open
+                                        // upward because the old ComboBox's
+                                        // downward menu covered the OCR
+                                        // Thresholds card; the spec restores
+                                        // the natural direction.)
+                                        .align(egui::RectAlign::BOTTOM_START)
+                                        .align_alternatives(&[egui::RectAlign::TOP_START])
                                         .show(|ui| {
                                             // Match the button's width (less the
                                             // popup frame's inner margin).

@@ -119,9 +119,9 @@ impl Default for SizingMode {
 impl SizingMode {
     pub fn label(self) -> &'static str {
         match self {
-            SizingMode::UniformGrow => "Uniform — plates grow",
-            SizingMode::PerBlock => "Per-block — plates stay put",
-            SizingMode::UniformSmallest => "Uniform — smallest size",
+            SizingMode::UniformGrow => "Uniform (expand boxes)",
+            SizingMode::PerBlock => "Fit to Box (scale per block)",
+            SizingMode::UniformSmallest => "Uniform (match smallest box)",
         }
     }
     pub fn all() -> [SizingMode; 3] {
