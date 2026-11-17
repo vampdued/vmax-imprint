@@ -520,22 +520,22 @@ impl CaptionStudioApp {
         derive_workflow_state(self.resolved_data().as_ref(), self.render_summary)
     }
 
-    /// The header primary for the current step (SPEC §2): Scan images →
-    /// Review → Render N images. Translate's primary goes to Review (and
-    /// jumps to the first file with an untranslated block). Once every
-    /// step is done the workflow is complete, so the primary becomes
-    /// "Open output" — the next thing to do — instead of pointing back
-    /// at Review or offering another render.
+    /// The header primary for the current step (SPEC §2): Scan Images →
+    /// Review in Preview → Render N images. Translate's primary goes to
+    /// Review (and jumps to the first file with an untranslated block).
+    /// Once every step is done the workflow is complete, so the primary
+    /// becomes "Open Output Folder" — the next thing to do — instead of
+    /// pointing back at Review or offering another render.
     fn header_primary(&self) -> (&'static str, String) {
         let wf = self.workflow_state();
         if wf.states.iter().all(|s| matches!(s, StepState::Done)) {
-            return ("folder-open", "Open output".to_string());
+            return ("folder-open", "Open Output Folder".to_string());
         }
         match wf.current {
-            WorkflowStep::Scan => ("scan", "Scan images".to_string()),
-            WorkflowStep::Translate => ("eye", "Review".to_string()),
+            WorkflowStep::Scan => ("scan", "Scan Images".to_string()),
+            WorkflowStep::Translate => ("eye", "Review in Preview".to_string()),
             WorkflowStep::Review | WorkflowStep::Render => {
-                ("play", format!("Render {} images", wf.images))
+                ("play", format!("Render {} Images", wf.images))
             }
         }
     }
@@ -2486,7 +2486,8 @@ impl eframe::App for CaptionStudioApp {
                     );
                     ui.separator();
                     let wf = self.workflow_state();
-                    // The primary reserves ~200px on the right; the four
+                    // The primary reserves ~200px on the right, plus a
+                    // 32px clear of the OS window controls; the four
                     // steps share the rest. The stepper is a status
                     // display only — it used to run the step's action on
                     // click, which duplicated the header primary (Scan /
@@ -2494,7 +2495,7 @@ impl eframe::App for CaptionStudioApp {
                     // click handler was removed (round-2 duplicate-button
                     // unification). Navigation lives in the tabs; the
                     // action lives in the header primary.
-                    let steps_w = (ui.available_width() - 200.0).max(0.0);
+                    let steps_w = (ui.available_width() - 200.0 - 32.0).max(0.0);
                     for (i, step) in WorkflowStep::ALL.iter().enumerate() {
                         step_button(
                             ui,
@@ -2512,6 +2513,10 @@ impl eframe::App for CaptionStudioApp {
                             self.run_header_primary();
                         }
                     });
+                    // 32px clear of the OS window controls (— □ ✕): the
+                    // primary used to sit flush against them, so a click
+                    // aimed at it could land on minimise / close instead.
+                    ui.add_space(32.0);
                 });
             });
         });
