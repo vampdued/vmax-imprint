@@ -935,7 +935,16 @@ impl eframe::App for CaptionStudioApp {
                 // the Activity Log below can take the remaining panel height
                 // instead of living in a fixed 220px box with dead space
                 // under it.
-                ui.label(crate::theme::heading("Caption Studio", crate::theme::SECTION));
+                // Title bar: the VMAX interlock mark (32px wide, the kit's
+                // minimum on-screen size) beside the app title in Chakra
+                // Petch, with the subtitle below. The mark is tinted with
+                // the text colour, so it reads white on Midnight and black
+                // on Daylight.
+                ui.horizontal(|ui| {
+                    let t = crate::theme::Tokens::get(ui.ctx());
+                    ui.add(crate::icons::image_sized("vmax-mark", egui::vec2(32.0, 24.0), t.text));
+                    ui.label(crate::theme::heading("Caption Studio", crate::theme::SECTION));
+                });
                 ui.label(crate::theme::label_text("Batch Image Translator & OCR Verifier", crate::theme::SMALL));
                 if let Some(e) = &self.ocr_error {
                     ui.colored_label(crate::theme::Tokens::get(ui.ctx()).danger, format!("OCR failed to start — restart the app to retry. ({e})"));
@@ -1427,11 +1436,18 @@ fn json_highlight_job(text: &str, t: &crate::theme::Tokens) -> egui::text::Layou
     job
 }
 
+/// The VMAX interlock mark as the window/taskbar icon (white on
+/// transparent; the title bar is dark in both themes). If the embedded PNG
+/// ever fails to decode, the app still starts, just without an icon.
+static VMAX_ICON_PNG: &[u8] = include_bytes!("../assets/icons/vmax-icon-1024.png");
+
 pub fn run_app() -> eframe::Result<()> {
+    let icon = eframe::icon_data::from_png_bytes(VMAX_ICON_PNG).unwrap_or_default();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1160.0, 680.0])
             .with_min_inner_size([920.0, 550.0])
+            .with_icon(icon)
             .with_title("Caption Studio — Batch Image Translator & OCR Verifier"),
         ..Default::default()
     };

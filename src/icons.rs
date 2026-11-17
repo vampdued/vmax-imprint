@@ -1,7 +1,8 @@
 //! Icons. Lucide SVGs are embedded (see `assets/icons/`, ISC license —
 //! `assets/icons/LICENSE-LUCIDE.txt`), recoloured to white, rasterised by
 //! the egui_extras SVG loader at the exact on-screen pixel size, and tinted
-//! per use.
+//! per use. The VMAX interlock mark (`vmax-mark.svg`, brand kit v1.1) is
+//! embedded the same way and tinted per theme.
 //!
 //! Ported from `storytold/craft-anything`'s `crates/ui-egui/src/icons.rs`
 //! (MIT OR Apache-2.0), adapted to this app: no i18n, no animated hover
@@ -35,6 +36,9 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("check", include_bytes!("../assets/icons/check.svg")),
     ("x", include_bytes!("../assets/icons/x.svg")),
     ("square", include_bytes!("../assets/icons/square.svg")),
+    // VMAX interlock mark (brand kit v1.1, white on transparent). Not a
+    // Lucide glyph: it is the app's brand mark, used in the title bar.
+    ("vmax-mark", include_bytes!("../assets/icons/vmax-mark.svg")),
 ];
 
 /// Every icon the UI uses (plus `square`, the unknown-name fallback); the
@@ -59,6 +63,7 @@ pub const USED_ICONS: &[&str] = &[
     "chevron-right",
     "check",
     "square",
+    "vmax-mark",
 ];
 
 fn white_icons() -> &'static HashMap<&'static str, Arc<[u8]>> {
@@ -84,12 +89,18 @@ pub fn exists(name: &str) -> bool {
 
 /// An egui image for an icon, tinted. Unknown names fall back to a square.
 pub fn image(name: &str, size: f32, tint: Color32) -> egui::Image<'static> {
+    image_sized(name, Vec2::splat(size), tint)
+}
+
+/// An egui image for an icon at an explicit (non-square) size, tinted.
+/// The VMAX mark is 392:292, so it needs 32×24, not a square.
+pub fn image_sized(name: &str, size: Vec2, tint: Color32) -> egui::Image<'static> {
     let (name, bytes) = match white_icons().get(name) {
         Some(b) => (name, b.clone()),
         None => ("square", white_icons().get("square").cloned().unwrap_or_else(|| Arc::from(Vec::new().into_boxed_slice()))),
     };
 
-    egui::Image::from_bytes(format!("bytes://icons/{name}.svg"), egui::load::Bytes::Shared(bytes)).fit_to_exact_size(Vec2::splat(size)).tint(tint)
+    egui::Image::from_bytes(format!("bytes://icons/{name}.svg"), egui::load::Bytes::Shared(bytes)).fit_to_exact_size(size).tint(tint)
 }
 
 /// Paint an icon centred in `rect`.
