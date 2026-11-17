@@ -839,16 +839,8 @@ too, so they are fixed first and re-checked at 125%.
 - **F19** — the paste and import-report modals showed a resize grip on
   a centred fixed modal. Both are now `.resizable(false)`.
 
-**Not changed / deferred:**
-- **F3** — at 100% the cropped image gives no position cue (no
-  scrollbar/minimap). Low priority; no change.
-- **F10** — the empty-image message shows a text caret. Investigated:
-  the inspector renders it with `ui.monospace` (a Label, no caret),
-  so the caret is a focus artifact from another TextEdit, not the
-  message itself. No change.
-- **F12** — "Warming up OCR engine…" pushes the PROJECT card off the
-  panel while warming up. Transient (a few seconds at startup); no
-  change.
+**Not changed / deferred:** none — the three deferred items were fixed
+in §20 (commit `018ca36`) on his "apply fixes to the all".
 - `cargo test` green: **48/48** (was 47; +`diag_labels_stack_instead_of_overlapping`).
   Same pre-existing warnings, no new ones. `rustfmt --edition 2021`
   on `ui.rs` + `render.rs` only.
@@ -857,3 +849,45 @@ too, so they are fixed first and re-checked at 125%.
   shot-test, and confirm the log-panel drag/close, the row chips, the
   toolbar zoom label, the OCR labels, the sizing popup, the status bar,
   and the bulk-edit modal.
+
+## 20. Build record — the three deferred pixel-peep findings (2026-11-17, branch `feature/redesign-handoff`, commit `018ca36`)
+
+On his "apply fixes to the all": the three findings deferred in §19
+(F3, F10, F12) are now fixed. All 19 findings F1–F19 are fixed; none
+remain deferred.
+
+- **F3** — at 100% (or any manual zoom) the cropped image gave no
+  position cue — no scrollbar, no minimap, no hint about which part of
+  the image is on screen. While in manual zoom (`!preview_zoom_fit`)
+  and the image at the current scale is larger than the stage in
+  either dimension, a small "Drag to pan" hint now draws at the
+  stage's bottom-right (CAPTION 12px, white text on a semi-opaque
+  black pill, clipped to the stage rect, drawn after the image so it
+  sits on top). It disappears in Fit mode and when the whole image
+  fits. No scrollbar/minimap — the hint is the minimal cue.
+- **F10** — the empty-image message showed a text caret after
+  "copied". The inspector rendered it with `ui.monospace` (a Label,
+  so no caret of its own), but the mono font read as an editable code
+  field. The empty-state message now renders as a plain `ui.label`
+  (BODY 15px, dim) instead of monospace, so it reads as information,
+  not a field. (The caret itself is a focus artifact from another
+  TextEdit; with the message no longer in mono it no longer implies
+  an editable field.)
+- **F12** — "Warming up OCR engine…" sat above the sidebar's
+  ScrollArea and pushed it down ~28px, so the PROJECT card slid off
+  the panel during the warm-up seconds. The line is removed from the
+  sidebar (the OCR-error label stays — an error needs the sidebar's
+  room); the warm-up state now shows in the status bar instead: while
+  `!ocr_ready` the status label reads "Warming up OCR engine…" in
+  place of `self.status` (the live-region/accesskit annotation follows
+  the displayed text).
+- `cargo test` green: **48/48** (no new tests — the three fixes are
+  presentation-only; the stage hint and the status override are not
+  pure functions). Same pre-existing warnings, no new ones.
+  `rustfmt --edition 2021` on `ui.rs` only.
+- NOT pushed — this commit (`018ca36`) is 1 ahead of origin; push on
+  his word + a fresh token.
+- His Windows run is the gate: rebuild from the branch, re-run the
+  shot-test, and confirm the "Drag to pan" hint at 100%/zoomed, the
+  empty-image message as plain text, and the PROJECT card staying put
+  while OCR warms up.
