@@ -128,6 +128,9 @@ impl Tokens {
                 pressed: mix(GRAPHITE, Color32::WHITE, 0.16),
                 text: Color32::WHITE,
                 text_dim: STEEL,
+                // Faint is canvas/chrome-only: 4.84:1 on canvas, but 4.39:1
+                // on card and 3.40:1 on field (below AA) — the contrast
+                // test pins this. Text on field uses text_dim instead.
                 text_faint: mix(STEEL, GRAPHITE, 0.20),
                 icon_rest: STEEL,
                 accent: BRAND,
@@ -512,9 +515,10 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind, roomy: bool) {
 
     // Buttons and combo boxes are field-coloured boxes with a hairline edge.
     // One edge for every control, ours and egui's: firm at rest (field_border
-    // is 3.62:1 against the panel — the old card_border edge was 1.53:1, so
-    // buttons were nearly invisible at rest), firmer under the pointer, the
-    // app colour while it's pressed or open.
+    // is 3.28:1 on card and 4.28:1 on chrome in Midnight, 3.44:1 / 3.13:1 in
+    // Daylight — all above the 3:1 a non-text edge needs; the old card_border
+    // edge was 1.53:1, so buttons were nearly invisible at rest), firmer
+    // under the pointer, the app colour while it's pressed or open.
     for (wv, bg, weak, stroke) in [
         (&mut w.inactive, t.field, t.field, t.field_border),
         (&mut w.hovered, t.hover, t.hover, t.field_border),
@@ -614,17 +618,53 @@ mod tests {
         (hi + 0.05) / (lo + 0.05)
     }
 
-    /// The VMAX accessible pairs must hold in both themes: body text and
-    /// secondary text on the canvas, white on the accent (buttons), and
-    /// the small-blue-text colour on the canvas.
+    /// Every text pair the UI actually uses, in both themes, must pass
+    /// WCAG AA (4.5:1 for text, 3:1 for the focus ring and control edges).
+    /// Measured values (2026-11-17): Midnight faint is 4.84:1 on canvas
+    /// but 4.39:1 on card and 3.40:1 on field — so `text_faint` is only
+    /// for text on canvas/chrome (dropped rows, "untranslated" flags);
+    /// the JSON editor uses `text_dim` on field instead (4.79:1).
+    /// Daylight faint passes everywhere (6.65:1).
     #[test]
     fn vmax_contrast_pairs_pass_aa() {
         for kind in ThemeKind::ALL {
             let t = Tokens::for_kind(kind);
-            assert!(contrast(t.text, t.canvas) >= 4.5, "{kind:?} text/canvas");
-            assert!(contrast(t.text_dim, t.canvas) >= 4.5, "{kind:?} dim/canvas");
+            // Body text on every surface it sits on.
+            for (bg, name) in [(t.canvas, "canvas"), (t.card, "card"), (t.field, "field")] {
+                assert!(contrast(t.text, bg) >= 4.5, "{kind:?} text/{name}");
+                assert!(contrast(t.text_dim, bg) >= 4.5, "{kind:?} dim/{name}");
+            }
+            // Faint: canvas and chrome only (see the doc comment above).
+            assert!(contrast(t.text_faint, t.canvas) >= 4.5, "{kind:?} faint/canvas");
+            assert!(contrast(t.text_faint, t.chrome) >= 4.5, "{kind:?} faint/chrome");
+            // Blue text on every surface it sits on, and white-on-accent.
+            for (bg, name) in [(t.canvas, "canvas"), (t.card, "card"), (t.field, "field")] {
+                assert!(contrast(t.accent_ink, bg) >= 4.5, "{kind:?} accent_ink/{name}");
+            }
             assert!(contrast(Color32::WHITE, t.accent) >= 4.5, "{kind:?} white/accent");
-            assert!(contrast(t.accent_ink, t.canvas) >= 4.5, "{kind:?} accent_ink/canvas");
+            // Functional text.
+            assert!(contrast(t.warning, t.canvas) >= 4.5, "{kind:?} warning/canvas");
+            assert!(contrast(t.danger, t.canvas) >= 4.5, "{kind:?} danger/canvas");
+            // The focus ring (accent_ink, 1.5px) on the surfaces it rings.
+            for (bg, name) in [(t.field, "field"), (t.chrome, "chrome")] {
+                assert!(contrast(t.accent_ink, bg) >= 3.0, "{kind:?} ring/{name}");
+            }
+            // Control edges (field_border) on the surfaces they edge.
+            for (bg, name) in [(t.card, "card"), (t.chrome, "chrome")] {
+                assert!(contrast(t.field_border, bg) >= 3.0, "{kind:?} edge/{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn theme_ids_round_trip() {
+        assert_eq!(ThemeKind::from_id("midnight"), ThemeKind::Studio);
+        assert_eq!(ThemeKind::from_id("daylight"), ThemeKind::StudioLight);
+        // The pre-VMAX id still maps to Daylight.
+        assert_eq!(ThemeKind::from_id("studio-light"), ThemeKind::StudioLight);
+        assert_eq!(ThemeKind::from_id("bogus"), ThemeKind::Studio);
+        for kind in ThemeKind::ALL {
+            assert_eq!(ThemeKind::from_id(kind.id()), kind);
         }
     }
 

@@ -88,6 +88,9 @@ pub struct CaptionStudioApp {
     conf: f64,
     minchars: i32,
     sizing: crate::model::SizingMode,
+    /// Active theme (Midnight / Daylight), restored on launch and saved
+    /// whenever the switch changes.
+    theme: crate::theme::ThemeKind,
 
     // Data
     extracted: Option<ExtractedData>,
@@ -123,6 +126,11 @@ pub struct CaptionStudioApp {
     preview_filter: String,
     /// Focus the filter field the first frame the dropdown opens.
     preview_filter_focus: bool,
+    /// Preview zoom: Fit (the whole image in the pane) or 100% (native
+    /// resolution, pan with the ScrollArea).
+    preview_zoom_fit: bool,
+    /// The About dialog is open.
+    show_about: bool,
     /// Status-bar counts for the dataset the preview shows.
     preview_file_count: usize,
     preview_untranslated: usize,
@@ -149,10 +157,11 @@ impl CaptionStudioApp {
         // Chakra Petch, Midnight tokens, and the Lucide SVG loader.
         // The caption *rendering* fonts (fonts.rs) are untouched.
         crate::theme::install_fonts(&cc.egui_ctx);
-        crate::theme::apply(&cc.egui_ctx, crate::theme::ThemeKind::Studio, false);
+        let settings = Settings::load();
+        let theme = crate::theme::ThemeKind::from_id(&settings.theme);
+        crate::theme::apply(&cc.egui_ctx, theme, false);
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
-        let settings = Settings::load();
         let (tx, rx) = unbounded::<WorkerMsg>();
         let app = CaptionStudioApp {
             input_dir: settings.input,
@@ -161,6 +170,7 @@ impl CaptionStudioApp {
             conf: settings.conf,
             minchars: settings.minchars,
             sizing: settings.sizing,
+            theme,
             extracted: None,
             editor_text: String::new(),
             ocr: None,
@@ -181,6 +191,8 @@ impl CaptionStudioApp {
             preview_image_scale: 1.0,
             preview_filter: String::new(),
             preview_filter_focus: false,
+            preview_zoom_fit: true,
+            show_about: false,
             preview_file_count: 0,
             preview_untranslated: 0,
             preview_json_error: None,
@@ -236,6 +248,7 @@ impl CaptionStudioApp {
             minchars: self.minchars.max(0),
             sizing: self.sizing,
             panel_width: self.panel_width,
+            theme: self.theme.id().to_string(),
         }
         .save();
     }
@@ -736,6 +749,7 @@ impl CaptionStudioApp {
             }
             let selected = self.selected_block == Some(blk.id);
             let resp = ui.selectable_label(selected, job);
+            focus_ring(ui, &resp);
             if selected && self.blocks_scroll_to_selected {
                 resp.scroll_to_me(Some(egui::Align::Center));
                 self.blocks_scroll_to_selected = false;
@@ -1036,7 +1050,41 @@ impl eframe::App for CaptionStudioApp {
                 self.pending_render = None;
             }
         }
-        let modal_open = self.confirm_copy_originals;
+
+        // --- About dialog ---
+        // The lockup is white artwork tinted with the text colour, so it
+        // reads white on Midnight and black on Daylight; the wordmark is
+        // used as supplied, never retyped.
+        if self.show_about {
+            let mut open = true;
+            egui::Window::new("About Caption Studio")
+                .collapsible(false)
+                .resizable(false)
+                .open(&mut open)
+                .show(&ctx, |ui| {
+                    let t = crate::theme::Tokens::get(ui.ctx());
+                    ui.add(crate::icons::image_sized(
+                        "vmax-lockup",
+                        egui::vec2(310.0, 50.0),
+                        t.text,
+                    ));
+                    ui.label(crate::theme::heading("Caption Studio", crate::theme::SECTION));
+                    ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+                    ui.label(crate::theme::label_text(
+                        "Batch Image Translator & OCR Verifier",
+                        crate::theme::SMALL,
+                    ));
+                    let close = ui.button("Close");
+                    focus_ring(ui, &close);
+                    if close.clicked() {
+                        self.show_about = false;
+                    }
+                });
+            if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.show_about = false;
+            }
+        }
+        let modal_open = self.confirm_copy_originals || self.show_about;
 
         // --- Status bar ---
         egui::Panel::bottom("status_bar").show(ui, |ui| {
@@ -1120,6 +1168,15 @@ impl eframe::App for CaptionStudioApp {
                     let t = crate::theme::Tokens::get(ui.ctx());
                     ui.add(crate::icons::image_sized("vmax-mark", egui::vec2(32.0, 24.0), t.text));
                     ui.label(crate::theme::heading("Caption Studio", crate::theme::SECTION));
+                    // About lives at the right end of the title row, where
+                    // a reader looks for it; it opens the dialog below.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let about = ui.small_button("About");
+                        focus_ring(ui, &about);
+                        if about.clicked() {
+                            self.show_about = true;
+                        }
+                    });
                 });
                 ui.label(crate::theme::label_text("Batch Image Translator & OCR Verifier", crate::theme::SMALL));
                 if let Some(e) = &self.ocr_error {
@@ -1133,6 +1190,7 @@ impl eframe::App for CaptionStudioApp {
                     let input_label = ui.label("Input Folder:").id;
                     ui.horizontal(|ui| {
                         let resp = ui.text_edit_singleline(&mut self.input_dir).labelled_by(input_label);
+                        focus_ring(ui, &resp);
                         let path = self.input_dir.clone();
                         if !path.is_empty() {
                             resp.on_hover_text(path);
@@ -1144,6 +1202,7 @@ impl eframe::App for CaptionStudioApp {
                     let output_label = ui.label("Output Folder:").id;
                     ui.horizontal(|ui| {
                         let resp = ui.text_edit_singleline(&mut self.output_dir).labelled_by(output_label);
+                        focus_ring(ui, &resp);
                         let path = self.output_dir.clone();
                         if !path.is_empty() {
                             resp.on_hover_text(path);
@@ -1155,6 +1214,7 @@ impl eframe::App for CaptionStudioApp {
                     let font_label = ui.label("Custom Font (.ttf / .otf / .ttc, optional):").id;
                     ui.horizontal(|ui| {
                         let resp = ui.text_edit_singleline(&mut self.font_path).labelled_by(font_label);
+                        focus_ring(ui, &resp);
                         let path = self.font_path.clone();
                         if !path.is_empty() {
                             resp.on_hover_text(path);
@@ -1178,7 +1238,8 @@ impl eframe::App for CaptionStudioApp {
                                     }
                                 }
                             });
-                        combo.response.labelled_by(sizing_label);
+                        let combo_resp = combo.response.labelled_by(sizing_label);
+                        focus_ring(ui, &combo_resp);
                         if changed {
                             self.save_settings();
                             self.preview_key.clear();
@@ -1189,17 +1250,21 @@ impl eframe::App for CaptionStudioApp {
                 egui::CollapsingHeader::new("OCR Threshold Tuning").default_open(false).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         let conf_label = ui.label("OCR confidence threshold:").id;
-                        ui.add(
-                            egui::DragValue::new(&mut self.conf)
-                                .range(0.10..=0.95)
-                                .speed(0.05),
-                        )
-                        .labelled_by(conf_label);
+                        let conf_resp = ui
+                            .add(
+                                egui::DragValue::new(&mut self.conf)
+                                    .range(0.10..=0.95)
+                                    .speed(0.05),
+                            )
+                            .labelled_by(conf_label);
+                        focus_ring(ui, &conf_resp);
                     });
                     ui.horizontal(|ui| {
                         let min_label = ui.label("Minimum length for unboxed text (chars):").id;
-                        ui.add(egui::DragValue::new(&mut self.minchars).range(0..=60).speed(1))
+                        let min_resp = ui
+                            .add(egui::DragValue::new(&mut self.minchars).range(0..=60).speed(1))
                             .labelled_by(min_label);
+                        focus_ring(ui, &min_resp);
                     });
                     ui.horizontal(|ui| {
                         if icon_text_button(ui, "check", "Apply Thresholds (Instant)").clicked() {
@@ -1244,6 +1309,22 @@ impl eframe::App for CaptionStudioApp {
                                 self.cancel.store(true, Ordering::SeqCst);
                             }
                         });
+                    });
+                });
+
+                egui::CollapsingHeader::new("Appearance").default_open(true).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let theme_label = ui.label("Theme:").id;
+                        for kind in crate::theme::ThemeKind::ALL {
+                            let resp = ui
+                                .selectable_value(&mut self.theme, kind, kind.label())
+                                .labelled_by(theme_label);
+                            focus_ring(ui, &resp);
+                            if resp.changed() {
+                                crate::theme::apply(ui.ctx(), kind, false);
+                                self.save_settings();
+                            }
+                        }
                     });
                 });
 
@@ -1293,8 +1374,10 @@ impl eframe::App for CaptionStudioApp {
             .show(ui, |ui| {
             ui.add_enabled_ui(!modal_open, |ui| {
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.tab, Tab::Json, "Translation JSON");
-                ui.selectable_value(&mut self.tab, Tab::Preview, "Live Preview & OCR Check");
+                let json_tab = ui.selectable_value(&mut self.tab, Tab::Json, "Translation JSON");
+                focus_ring(ui, &json_tab);
+                let preview_tab = ui.selectable_value(&mut self.tab, Tab::Preview, "Live Preview & OCR Check");
+                focus_ring(ui, &preview_tab);
             });
             ui.separator();
             match self.tab {
@@ -1333,6 +1416,7 @@ impl eframe::App for CaptionStudioApp {
                                 .hint_text("Scan images to fill this in, or paste translated JSON here."),
                         )
                         .accessible_name("Translation JSON");
+                        focus_ring(ui, &resp);
                         if resp.changed() {
                             self.preview_key.clear();
                             // Keep the status-bar counts + JSON validity live
@@ -1368,6 +1452,7 @@ impl eframe::App for CaptionStudioApp {
                             .button(format!("{short_current} ▾"))
                             .on_hover_text(full_path)
                             .accessible_name(format!("Preview file {}", self.preview_file));
+                        focus_ring(ui, &btn);
                         if btn.clicked() {
                             self.preview_filter_focus = true;
                         }
@@ -1405,6 +1490,7 @@ impl eframe::App for CaptionStudioApp {
                                         let resp = ui
                                             .selectable_label(n == &self.preview_file, short)
                                             .on_hover_text(path);
+                                        focus_ring(ui, &resp);
                                         if resp.clicked() {
                                             picked = Some(n.clone());
                                             self.preview_filter.clear();
@@ -1427,12 +1513,26 @@ impl eframe::App for CaptionStudioApp {
                     });
                     // The mode choice gets its own row as a segmented control,
                     // so the file row isn't cramped and the three modes read
-                    // as one choice.
+                    // as one choice. Zoom rides in the same row: Fit puts the
+                    // whole image in the pane, 100% shows it at native
+                    // resolution so plate edges can be checked without
+                    // scrolling the fit.
                     ui.horizontal(|ui| {
                         ui.label(crate::theme::label_text("View:", crate::theme::LABEL));
-                        ui.selectable_value(&mut self.preview_mode, PreviewMode::Rendered, "Rendered");
-                        ui.selectable_value(&mut self.preview_mode, PreviewMode::Ocr, "OCR Boxes");
-                        ui.selectable_value(&mut self.preview_mode, PreviewMode::Original, "Original");
+                        for (mode, label) in [
+                            (PreviewMode::Rendered, "Rendered"),
+                            (PreviewMode::Ocr, "OCR Boxes"),
+                            (PreviewMode::Original, "Original"),
+                        ] {
+                            let resp = ui.selectable_value(&mut self.preview_mode, mode, label);
+                            focus_ring(ui, &resp);
+                        }
+                        ui.separator();
+                        ui.label(crate::theme::label_text("Zoom:", crate::theme::LABEL));
+                        let fit = ui.selectable_value(&mut self.preview_zoom_fit, true, "Fit");
+                        focus_ring(ui, &fit);
+                        let hundred = ui.selectable_value(&mut self.preview_zoom_fit, false, "100%");
+                        focus_ring(ui, &hundred);
                     });
                     // Image left, Detected Blocks right. The old layout
                     // stacked the image above the blocks and the image's
@@ -1454,7 +1554,16 @@ impl eframe::App for CaptionStudioApp {
                             |ui| {
                                 if let Some(tex) = &self.preview_texture {
                                     let (iw, ih) = (self.preview_size[0], self.preview_size[1]);
-                                    let scale = (image_w / iw).min(total.y / ih).min(1.5).max(0.05);
+                                    // Fit: the whole image in the pane (max
+                                    // 1.5×). 100%: native resolution — the
+                                    // texture is full-res, so this only
+                                    // changes the display scale, never the
+                                    // render, and the ScrollArea pans it.
+                                    let scale = if self.preview_zoom_fit {
+                                        (image_w / iw).min(total.y / ih).min(1.5).max(0.05)
+                                    } else {
+                                        1.0
+                                    };
                                     let size = egui::Vec2::new(iw * scale, ih * scale);
                                     // Centre the image in its pane when it is
                                     // smaller than the pane; when it is larger
@@ -1524,7 +1633,9 @@ impl eframe::App for CaptionStudioApp {
                                     ui.label(crate::theme::label_text("Green boxes = kept · Orange boxes = filtered out", crate::theme::CAPTION));
                                 }
                                 ui.label(crate::theme::heading("Detected Blocks", crate::theme::CARD));
-                                if ui.small_button("Copy block list").clicked() {
+                                let copy_resp = ui.small_button("Copy block list");
+                                focus_ring(ui, &copy_resp);
+                                if copy_resp.clicked() {
                                     match arboard::Clipboard::new()
                                         .and_then(|mut cb| cb.set_text(self.verify_text.clone()))
                                     {
@@ -1688,7 +1799,8 @@ fn focus_ring(ui: &egui::Ui, resp: &egui::Response) {
             t.radius_sm,
             // `accent_ink`, not `accent`: the indigo ring was 2.44:1 against
             // the field it sits on (below the 3:1 a focus indicator needs);
-            // accent_ink is 6.69:1 there and 8.08:1 on chrome.
+            // accent_ink is 5.47:1 there and 9.21:1 on chrome (Midnight;
+            // Daylight is 5.17:1 / 4.70:1 — the contrast test pins these).
             egui::Stroke::new(1.5, t.accent_ink),
             egui::StrokeKind::Outside,
         );
@@ -1698,7 +1810,10 @@ fn focus_ring(ui: &egui::Ui, resp: &egui::Response) {
 /// Syntax-highlight the Translation JSON editor: keys in accent_ink, string
 /// values in the text colour, numbers/booleans/null in amber, punctuation
 /// dimmed, and empty strings (`""`) visibly dimmed so a missing translation
-/// reads as empty instead of blending in. Tolerant of invalid JSON (the user
+/// reads as empty instead of blending in. "Dimmed" here is `text_dim`, not
+/// `text_faint`: the editor sits on the field background, where faint is
+/// 3.40:1 in Midnight (below AA) while dim is 4.79:1 — faint is only for
+/// text on canvas/chrome, where it passes. Tolerant of invalid JSON (the user
 /// is mid-edit) — it tokenizes by shape and never parses. Byte-safe: the
 /// structural characters are all ASCII, so scanning bytes for them can never
 /// mistake a multi-byte character for one, and spans only ever start and end
@@ -1741,7 +1856,7 @@ fn json_highlight_job(text: &str, t: &crate::theme::Tokens) -> egui::text::Layou
                 }
                 let is_key = closed && j < n && bytes[j] == b':';
                 if s == "\"\"" {
-                    push(&mut job, s, t.text_faint);
+                    push(&mut job, s, t.text_dim);
                 } else if is_key {
                     push(&mut job, s, t.accent_ink);
                 } else {
@@ -1749,7 +1864,7 @@ fn json_highlight_job(text: &str, t: &crate::theme::Tokens) -> egui::text::Layou
                 }
             }
             b'{' | b'}' | b'[' | b']' | b':' | b',' => {
-                push(&mut job, &text[i..i + 1], t.text_faint);
+                push(&mut job, &text[i..i + 1], t.text_dim);
                 i += 1;
             }
             b'0'..=b'9' | b'-' => {
@@ -1850,9 +1965,9 @@ mod tests {
         assert_eq!(colour_of("\"meme.png\""), Some(t.accent_ink));
         assert_eq!(colour_of("\"0\""), Some(t.accent_ink));
         assert_eq!(colour_of("\"Hello\""), Some(t.text));
-        assert_eq!(colour_of("\"\""), Some(t.text_faint));
+        assert_eq!(colour_of("\"\""), Some(t.text_dim));
         assert_eq!(colour_of("42"), Some(t.warning));
-        assert_eq!(colour_of("{"), Some(t.text_faint));
+        assert_eq!(colour_of("{"), Some(t.text_dim));
     }
 
     #[test]

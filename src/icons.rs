@@ -39,6 +39,9 @@ pub static ICONS: &[(&str, &[u8])] = &[
     // VMAX interlock mark (brand kit v1.1, white on transparent). Not a
     // Lucide glyph: it is the app's brand mark, used in the title bar.
     ("vmax-mark", include_bytes!("../assets/icons/vmax-mark.svg")),
+    // VMAX horizontal lockup (icon + wordmark, brand kit v1.1, white on
+    // transparent). Used in the About dialog only, tinted per theme.
+    ("vmax-lockup", include_bytes!("../assets/icons/vmax-lockup.svg")),
 ];
 
 /// Every icon the UI uses (plus `square`, the unknown-name fallback); the
@@ -64,6 +67,7 @@ pub const USED_ICONS: &[&str] = &[
     "check",
     "square",
     "vmax-mark",
+    "vmax-lockup",
 ];
 
 fn white_icons() -> &'static HashMap<&'static str, Arc<[u8]>> {
