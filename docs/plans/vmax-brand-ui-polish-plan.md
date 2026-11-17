@@ -1,7 +1,7 @@
 # Caption Studio — VMAX brand + UI/UX polish plan
 
-**Status:** APPROVED 2026-11-17 — Phase 1 BUILT (local, unpushed, 26 tests green).
-Phases 2–3 not started. No code changed after this point without a new approval.
+**Status:** APPROVED 2026-11-17 — Phase 1 BUILT + PUSHED 2026-11-17 (origin/main `6b537e8`).
+Phase 2 IN PROGRESS. Phase 3 not started.
 **Date:** 2026-11-17
 **Reviewed:** 6 screenshots from his Windows run (1920×1080, app maximised) +
 `src/theme.rs`, `src/render.rs`, `src/ui.rs`, `src/icons.rs` + VMAX Brand Kit v1.1
@@ -284,7 +284,14 @@ crispness check); release post generated from the pipeline.
 - No push/tag until he says so (standing rule) — Phase 1 verification needs
   a tag (e.g. v1.0.4) for the Windows exe, which is his call.
 
-## 7. Phase 1 build record (2026-11-17, local only — NOT pushed)
+## 7. Phase 1 build record (2026-11-17, PUSHED same day — origin/main `6b537e8`)
+
+- Push: first pasted token rejected by GitHub (401 Bad credentials, checked
+  twice); a fresh token worked on the first try. Token used once via
+  `GH_TOKEN` env only, never saved; remote verified token-free, the
+  `gh auth git-credential` helper added by setup-git removed afterwards
+  (the gist.github.com-scoped copy was left alone — inert without a token,
+  origin unproven). No v1.0.4 tag — still his call.
 
 - `a8781cd` clip fix: fit width = width available from the text origin +
   a shared shrink-until-it-fits guard; regression test
@@ -310,3 +317,40 @@ crispness check); release post generated from the pipeline.
   Windows runner).
 - Still his call: the v1.0.4 tag for the Windows exe, so he can eyeball
   Phase 1 on his machine (top/bottom plates on `_3.jpg` must read fully).
+
+## 8. Phase 2 build record (2026-11-17, local — push is his call)
+
+- `render.rs`: `render_ocr_diagnostic` takes `highlight: Option<usize>`
+  (block id); the highlighted block is drawn last in Max Blue #2F5BFF
+  (stroke +3, tag bg `#2F5BFF` at 240 alpha) so its tag sits on top.
+  Test: highlight changes the render, an unknown id changes nothing.
+- `ui.rs` — file dropdown: the ComboBox is now a button + `Popup::menu`
+  with `CloseOnClickOutside` (the default `CloseOnClick` would close the
+  popup when the filter field is clicked — verified in the vendored egui
+  source). Filter is a case-insensitive substring match, auto-focused on
+  open; short names strip the shared prefix and middle-truncate past 30
+  chars so the `_N.jpg` suffix stays visible; full path on hover.
+- `ui.rs` — Detected Blocks: structured rows instead of the monospace
+  blob — `#id` (accent ink) + conf chip (green ≥ 0.90, amber below) +
+  dim OCR text + `→ NEW:` when translated, `· untranslated` when the new
+  text is empty; dropped rows faint and not selectable; Copy button copies
+  the block list (arboard). Clicking a row selects the block and
+  re-renders with its box in Max Blue (id in the preview cache key).
+- `ui.rs` — image click-to-select (OCR Boxes mode only): the Image widget
+  defaults to hover-only, so it now carries `Sense::click()`; the click
+  maps through the stored image rect/scale back to image pixels and picks
+  the first kept block containing the point (dropped boxes not
+  selectable); the list scrolls the row into view.
+- `ui.rs` — status bar: `N files · M untranslated` left of the progress
+  bar (untranslated = empty new text); a JSON error replaces the counts
+  in danger colour with the full error on hover. Counts refresh live
+  while editing JSON, not only on the Preview tab.
+- Full-path tooltips on the folder fields (§2.5) were already present
+  (`on_hover_text` on all three path fields) — no change needed. Empty
+  strings were already dimmed in the editor (existing test).
+- Verification: `cargo test` 31/31 green (was 26/26; 5 new tests), same 6
+  pre-existing warnings, no new ones; `cargo fmt` NOT run repo-wide.
+- Not verified here: the GUI on Windows (popup focus behaviour, row
+  wrapping at 340px, click mapping through the ScrollArea), the highlight
+  colour on real photos. His Windows eyeball is the gate: step through
+  the 18 files, click a block, status bar shows the counts.
