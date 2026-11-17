@@ -40,9 +40,11 @@ on the right. Settings live in `~/.caption_replacer.json`, the same file
 - **Models:** `ch_PP-OCRv4_det_infer.onnx` (4.6 MB),
   `ch_PP-OCRv4_rec_infer.onnx` (10.4 MB) and `ppocr_keys_v1.txt`
   (6,623 chars) are embedded with `include_bytes!()` / `include_str!()`.
-- **Fonts:** rendering uses the system fonts (Segoe UI / Nirmala UI /
+- **Fonts:** plate rendering uses the system fonts (Segoe UI / Nirmala UI /
   Yu Gothic / Malgun Gothic / Microsoft YaHei on Windows), with a
-  DejaVu Sans Bold copy embedded as a last-resort fallback.
+  DejaVu Sans Bold copy embedded as a last-resort fallback. The UI itself
+  uses vendored fonts (Chakra Petch, IBM Plex Sans, IBM Plex Mono in
+  `assets/fonts/`).
 - **CRT note:** the ONNX Runtime static lib is built with `/MD`
   (dynamic CRT), so the exe intentionally does **not** use
   `+crt-static`. The UCRT ships with Windows 10/11, so the exe still
@@ -114,7 +116,9 @@ were verified on Linux. Windows needs no such library.
 | `src/parser.rs` | Flexible JSON / Python-dict parsing, translation merging |
 | `src/fonts.rs` | cosmic-text font system, script font chains, custom font loading |
 | `src/image_io.rs` | Unicode-safe image load/save (JPEG q95, WebP q95) |
-| `src/ui.rs` | eframe/egui dual-column UI, scan/render workers, live preview |
+| `src/theme.rs` | SPEC dark tokens, sizes, control heights |
+| `src/icons.rs` | Lucide SVG icon set (embedded, tinted per theme) |
+| `src/ui.rs` | eframe/egui three-column UI (sidebar / workspace / inspector), scan/render workers, live preview |
 | `assets/models/` | Embedded ONNX models + dictionary (see `assets/models/README.md`) |
 
 ## Behaviour ported from Python (exact)
