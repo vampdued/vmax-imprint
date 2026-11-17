@@ -1109,3 +1109,60 @@ fix after the §22 work. All four are in this commit.
   selects it, and the list shows a scrollbar when it overflows.
 - F10 caret: still open (see §22 — ruled out a TextEdit caret and the
   scrollbar; mechanism unidentified, no guessed fix).
+
+## 24. Build record — developer handoff spec §§3.1–3.4 (2026-11-17, branch `feature/redesign-handoff`)
+
+A handoff spec arrived with five areas; §§3.1–3.4 are built here (one
+commit each). The spec's line numbers matched this branch's `ui.rs`.
+
+- **§3.1 Docked stage header bar** (`53b68a0`): the view/zoom toolbar is
+  now a dedicated 40px bar above the stage — `t.card` fill, 1px
+  `card_border` bottom stroke drawn by hand (a Frame stroke would box
+  all four sides), 32px content + 4px margins — so the controls no
+  longer float over the canvas. The active file name sits after the
+  pager, truncated with the full name on hover; its width is bounded by
+  the right groups' reserved width (`segmented_button_width`, extracted
+  from `segmented()` so the two can never drift), so a long name
+  truncates instead of pushing the groups off the bar. Mode labels are
+  'Original' / 'Detected Boxes' / 'Rendered' ('OCR Boxes' renamed);
+  zoom is 'Fit View' / live % — the live % is kept (F1), so at 100% it
+  reads '100%' as the spec shows and never lies at 200%. Segmented
+  groups use the unified `t.raised` track (was `t.card`, which blended
+  into the bar); selected stays solid `t.accent`. The mode/zoom
+  separator is an explicit 16px divider, not the full-height
+  `ui.separator()`.
+- **§3.2 Font sizing dropdown** (`5136cd6`): alignment restored to
+  natural downward (`BOTTOM_START`, `TOP_START` as fallback) — it
+  opened upward to avoid covering the OCR Thresholds card; the spec
+  restores the natural direction. The popup frame is now elevated:
+  `t.card` fill, 1px `card_border` stroke, `radius_lg` (8px) corners,
+  8px shadow (black alpha 160) — the old frame was fill-only, so the
+  menu read flat. Copy (`SizingMode::label`, used by both the button
+  and the menu items): 'Uniform (expand boxes)', 'Fit to Box (scale
+  per block)', 'Uniform (match smallest box)'. Note: egui 0.37's
+  `Shadow` has no `extrusion` field — the spec's 8px extrusion is
+  `spread: 8` here (the first version of this commit used `extrusion`
+  and failed to compile; fixed and amended before any push).
+- **§3.3 Safe primary CTA** (`ee3bd1e`): 32px space after the header
+  primary, so it no longer sits flush against the OS window controls
+  (— □ ✕). The stepper's share shrinks by the same 32px so the row
+  still fits at the 1280px minimum width. Labels: 'Scan Images',
+  'Review in Preview' (was the bare 'Review'), 'Render N Images',
+  'Open Output Folder' (was 'Open output').
+- **§3.4 File-list row** (`94b9601`): row height 64 → 68px, inner
+  padding 4 → 6px; explicit 4px space between the filename and the
+  metadata row. Status badges now read 'Ready' / 'Needs Text' /
+  'No Captions' / 'Rendered' / 'Failed' (were lowercase).
+- `cargo test` green: **48/48**. `rustfmt --edition 2021` on the
+  touched files only.
+- NOT pushed — branch is 4 ahead of origin (`53b68a0`, `5136cd6`,
+  `ee3bd1e`, `94b9601` on top of `9fdb900`); push on his word + a fresh
+  token.
+- The spec's checklist says "All 20 shot-test screenshots" — the suite
+  is 19 shots since the re-scan shot was removed with 'Scan again'
+  (§22). His Windows run is the gate: rebuild from the branch, re-run
+  the shot-test, and confirm the bar reads as one 40px strip above a
+  clean stage, the sizing menu drops down with a shadow, the primary
+  sits clear of the window controls, and the file rows show the new
+  badges without clipping.
+- F10 caret: still open (see §22).
