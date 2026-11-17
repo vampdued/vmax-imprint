@@ -442,14 +442,26 @@ pub fn render_entry(
         let (start_size, max_w, max_h) = match sizing {
             SizingMode::PerBlock => per_block_bounds(blk, avg_h, wi),
             SizingMode::UniformGrow => {
-                // Full image width: the plate grows to the very edge, so a
-                // long line at the uniform size stays on one line instead
-                // of wrapping at the w-56 margin and colliding with the
-                // block above (the Python scan's median font_size_est is
-                // 53 vs Rust's 51, and b3's line at 53 is 1395px — just
-                // over w-56=1384 — so the margin alone flips it to 2
-                // lines and its plate grows up into the block above).
-                let max_w = wi;
+                // The plate grows to the very edge, so a long line at the
+                // uniform size stays on one line instead of wrapping at
+                // the w-56 margin and colliding with the block above (the
+                // Python scan's median font_size_est is 53 vs Rust's 51,
+                // and b3's line at 53 is 1395px — just over w-56=1384 —
+                // so the margin alone flips it to 2 lines and its plate
+                // grows up into the block above).
+                //
+                // But the fit width is the width available FROM THE TEXT
+                // ORIGIN, not the full image width: the text is drawn at
+                // start_x (the block's left edge plus a margin), so a line
+                // `wi` wide starting at x≈36 overruns the right edge by
+                // exactly that offset and tiny-skia clips the glyphs (the
+                // cut plates on _3.jpg, 2026-11-17). Estimate the pad
+                // from the uniform size up front; the real pad can only
+                // shrink from here (the fit never grows the size), so the
+                // estimate stays safe.
+                let pad_est = 14.max((uniform_size as f32 * 0.45) as i32);
+                let start_est = (pad_est + 12).max(x1);
+                let max_w = (wi - start_est - pad_est).max(16);
                 // Plate grows downward from y1 (top/middle blocks) or
                 // upward from y2 (bottom blocks); the fit must keep the
                 // plate inside the image.
@@ -466,7 +478,26 @@ pub fn render_entry(
             }
         };
 
-        let fitted = fit_text_to_box(new_text, max_w, max_h, start_size, custom_family);
+        let mut fitted = fit_text_to_box(new_text, max_w, max_h, start_size, custom_family);
+        // Shared guard: no mode may draw past the right edge. The fit
+        // width already accounts for the origin in UniformGrow; if a line
+        // still overruns (an unbreakable word at the size floor), shrink
+        // until it fits or the floor is reached.
+        loop {
+            let size = fitted.size;
+            let pad_g = 14.max((size as f32 * 0.45) as i32);
+            let start_g = (pad_g + 12).max(x1);
+            let widest = fitted
+                .lines
+                .iter()
+                .map(|ln| line_width(ln, size, custom_family) as i32)
+                .max()
+                .unwrap_or(0);
+            if start_g + widest + pad_g <= wi || size <= 12 {
+                break;
+            }
+            fitted = fit_text_to_box(new_text, max_w, max_h, size - 1, custom_family);
+        }
         let chosen_size = fitted.size;
         let line_step = fitted.line_step;
 
@@ -910,6 +941,52 @@ mod tests {
         let p2 = out.get_pixel(700, 60);
         assert!(p2[0] < 120, "wide block plate missing: {p2:?}");
     }
+
+    /// Regression test for the clipped plates on _3.jpg (2026-11-17):
+    /// in UniformGrow the fit width was the full image width while the
+    /// text starts ~36px in from the left, so a long line's tail ran past
+    /// the right edge and tiny-skia clipped the glyphs. No caption ink
+    /// may appear in the rightmost pad margin of the image.
+    #[test]
+    fn uniform_grow_keeps_text_inside_image() {
+        use crate::model::{Block, ImageEntry};
+        let entry = ImageEntry {
+            file: "clip.jpg".to_string(),
+            width: 1440,
+            height: 900,
+            raw_lines: vec![],
+            blocks: vec![Block {
+                id: 1,
+                bbox: [24, 40, 700, 100],
+                line_bboxes: vec![[24, 40, 700, 100]],
+                original_text: String::new(),
+                // Short words pack the greedy wrap tight to the fit limit
+            // (line 1 lands at 1404px of the 1440px image) — the geometry
+            // that clipped the plates on _3.jpg.
+            new_text: "ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka ka".to_string(),
+                confidence: 0.94,
+                text_color: [255, 64, 64],
+                bg_color: [18, 18, 18],
+                is_boxed: true,
+                font_size_est: 51,
+            }],
+            dropped: vec![],
+        };
+        let img = RgbImage::new(1440, 900);
+        let out = render_entry(&img, &entry, None, crate::model::SizingMode::UniformGrow);
+        // Caption ink (reddish text) must stay at least the minimum
+        // plate pad (14px) away from the right edge.
+        for y in 0..900 {
+            for x in 1426..1440 {
+                let p = out.get_pixel(x, y);
+                assert!(
+                    !(p[0] > 200 && p[1] < 100 && p[2] < 100),
+                    "caption ink at the right edge: ({x}, {y}) = {p:?}"
+                );
+            }
+        }
+    }
+
 
     #[test]
     fn diagnostic_draws_without_panic() {
