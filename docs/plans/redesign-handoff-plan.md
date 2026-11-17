@@ -429,3 +429,76 @@ Verified against local main `cebd449` (files: `src/ui.rs`, `src/theme.rs`,
   with the dropdown. Same 6 pre-existing warnings, no new ones.
 - NOT pushed (branch is 1 commit ahead of origin at `5a5ed3d`); push only
   on his word.
+
+## 11. Build record — Phase 4 (2026-11-17, branch `feature/redesign-handoff`, commit `d6f5fd3`)
+
+- Item 13 — inspector block cards (replaces `show_block_rows`): one card
+  per block (kept + manually filtered) and one per dropped item. A block
+  card has a title row ("Block #n" + mono conf, green at/above the conf
+  threshold else amber, kept/filtered chip, Filter out / Keep toggle), the
+  read-only OCR text, an editable translation textarea, and a fit
+  indicator. Clicking the title selects the block (the stage highlights
+  it); focusing the textarea selects it too. The selected card carries a
+  Max Blue border. A dropped card has the "Filtered" title + reason + the
+  OCR text + a Keep button.
+- Per-block Keep/Filter override: new `Block.kept_override: Option<bool>`
+  (`#[serde(default, skip_serializing_if = "Option::is_none")]`, so old
+  JSON loads as `None` and the wire shape is unchanged for un-overridden
+  blocks) + `Block::kept()`. Filter out sets `Some(false)`; the block
+  keeps its translation in the JSON but renders nothing. Keep on a
+  dropped item promotes it via `layout::promote_dropped` (rebuilt from
+  the raw lines inside the dropped box, id = max + 1, override
+  `Some(true)`); the Keep button is disabled with a tooltip when the raw
+  lines are gone (old captions.json). The grouping's block construction
+  was factored into `block_from_lines` (shared by the grouping and the
+  promotion) — the grouping tests still pass.
+- `reapply_thresholds` carries overrides over: an overridden block is
+  kept as-is (id, translation, override stable) and re-added if the
+  thresholds would drop it; the dropped list drops any item inside an
+  overridden block's bbox (matched by containment, not text); the final
+  blocks are re-sorted by (y, x). The "translated block became filtered"
+  warning no longer fires for a manually-filtered block (it stays in
+  `blocks`). The status counts kept vs filtered-out blocks.
+- Render + diagnostic honour the override: `render_entry` skips filtered
+  blocks in the live set and the jobs loop; the diagnostic draws a
+  manually-filtered block dashed orange with a `#n · conf · filtered`
+  tag (white on dark orange), and the highlight tag names the state.
+  The fit bounds were factored into shared helpers
+  (`uniform_size_for`, `smallest_size_for`, `fit_bounds_for`) so the
+  inspector's fit indicator uses the exact bounds the render uses.
+- Counts honour the override: `counts_for` (untranslated), `file_status`
+  (a file with no kept blocks reads "no text"), and
+  `derive_workflow_state` (Translate counts kept blocks only; an image
+  with no kept blocks is "unchanged"). The file-list "N blocks" stays the
+  all-blocks count.
+- The translation textarea writes back to `extracted` (local clone +
+  write-back, since the inspector draws the resolved snapshot) via
+  `set_block_text` → `sync_editor_from_extracted` (regenerates the
+  compact JSON, clears the render state + preview key). The fit indicator
+  fits the effective text (translation, else the original) and reads
+  "Fits plate · N lines · M chars" (ok) or "Shrinks to Npx · N lines ·
+  M chars" (warning), cached per (file, block, sizing, font, uniform /
+  smallest size, text) so a stable card is shaped once.
+- Item 14 — JSON tab: per-image read-only JSON (the preview file's blocks
+  only, `per_image_json`, syntax-coloured, `interactive(false)`); Copy for
+  AI keeps the full-map copy; Paste Translated JSON is a modal (textarea
+  + "Paste from clipboard" + Apply/Cancel); Import Translated JSON runs a
+  trial `merge_translations` and shows the per-file error list in a modal
+  (the valid files import via the editor text; invalid JSON reports
+  "isn't valid JSON — nothing was imported"); "Bulk edit…" opens the
+  full-document editor as a modal (binds to `editor_text` directly, edits
+  live). All three modals join `modal_open` (Escape dismisses). The old
+  `paste_clipboard` (direct clipboard → editor) is deleted.
+- Corrections to the plan: the fit estimate lives in render.rs, not
+  layout.rs (the plan's item 13 said "reuse layout.rs fit estimate") —
+  the bounds are now shared helpers in render.rs. "Edits mark the image
+  translated" is the editor-text regeneration + preview re-render (there
+  is no separate per-image flag; the resolved data is the mark).
+- Tests 40/40 green (was 35/35): +2 layout (`promote_dropped_*`),
+  +1 render (`filtered_block_renders_nothing_and_diagnostic_marks_it`),
+  +1 ui (`filtered_blocks_skip_the_workflow_counts`,
+  `per_image_json_shows_one_file_only` — two new tests in the ui module
+  plus the filtered case inside `file_status_covers_all_five_states`).
+  Same 6 pre-existing warnings, no new ones.
+- NOT pushed; push only on his word (a fresh token is needed — the
+  remote is verified token-free after the 16:04 push).
