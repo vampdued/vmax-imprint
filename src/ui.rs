@@ -315,9 +315,6 @@ pub struct CaptionStudioApp {
     cancel: Arc<AtomicBool>,
     confirm_copy_originals: bool,
     pending_render: Option<ExtractedData>,
-    /// The Re-scan confirm modal (Scan again with edits): "Re-scan N
-    /// images? Your edited translations will be cleared."
-    confirm_rescan: bool,
     /// The Paste Translated JSON modal (JSON tab, Phase 4 item 14): its
     /// textarea content, and whether it is open.
     show_paste_modal: bool,
@@ -405,7 +402,6 @@ impl CaptionStudioApp {
             cancel: Arc::new(AtomicBool::new(false)),
             confirm_copy_originals: false,
             pending_render: None,
-            confirm_rescan: false,
             show_paste_modal: false,
             paste_text: String::new(),
             show_bulk_edit: false,
@@ -520,40 +516,41 @@ impl CaptionStudioApp {
         }
     }
 
-    /// True when any kept block has a real translation (non-empty and
-    /// different from the original) — the "with edits" check for Scan again.
-    fn has_translations(&self) -> bool {
-        self.resolved_data()
-            .map(|d| {
-                d.images.iter().flat_map(|e| e.blocks.iter()).any(|b| {
-                    let t = b.new_text.trim();
-                    !t.is_empty() && t != b.original_text.trim()
-                })
-            })
-            .unwrap_or(false)
-    }
-
     fn workflow_state(&self) -> WorkflowState {
         derive_workflow_state(self.resolved_data().as_ref(), self.render_summary)
     }
 
     /// The header primary for the current step (SPEC §2): Scan images →
     /// Review → Render N images. Translate's primary goes to Review (and
-    /// jumps to the first file with an untranslated block); once Render is
-    /// done the primary re-renders.
+    /// jumps to the first file with an untranslated block). Once every
+    /// step is done the workflow is complete, so the primary becomes
+    /// "Open output" — the next thing to do — instead of pointing back
+    /// at Review or offering another render.
     fn header_primary(&self) -> (&'static str, String) {
-        match self.workflow_state().current {
+        let wf = self.workflow_state();
+        if wf.states.iter().all(|s| matches!(s, StepState::Done)) {
+            return ("folder-open", "Open output".to_string());
+        }
+        match wf.current {
             WorkflowStep::Scan => ("scan", "Scan images".to_string()),
             WorkflowStep::Translate => ("eye", "Review".to_string()),
-            WorkflowStep::Review | WorkflowStep::Render => (
-                "play",
-                format!("Render {} images", self.workflow_state().images),
-            ),
+            WorkflowStep::Review | WorkflowStep::Render => {
+                ("play", format!("Render {} images", wf.images))
+            }
         }
     }
 
     /// Run the header primary's action for the current step.
     fn run_header_primary(&mut self) {
+        if self
+            .workflow_state()
+            .states
+            .iter()
+            .all(|s| matches!(s, StepState::Done))
+        {
+            self.open_output_folder();
+            return;
+        }
         match self.workflow_state().current {
             WorkflowStep::Scan => self.start_extract(),
             WorkflowStep::Translate => {
@@ -852,7 +849,10 @@ impl CaptionStudioApp {
         }
     }
 
-    fn load_translated_file(&mut self) {
+    /// Load the compact translation map from a file. Returns true when a
+    /// file was picked (so a caller showing a dialog knows to close it);
+    /// false when the user cancelled the file picker.
+    fn load_translated_file(&mut self) -> bool {
         if let Some(path) = rfd::FileDialog::new()
             .set_title("Select Translated JSON File")
             .add_filter("JSON files", &["json"])
@@ -893,6 +893,9 @@ impl CaptionStudioApp {
                         format!("Couldn't read that file ({e}) — check the file and try again.")
                 }
             }
+            true
+        } else {
+            false
         }
     }
 
@@ -1984,40 +1987,6 @@ impl eframe::App for CaptionStudioApp {
             }
         }
 
-        // --- Confirm re-scan modal (Scan again with edits, SPEC §9) ---
-        // While it is open the panels behind it are disabled and Escape
-        // dismisses it, like the copy-originals modal above.
-        if self.confirm_rescan {
-            let mut open = true;
-            let n = self.workflow_state().images;
-            egui::Window::new("Scan again")
-                .collapsible(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .resizable(false)
-                .open(&mut open)
-                .show(&ctx, |ui| {
-                    ui.label(format!(
-                        "Re-scan {n} images? Your edited translations will be cleared."
-                    ));
-                    ui.horizontal(|ui| {
-                        let yes = primary_icon_text_button(ui, "scan", "Re-scan", false);
-                        focus_ring(ui, &yes);
-                        if yes.clicked() {
-                            self.confirm_rescan = false;
-                            self.start_extract();
-                        }
-                        let keep = ui.button("Keep edits");
-                        focus_ring(ui, &keep);
-                        if keep.clicked() {
-                            self.confirm_rescan = false;
-                        }
-                    });
-                });
-            if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.confirm_rescan = false;
-            }
-        }
-
         // --- Paste Translated JSON modal (JSON tab, Phase 4 item 14) ---
         // The pasted text goes into the editor on Apply; "Paste from
         // clipboard" fills the textarea from the clipboard first.
@@ -2053,6 +2022,17 @@ impl eframe::App for CaptionStudioApp {
                                         "Clipboard empty — copy the translated JSON first.".into()
                                 }
                             }
+                        }
+                        // The file import lives here, not as a second
+                        // top-level button: it loads the same compact map
+                        // as Paste, only from a file. A picked file closes
+                        // the dialog (the import already landed in the
+                        // editor); cancelling the picker leaves it open so
+                        // the pasted text isn't lost.
+                        if ui.button("Import from file…").clicked()
+                            && self.load_translated_file()
+                        {
+                            self.show_paste_modal = false;
                         }
                         let apply = ui.button("Apply");
                         focus_ring(ui, &apply);
@@ -2172,7 +2152,6 @@ impl eframe::App for CaptionStudioApp {
         }
 
         let modal_open = self.confirm_copy_originals
-            || self.confirm_rescan
             || self.show_paste_modal
             || self.show_bulk_edit
             || self.import_report.is_some();
@@ -2524,7 +2503,7 @@ impl eframe::App for CaptionStudioApp {
                     // The three cards scroll: at 1080p (and at 125% scaling,
                     // where the panel is only ~584 logical px tall) they
                     // overflow the panel, and without this the Project card —
-                    // Save / Load / Scan again / Open output — was unreachable.
+                    // Save / Load / Open output — was unreachable.
                     // The OCR error stays here (it needs the sidebar's room);
                     // the warm-up line moved to the status bar — it pushed
                     // the scroll area down ~28px and the PROJECT card off the
@@ -2690,8 +2669,7 @@ impl eframe::App for CaptionStudioApp {
                                 // OCR Thresholds section (SPEC §2): always visible; two
                                 // sliders with mono value outputs; dragging schedules a
                                 // debounced (50 ms) instant re-filter — no Apply button
-                                // anymore. Reset restores .60/12; Inspect boxes switches
-                                // the stage to OCR mode.
+                                // anymore. Reset restores .60/12.
                                 sidebar_section(ui, "OCR THRESHOLDS", |ui| {
                                     ui.label(crate::theme::label_text(
                                         "Minimum confidence",
@@ -2756,29 +2734,31 @@ impl eframe::App for CaptionStudioApp {
                                                 );
                                             }
                                         }
-                                        if icon_text_button(ui, "search", "Inspect boxes").clicked()
-                                        {
-                                            self.preview_mode = PreviewMode::Ocr;
-                                            self.tab = Tab::Preview;
-                                            self.preview_key.clear();
-                                        }
+                                        // No "Inspect boxes" here: it only
+                                        // switched the stage to OCR mode and
+                                        // jumped to the Preview tab — exactly
+                                        // what the toolbar's "OCR Boxes" mode
+                                        // already does, so the thresholds
+                                        // section keeps just Reset.
                                     });
                                 });
                                 ui.add_space(12.0);
                                 ui.separator();
                                 ui.add_space(12.0);
 
-                                // Project section (SPEC §2): the 2×2 grid, now complete —
-                                // Scan again joins Save / Load / Open output. Scan again
-                                // with edits asks first (confirm modal, §9 copy); without
-                                // edits it scans straight away. It is disabled until a
-                                // scan exists — before the first scan the header
-                                // primary "Scan images" is the only scan button, so the
-                                // two never read as duplicates.
+                                // Project section (SPEC §2): project file
+                                // operations only — Save / Load / Open output.
+                                // "Scan again" used to sit here, but it
+                                // duplicated the header primary "Scan images"
+                                // (both visible at once), so it was removed
+                                // outright; re-scanning is the header
+                                // primary's job.
                                 sidebar_section(ui, "PROJECT", |ui| {
-                                    // Two rows of two buttons, each exactly half the
-                                    // inner width — the grid sized buttons to their
-                                    // labels, so the columns drifted apart.
+                                    // Save + Load share the first row, each
+                                    // exactly half the inner width — the grid
+                                    // sized buttons to their labels, so the
+                                    // columns drifted apart. Open output takes
+                                    // the second row full-width.
                                     let gap = ui.spacing().item_spacing.x;
                                     let half = ((ui.available_width() - gap) / 2.0).max(40.0);
                                     ui.horizontal(|ui| {
@@ -2799,34 +2779,16 @@ impl eframe::App for CaptionStudioApp {
                                         }
                                     });
                                     ui.add_space(8.0);
-                                    ui.horizontal(|ui| {
-                                        ui.add_enabled_ui(self.extracted.is_some(), |ui| {
-                                            if icon_text_button_sized(
-                                                ui,
-                                                "scan",
-                                                "Scan again",
-                                                half,
-                                            )
-                                            .clicked()
-                                            {
-                                                if self.has_translations() {
-                                                    self.confirm_rescan = true;
-                                                } else {
-                                                    self.start_extract();
-                                                }
-                                            }
-                                        });
-                                        if icon_text_button_sized(
-                                            ui,
-                                            "folder-open",
-                                            "Open output",
-                                            half,
-                                        )
-                                        .clicked()
-                                        {
-                                            self.open_output_folder();
-                                        }
-                                    });
+                                    if icon_text_button_sized(
+                                        ui,
+                                        "folder-open",
+                                        "Open output",
+                                        ui.available_width(),
+                                    )
+                                    .clicked()
+                                    {
+                                        self.open_output_folder();
+                                    }
                                 });
                             });
                     });
@@ -2910,9 +2872,11 @@ impl eframe::App for CaptionStudioApp {
                             self.show_paste_modal = true;
                             self.paste_text.clear();
                         }
-                        if icon_text_button(ui, "file-json", "Import Translated JSON…").clicked() {
-                            self.load_translated_file();
-                        }
+                        // No "Import Translated JSON…" button here: it
+                        // loads the same compact map as Paste, only from a
+                        // file instead of the clipboard, so the file import
+                        // lives inside the paste dialog as "Import from
+                        // file…" — one door for loading translations.
                         if icon_text_button(ui, "file-json", "Bulk edit…").clicked() {
                             // Regenerate the bulk map from the resolved
                             // data so it matches the current scan — the raw
@@ -2989,6 +2953,12 @@ impl eframe::App for CaptionStudioApp {
                         // the segmented groups lit up ("Rendered", "Fit")
                         // over an empty stage.
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            // A right inset, so the groups sit inside the
+                            // toolbar instead of flush against the panel's
+                            // right edge (shot 03: "not properly within
+                            // the view"). In a right-to-left layout the
+                            // first item lands at the right edge.
+                            ui.add_space(12.0);
                             ui.add_enabled_ui(!names.is_empty(), |ui| {
                             // The manual-zoom button shows the LIVE zoom
                             // (e.g. "200%"), not a fixed "100%" — the old
@@ -3344,6 +3314,23 @@ fn segmented<T: PartialEq + Copy>(
 ) -> Option<T> {
     let t = crate::theme::Tokens::get(ui.ctx());
     let mut picked = None;
+    // Equal widths within the group: measure the widest label and give
+    // every button that width, so the group reads as one consistent
+    // control instead of label-sized buttons (shot 03: "not consistent
+    // shape"). The button's own horizontal padding is added back so the
+    // widest label doesn't touch the button's edges.
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+    let max_text_w = options
+        .iter()
+        .map(|(_, label)| {
+            ui.ctx().fonts_mut(|f| {
+                f.layout_no_wrap((*label).to_string(), font_id.clone(), t.text)
+                    .size()
+                    .x
+            })
+        })
+        .fold(0.0, f32::max);
+    let btn_w = max_text_w + ui.spacing().button_padding.x * 2.0;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         let n = options.len();
@@ -3379,7 +3366,7 @@ fn segmented<T: PartialEq + Copy>(
                 // came out shorter than the chevron buttons beside them
                 // (shot 03: "not consistent shape"), so the two groups
                 // and the toolbar read as different controls.
-                .min_size(egui::vec2(0.0, 32.0))
+                .min_size(egui::vec2(btn_w, 32.0))
                 .fill(if selected { t.accent } else { t.card })
                 .stroke(if selected {
                     egui::Stroke::NONE
@@ -4129,7 +4116,6 @@ enum ShotKind {
     ModalPaste,
     ModalBulkEdit,
     ModalImportReport,
-    ModalRescan,
     ModalNothingTranslated,
     SizingPopup,
     RenderDone,
@@ -4139,8 +4125,10 @@ enum ShotKind {
 }
 
 impl ShotKind {
-    /// The shots in capture order.
-    const ALL: [ShotKind; 20] = [
+    /// The shots in capture order. 19, not 20: the re-scan modal shot
+    /// went with "Scan again" (its modal was removed as a duplicate of
+    /// the header primary), so the shots after it renumbered down by one.
+    const ALL: [ShotKind; 19] = [
         ShotKind::Idle,
         ShotKind::Scanning,
         ShotKind::PreviewRenderedFit,
@@ -4154,7 +4142,6 @@ impl ShotKind {
         ShotKind::ModalPaste,
         ShotKind::ModalBulkEdit,
         ShotKind::ModalImportReport,
-        ShotKind::ModalRescan,
         ShotKind::ModalNothingTranslated,
         ShotKind::SizingPopup,
         ShotKind::RenderDone,
@@ -4178,13 +4165,12 @@ impl ShotKind {
             ShotKind::ModalPaste => "11-modal-paste.png",
             ShotKind::ModalBulkEdit => "12-modal-bulk-edit.png",
             ShotKind::ModalImportReport => "13-modal-import-report.png",
-            ShotKind::ModalRescan => "14-modal-rescan.png",
-            ShotKind::ModalNothingTranslated => "15-modal-nothing-translated.png",
-            ShotKind::SizingPopup => "16-sizing-popup.png",
-            ShotKind::RenderDone => "17-render-done.png",
-            ShotKind::RenderFailed => "18-render-failed.png",
-            ShotKind::LogClosed => "19-log-closed.png",
-            ShotKind::EmptyImage => "20-empty-image.png",
+            ShotKind::ModalNothingTranslated => "14-modal-nothing-translated.png",
+            ShotKind::SizingPopup => "15-sizing-popup.png",
+            ShotKind::RenderDone => "16-render-done.png",
+            ShotKind::RenderFailed => "17-render-failed.png",
+            ShotKind::LogClosed => "18-log-closed.png",
+            ShotKind::EmptyImage => "19-empty-image.png",
         }
     }
 
@@ -4407,7 +4393,6 @@ impl CaptionStudioApp {
         // Every shot starts from a clean slate: no modal open, the log
         // shown, the preview at Fit.
         self.confirm_copy_originals = false;
-        self.confirm_rescan = false;
         self.show_paste_modal = false;
         self.show_bulk_edit = false;
         self.import_report = None;
@@ -4520,10 +4505,6 @@ impl CaptionStudioApp {
                     st.import_warnings.clone()
                 };
                 self.import_report = Some(report);
-            }
-            ShotKind::ModalRescan => {
-                self.tab = Tab::Preview;
-                self.confirm_rescan = true;
             }
             ShotKind::ModalNothingTranslated => {
                 self.tab = Tab::Preview;
@@ -4960,16 +4941,16 @@ mod tests {
     }
 
     #[test]
-    fn shot_test_covers_twenty_named_shots_in_order() {
-        assert_eq!(ShotKind::ALL.len(), 20);
+    fn shot_test_covers_nineteen_named_shots_in_order() {
+        assert_eq!(ShotKind::ALL.len(), 19);
         assert_eq!(ShotKind::ALL[0].file_name(), "01-idle.png");
         assert_eq!(ShotKind::ALL[1].file_name(), "02-scanning.png");
-        assert_eq!(ShotKind::ALL[19].file_name(), "20-empty-image.png");
+        assert_eq!(ShotKind::ALL[18].file_name(), "19-empty-image.png");
         // The file names are unique (no shot overwrites another).
         let mut names: Vec<&str> = ShotKind::ALL.iter().map(|s| s.file_name()).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 20);
+        assert_eq!(names.len(), 19);
         // Only the inspector shots need blocks; the rest stage without them.
         assert!(ShotKind::InspectorBlocks.needs_blocks());
         assert!(ShotKind::InspectorFiltered.needs_blocks());
