@@ -114,12 +114,21 @@ impl LogLine {
     }
 }
 
+/// One file's outcome in a render run (for the file-list status chips).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileOutcome {
+    Rendered,
+    Copied,
+    Failed,
+}
+
 enum WorkerMsg {
     Log(String),
     Status(String),
     Progress { done: usize, total: usize, label: String },
     OcrReady(Result<Arc<OcrEngine>, String>),
     ExtractDone { data: ExtractedData, cancelled: bool },
+    FileRendered { file: String, outcome: FileOutcome },
     RenderDone { rendered: usize, copied: usize, failed: usize, cancelled: bool },
 }
 
@@ -162,13 +171,26 @@ pub struct CaptionStudioApp {
     /// drawn at, so an image click maps back to image pixels.
     preview_image_rect: egui::Rect,
     preview_image_scale: f32,
-    /// Filter text for the preview-file dropdown.
+    /// Filter text for the file list.
     preview_filter: String,
-    /// Focus the filter field the first frame the dropdown opens.
-    preview_filter_focus: bool,
-    /// Preview zoom: Fit (the whole image in the pane) or 100% (native
-    /// resolution, pan with the ScrollArea).
+    /// Preview zoom: Fit (the whole image in the stage) or 100% (native
+    /// resolution). Wheel zoom switches out of Fit into a manual zoom.
     preview_zoom_fit: bool,
+    /// Manual zoom factor (1.0 = 100%), used when `preview_zoom_fit` is
+    /// false; wheel zoom adjusts it around the cursor.
+    preview_zoom: f32,
+    /// Stage pan offset (image centre relative to the stage centre), in
+    /// screen points; drag pans, `0` resets to Fit.
+    preview_pan: egui::Vec2,
+    /// Per-file render outcomes from the last run (file-list status chips).
+    /// Cleared when a new run starts or the dataset changes.
+    rendered_files: std::collections::HashSet<String>,
+    failed_files: std::collections::HashSet<String>,
+    /// 44px file-list thumbnails, decoded lazily as rows appear, capped at
+    /// 128 (insertion order in `thumb_order`; `None` = undecodable, so a
+    /// broken file isn't retried every frame).
+    thumbs: std::collections::HashMap<String, Option<TextureHandle>>,
+    thumb_order: std::collections::VecDeque<String>,
     /// Status-bar counts for the dataset the preview shows.
     preview_file_count: usize,
     preview_untranslated: usize,
@@ -236,8 +258,13 @@ impl CaptionStudioApp {
             preview_image_rect: egui::Rect::NOTHING,
             preview_image_scale: 1.0,
             preview_filter: String::new(),
-            preview_filter_focus: false,
             preview_zoom_fit: true,
+            preview_zoom: 1.0,
+            preview_pan: egui::Vec2::ZERO,
+            rendered_files: std::collections::HashSet::new(),
+            failed_files: std::collections::HashSet::new(),
+            thumbs: std::collections::HashMap::new(),
+            thumb_order: std::collections::VecDeque::new(),
             preview_file_count: 0,
             preview_untranslated: 0,
             preview_json_error: None,
@@ -329,6 +356,14 @@ impl CaptionStudioApp {
     /// done — re-render after edits). Translations are read from the
     /// resolved data (editor JSON merged over the scan), the same source
     /// the preview renders.
+    /// Drop the last run's render state (summary + per-file chips): the
+    /// dataset changed, so a stale "rendered" would lie.
+    fn clear_render_state(&mut self) {
+        self.render_summary = None;
+        self.rendered_files.clear();
+        self.failed_files.clear();
+    }
+
     /// The dataset the workflow reads: the editor JSON merged over the scan
     /// when it parses, else the scan itself. Shared by the stepper and the
     /// Scan-again edit check so both read the same source the preview does.
@@ -438,7 +473,7 @@ impl CaptionStudioApp {
             self.input_dir = folder.to_string_lossy().to_string();
             self.output_dir = folder.join("translated_output").to_string_lossy().to_string();
             self.extracted = None;
-            self.render_summary = None;
+            self.clear_render_state();
             self.preview_texture = None;
             self.preview_key.clear();
             self.save_settings();
@@ -472,7 +507,7 @@ impl CaptionStudioApp {
             self.status = "Run 'Scan & Extract Text' first, then adjust thresholds anytime.".into();
             return;
         };
-        self.render_summary = None;
+        self.clear_render_state();
         if !data.images.iter().any(|img| !img.raw_lines.is_empty()) {
             self.status = "This captions.json predates raw OCR storage. Click 'Scan & Extract Text' once to enable instant tuning.".into();
             return;
@@ -568,7 +603,7 @@ impl CaptionStudioApp {
         match arboard::Clipboard::new().and_then(|mut cb| cb.get_text()) {
             Ok(clip) => {
                 self.editor_text = clip;
-                self.render_summary = None;
+                self.clear_render_state();
                 self.preview_key.clear();
                 self.status = "Pasted translated JSON from clipboard. Switch to Live Preview or Render.".into();
             }
@@ -614,7 +649,7 @@ impl CaptionStudioApp {
                     self.editor_text = serde_json::to_string_pretty(&compact_map_from_data(&data))
                         .unwrap_or_default();
                     self.extracted = Some(data);
-                    self.render_summary = None;
+                    self.clear_render_state();
                     self.preview_key.clear();
                     self.status = format!("Loaded {n} images from {}", path.file_name().unwrap_or_default().to_string_lossy());
                 }
@@ -632,7 +667,7 @@ impl CaptionStudioApp {
             match std::fs::read_to_string(&path) {
                 Ok(text) => {
                     self.editor_text = text;
-                    self.render_summary = None;
+                    self.clear_render_state();
                     self.preview_key.clear();
                     self.status = format!("Imported translations from {}", path.file_name().unwrap_or_default().to_string_lossy());
                 }
@@ -673,7 +708,7 @@ impl CaptionStudioApp {
             return;
         }
         self.busy = true;
-        self.render_summary = None;
+        self.clear_render_state();
         self.cancel.store(false, Ordering::SeqCst);
         self.progress = 0.0;
         self.status = "Starting scan…".into();
@@ -728,6 +763,7 @@ impl CaptionStudioApp {
         self.busy = true;
         self.cancel.store(false, Ordering::SeqCst);
         self.progress = 0.0;
+        self.clear_render_state();
         let tx = self.tx.clone();
         let cancel = self.cancel.clone();
         let in_dir = PathBuf::from(self.input_dir.trim());
@@ -793,7 +829,135 @@ impl CaptionStudioApp {
         }
     }
 
-    fn refresh_preview(&mut self, ctx: &egui::Context) {
+    /// The 44px thumbnail for a file-list row: decoded lazily (at most
+    /// `budget` decodes per frame, so a long scroll doesn't stall the UI)
+    /// and capped at 128 cached textures (FIFO eviction). `None` in the
+    /// cache means the file couldn't be decoded — it isn't retried. A
+    /// budget-exhausted miss is NOT cached, so it retries next frame.
+    fn thumb_texture(
+        &mut self,
+        ctx: &egui::Context,
+        name: &str,
+        budget: &mut usize,
+    ) -> Option<TextureHandle> {
+        if let Some(t) = self.thumbs.get(name) {
+            return t.clone();
+        }
+        if *budget == 0 {
+            return None;
+        }
+        *budget -= 1;
+        let path = PathBuf::from(self.input_dir.trim()).join(name);
+        let tex = crate::image_io::load_image(&path).ok().and_then(|img| {
+            let thumb = image::imageops::thumbnail(&img, 44, 44);
+            let (w, h) = (thumb.width() as usize, thumb.height() as usize);
+            let color = ColorImage::from_rgb([w, h], thumb.as_raw());
+            Some(ctx.load_texture(format!("thumb:{name}"), color, egui::TextureOptions::LINEAR))
+        });
+        if self.thumbs.len() >= 128 {
+            if let Some(old) = self.thumb_order.pop_front() {
+                self.thumbs.remove(&old);
+            }
+        }
+        self.thumb_order.push_back(name.to_string());
+        self.thumbs.insert(name.to_string(), tex.clone());
+        tex
+    }
+
+    /// One file-list row: 44px thumbnail, name, "N blocks", status chip.
+    /// Returns true when the row was clicked (the caller selects the file).
+    fn file_list_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        name: &str,
+        data: Option<&crate::model::ExtractedData>,
+        budget: &mut usize,
+    ) -> bool {
+        let t = crate::theme::Tokens::get(ui.ctx());
+        let entry = data.and_then(|d| d.entry(name));
+        let blocks = entry.map(|e| e.blocks.len()).unwrap_or(0);
+        let status = entry.map(|e| {
+            file_status(
+                e,
+                self.rendered_files.contains(name),
+                self.failed_files.contains(name),
+            )
+        });
+        let selected = name == self.preview_file;
+        let (rect, resp) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), 52.0),
+            egui::Sense::click(),
+        );
+        let resp = resp.accessible_name(format!(
+            "{} · {} blocks{}",
+            name,
+            blocks,
+            status
+                .map(|s| format!(" · {}", file_status_label(s)))
+                .unwrap_or_default()
+        ));
+        let clicked = resp.clicked();
+        if selected || resp.hovered() {
+            ui.painter().rect_filled(rect, t.radius_sm, t.card);
+        }
+        let stroke = if selected {
+            egui::Stroke::new(2.0, t.accent)
+        } else {
+            egui::Stroke::new(1.0, t.card_border)
+        };
+        ui.painter()
+            .rect_stroke(rect, t.radius_sm, stroke, egui::StrokeKind::Inside);
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect.shrink(6.0))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        child.horizontal(|ui| {
+            // Thumbnail: the 44px cell, the image centred inside it
+            // (thumbnails keep their aspect, so one side is < 44).
+            let (cell, _) = ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::hover());
+            if let Some(tex) = self.thumb_texture(ui.ctx(), name, budget) {
+                let (tw, th) = (tex.size()[0] as f32, tex.size()[1] as f32);
+                let img_rect = egui::Rect::from_center_size(cell.center(), egui::vec2(tw, th));
+                ui.painter().image(
+                    tex.id(),
+                    img_rect,
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+            } else {
+                ui.painter().rect_filled(cell, 4.0, t.raised);
+            }
+            ui.vertical(|ui| {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(name).size(crate::theme::LABEL).color(t.text),
+                    )
+                    .truncate(),
+                );
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{blocks} blocks"))
+                            .size(crate::theme::CAPTION)
+                            .color(t.text_dim),
+                    );
+                    if let Some(s) = status {
+                        let color = match s {
+                            FileStatus::Rendered => t.ok,
+                            FileStatus::NoText => t.warning,
+                            FileStatus::Failed => t.danger,
+                            FileStatus::Untranslated => t.text_dim,
+                            FileStatus::Ready => t.accent_ink,
+                        };
+                        status_chip(ui, file_status_label(s), color);
+                    }
+                });
+            });
+        });
+        clicked
+    }
+
+    fn refresh_preview(&mut self, ctx: &egui::Context, data: Option<&crate::model::ExtractedData>) {
         // Owned: the resolution below borrows `self` mutably, so the input
         // dir can't stay borrowed from `self` across it.
         let in_dir = self.input_dir.trim().to_string();
@@ -805,7 +969,7 @@ impl CaptionStudioApp {
             self.preview_json_error = None;
             return;
         }
-        let Some(data) = self.resolve_preview_data() else {
+        let Some(data) = data else {
             self.preview_entry = None;
             self.verify_text = match &self.preview_json_error {
                 Some(e) => format!(
@@ -999,6 +1163,20 @@ impl CaptionStudioApp {
                         "{prefix}Extracted {n} images. Click 'Inspect OCR Boxes' to verify or 'Copy JSON for AI'."
                     );
                 }
+                WorkerMsg::FileRendered { file, outcome } => match outcome {
+                    FileOutcome::Rendered => {
+                        self.failed_files.remove(&file);
+                        self.rendered_files.insert(file);
+                    }
+                    FileOutcome::Failed => {
+                        self.rendered_files.remove(&file);
+                        self.failed_files.insert(file);
+                    }
+                    FileOutcome::Copied => {
+                        // Copied unchanged (no translated blocks): the chip
+                        // derives from the block counts, so nothing to store.
+                    }
+                },
                 WorkerMsg::RenderDone { rendered, copied, failed, cancelled } => {
                     self.busy = false;
                     self.progress = 1.0;
@@ -1164,15 +1342,23 @@ fn render_worker(
             save_image(&rendered, &dst).map_err(|e| e.to_string())?;
             Ok("rendered")
         })();
-        match outcome {
-            Ok("rendered") => counts.lock().unwrap().0 += 1,
-            Ok("copied") => counts.lock().unwrap().1 += 1,
-            Ok(_) => {}
+        let file_outcome = match &outcome {
+            Ok("rendered") => {
+                counts.lock().unwrap().0 += 1;
+                FileOutcome::Rendered
+            }
+            Ok("copied") => {
+                counts.lock().unwrap().1 += 1;
+                FileOutcome::Copied
+            }
+            Ok(_) => FileOutcome::Copied,
             Err(e) => {
                 counts.lock().unwrap().2 += 1;
                 let _ = tx.send(WorkerMsg::Log(format!("FAIL {name}: {e}")));
+                FileOutcome::Failed
             }
-        }
+        };
+        let _ = tx.send(WorkerMsg::FileRendered { file: name.clone(), outcome: file_outcome });
         let done = completed.fetch_add(1, Ordering::SeqCst) + 1;
         let _ = progress_tx.send(WorkerMsg::Progress {
             done,
@@ -1736,204 +1922,246 @@ impl eframe::App for CaptionStudioApp {
                     });
                 }
                 Tab::Preview => {
-                    self.refresh_preview(&ctx);
-                    // File navigation: bigger steppers (Medium, 32px) for a
-                    // real touch target, and the file picker is a filterable
-                    // dropdown — full names share a long prefix, so the
-                    // button shows the short name and the full path on hover.
+                    // The dataset is resolved once per frame: the file list
+                    // and the stage both read it, and refresh_preview no
+                    // longer resolves it itself.
+                    let t = crate::theme::Tokens::get(ui.ctx());
+                    let data = self.resolve_preview_data();
+                    self.refresh_preview(&ctx, data.as_ref());
+                    let names = self.file_names();
+                    let cur_idx = names.iter().position(|n| n == &self.preview_file).unwrap_or(0);
+                    // --- Toolbar: prev/next, "N of M", segmented modes,
+                    // Fit/100% (mockup `.bar`). ---
                     ui.horizontal(|ui| {
-                        let names = self.file_names();
-                        let shorts = short_file_names(&names);
-                        let cur_idx = names.iter().position(|n| n == &self.preview_file).unwrap_or(0);
-                        let short_current = shorts
-                            .get(cur_idx)
-                            .cloned()
-                            .unwrap_or_else(|| self.preview_file.clone());
                         if crate::icons::button(ui, "chevron-left", crate::theme::ControlSize::Medium, false, "Previous file").clicked() {
                             step_preview(&mut self.preview_file, &names, -1);
                             self.selected_block = None;
                             self.preview_key.clear();
                         }
-                        let full_path = PathBuf::from(self.input_dir.trim())
-                            .join(&self.preview_file)
-                            .display()
-                            .to_string();
-                        let btn = ui
-                            .button(format!("{short_current} ▾"))
-                            .on_hover_text(full_path)
-                            .accessible_name(format!("Preview file {}", self.preview_file));
-                        focus_ring(ui, &btn);
-                        if btn.clicked() {
-                            self.preview_filter_focus = true;
-                        }
-                        let mut picked: Option<String> = None;
-                        egui::Popup::menu(&btn)
-                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                            .show(|ui| {
-                                let filter_resp = ui.add(
-                                    egui::TextEdit::singleline(&mut self.preview_filter)
-                                        .hint_text("Filter files…")
-                                        .desired_width(260.0),
-                                );
-                                if self.preview_filter_focus {
-                                    filter_resp.request_focus();
-                                    self.preview_filter_focus = false;
-                                }
-                                let filtered = filter_file_names(&names, &self.preview_filter);
-                                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                                    if filtered.is_empty() {
-                                        ui.label(crate::theme::label_text(
-                                            "No files match.",
-                                            crate::theme::CAPTION,
-                                        ));
-                                    }
-                                    for n in filtered {
-                                        let idx = names.iter().position(|x| x == n).unwrap_or(0);
-                                        let short = shorts
-                                            .get(idx)
-                                            .cloned()
-                                            .unwrap_or_else(|| n.clone());
-                                        let path = PathBuf::from(self.input_dir.trim())
-                                            .join(n)
-                                            .display()
-                                            .to_string();
-                                        let resp = ui
-                                            .selectable_label(n == &self.preview_file, short)
-                                            .on_hover_text(path);
-                                        focus_ring(ui, &resp);
-                                        if resp.clicked() {
-                                            picked = Some(n.clone());
-                                            self.preview_filter.clear();
-                                            egui::Popup::close_id(
-                                                ui.ctx(),
-                                                egui::Popup::default_response_id(&btn),
-                                            );
-                                        }
-                                    }
-                                });
-                            });
+                        ui.label(crate::theme::label_text(
+                            &format!("{} of {}", if names.is_empty() { 0 } else { cur_idx + 1 }, names.len()),
+                            crate::theme::LABEL,
+                        ));
                         if crate::icons::button(ui, "chevron-right", crate::theme::ControlSize::Medium, false, "Next file").clicked() {
                             step_preview(&mut self.preview_file, &names, 1);
                             self.selected_block = None;
                             self.preview_key.clear();
                         }
-                        if let Some(name) = picked {
-                            self.set_preview_file(name);
-                        }
+                        // The mode + zoom controls ride at the right end.
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if let Some(fit) = segmented(ui, self.preview_zoom_fit, &[(true, "Fit"), (false, "100%")]) {
+                                self.preview_zoom_fit = fit;
+                                self.preview_zoom = 1.0;
+                                self.preview_pan = egui::Vec2::ZERO;
+                            }
+                            ui.separator();
+                            if let Some(mode) = segmented(ui, self.preview_mode, &[
+                                (PreviewMode::Rendered, "Rendered"),
+                                (PreviewMode::Ocr, "OCR Boxes"),
+                                (PreviewMode::Original, "Original"),
+                            ]) {
+                                self.preview_mode = mode;
+                                self.preview_key.clear();
+                            }
+                        });
                     });
-                    // The mode choice gets its own row as a segmented control,
-                    // so the file row isn't cramped and the three modes read
-                    // as one choice. Zoom rides in the same row: Fit puts the
-                    // whole image in the pane, 100% shows it at native
-                    // resolution so plate edges can be checked without
-                    // scrolling the fit.
-                    ui.horizontal(|ui| {
-                        ui.label(crate::theme::label_text("View:", crate::theme::LABEL));
-                        for (mode, label) in [
-                            (PreviewMode::Rendered, "Rendered"),
-                            (PreviewMode::Ocr, "OCR Boxes"),
-                            (PreviewMode::Original, "Original"),
-                        ] {
-                            let resp = ui.selectable_value(&mut self.preview_mode, mode, label);
-                            focus_ring(ui, &resp);
-                        }
-                        ui.separator();
-                        ui.label(crate::theme::label_text("Zoom:", crate::theme::LABEL));
-                        let fit = ui.selectable_value(&mut self.preview_zoom_fit, true, "Fit");
-                        focus_ring(ui, &fit);
-                        let hundred = ui.selectable_value(&mut self.preview_zoom_fit, false, "100%");
-                        focus_ring(ui, &hundred);
-                    });
-                    // The image takes the full width now — the Detected
-                    // Blocks list lives in the inspector (right column).
-                    // The green/orange legend stays with the image it
-                    // describes (OCR Boxes mode only — the other modes draw
-                    // no coloured boxes).
-                    if matches!(self.preview_mode, PreviewMode::Ocr) {
-                        ui.label(crate::theme::label_text("Green boxes = kept · Orange boxes = filtered out", crate::theme::CAPTION));
-                    }
-                    let total = ui.available_size();
-                    let image_w = total.x.max(240.0);
-                    // --- Image pane ---
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(image_w, total.y),
-                        egui::Layout::top_down(egui::Align::LEFT),
-                            |ui| {
-                                if let Some(tex) = &self.preview_texture {
-                                    let (iw, ih) = (self.preview_size[0], self.preview_size[1]);
-                                    // Fit: the whole image in the pane (max
-                                    // 1.5×). 100%: native resolution — the
-                                    // texture is full-res, so this only
-                                    // changes the display scale, never the
-                                    // render, and the ScrollArea pans it.
-                                    let scale = if self.preview_zoom_fit {
-                                        (image_w / iw).min(total.y / ih).min(1.5).max(0.05)
-                                    } else {
-                                        1.0
-                                    };
-                                    let size = egui::Vec2::new(iw * scale, ih * scale);
-                                    // Centre the image in its pane when it is
-                                    // smaller than the pane; when it is larger
-                                    // the offsets are zero and the ScrollArea
-                                    // lets the user pan it.
-                                    let x_off = ((image_w - size.x) / 2.0).max(0.0);
-                                    let y_off = ((total.y - size.y) / 2.0).max(0.0);
-                                    egui::ScrollArea::both().show(ui, |ui| {
-                                        ui.add_space(y_off);
-                                        ui.horizontal(|ui| {
-                                            ui.add_space(x_off);
-                                            // An accessible name for the image
-                                            // (filename + "rendered preview"):
-                                            // a screen reader otherwise gets
-                                            // an unnamed texture, and the
-                                            // Detected Blocks list beside it
-                                            // is the text alternative.
-                                            // Click sense (the Image widget
-                                            // defaults to hover-only): in OCR
-                                            // Boxes mode a click selects the
-                                            // block under the pointer — the
-                                            // list scrolls to its row and the
-                                            // box turns Max Blue.
-                                            let img_resp = ui
-                                                .add(
-                                                    egui::Image::new((tex.id(), size))
-                                                        .sense(egui::Sense::click()),
-                                                )
-                                                .accessible_name(format!(
-                                                    "{} rendered preview",
-                                                    self.preview_file
-                                                ));
-                                            self.preview_image_rect = img_resp.rect;
+                    // --- Workspace: file list (230px) | stage. ---
+                    let rest = ui.available_size();
+                    let (filter_id, stage_resp) = ui
+                        .horizontal_top(|ui| {
+                            // File list.
+                            let filter_resp = ui
+                                .allocate_ui_with_layout(
+                                    egui::vec2(230.0, rest.y),
+                                    egui::Layout::top_down(egui::Align::LEFT),
+                                    |ui| {
+                                        let filter_resp = ui.add(
+                                            egui::TextEdit::singleline(&mut self.preview_filter)
+                                                .hint_text(format!("Filter {} images…", names.len()))
+                                                .desired_width(230.0),
+                                        );
+                                        focus_ring(ui, &filter_resp);
+                                        let filtered = filter_file_names(&names, &self.preview_filter);
+                                        let mut budget = 4;
+                                        let mut picked: Option<String> = None;
+                                        egui::ScrollArea::vertical().show(ui, |ui| {
+                                            if filtered.is_empty() {
+                                                ui.label(crate::theme::label_text("No files match.", crate::theme::CAPTION));
+                                            }
+                                            for n in filtered {
+                                                if self.file_list_row(ui, n, data.as_ref(), &mut budget) {
+                                                    picked = Some(n.clone());
+                                                }
+                                            }
+                                        });
+                                        if let Some(name) = picked {
+                                            self.set_preview_file(name);
+                                        }
+                                        filter_resp
+                                    },
+                                )
+                                .inner;
+                            ui.separator();
+                            // Stage.
+                            let stage_w = ui.available_width();
+                            let stage_resp = ui
+                                .allocate_ui_with_layout(
+                                    egui::vec2(stage_w, rest.y),
+                                    egui::Layout::top_down(egui::Align::LEFT),
+                                    |ui| {
+                                        if matches!(self.preview_mode, PreviewMode::Ocr) {
+                                            ui.label(crate::theme::label_text("Green boxes = kept · Orange boxes = filtered out", crate::theme::CAPTION));
+                                        }
+                                        let stage_size = ui.available_size();
+                                        let (stage_rect, stage_resp) = ui.allocate_exact_size(stage_size, egui::Sense::click_and_drag());
+                                        // Checkerboard stage background (SPEC §5).
+                                        let painter = ui.painter();
+                                        painter.rect_filled(stage_rect, 0.0, t.canvas);
+                                        let cell = 16.0;
+                                        let mut y = stage_rect.min.y;
+                                        let mut row = 0usize;
+                                        while y < stage_rect.max.y {
+                                            let mut x = stage_rect.min.x;
+                                            let mut col = 0usize;
+                                            while x < stage_rect.max.x {
+                                                if (row + col) % 2 == 1 {
+                                                    let cell_rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(cell, cell)).intersect(stage_rect);
+                                                    painter.rect_filled(cell_rect, 0.0, t.card);
+                                                }
+                                                x += cell;
+                                                col += 1;
+                                            }
+                                            y += cell;
+                                            row += 1;
+                                        }
+                                        if let Some(tex) = &self.preview_texture {
+                                            let (iw, ih) = (self.preview_size[0], self.preview_size[1]);
+                                            let fit_scale = (stage_rect.width() / iw).min(stage_rect.height() / ih).min(1.5).max(0.05);
+                                            // Wheel zoom (around the cursor)
+                                            // and drag pan both exit Fit into
+                                            // a manual zoom — Fit is a preset,
+                                            // not a mode. `0` resets to Fit.
+                                            // Zoom/pan only change the display,
+                                            // never the texture, so the
+                                            // preview key is left alone.
+                                            if stage_resp.hovered() {
+                                                let scroll = ui.ctx().input(|i| i.smooth_scroll_delta);
+                                                if scroll.y != 0.0 {
+                                                    if self.preview_zoom_fit {
+                                                        self.preview_zoom = fit_scale;
+                                                        self.preview_zoom_fit = false;
+                                                    }
+                                                    let old_scale = self.preview_zoom;
+                                                    let new_scale = (old_scale * (-scroll.y * 0.002).exp()).clamp(0.05, 8.0);
+                                                    if let (Some(cursor), true) = (stage_resp.hover_pos(), self.preview_image_rect.is_positive()) {
+                                                        let img_pt = (cursor - self.preview_image_rect.min) / old_scale;
+                                                        let new_size = egui::vec2(iw * new_scale, ih * new_scale);
+                                                        let new_min = cursor - img_pt * new_scale;
+                                                        self.preview_pan = new_min + new_size / 2.0 - stage_rect.center();
+                                                        self.preview_pan = clamp_pan(self.preview_pan, new_size, stage_rect.size());
+                                                    }
+                                                    self.preview_zoom = new_scale;
+                                                }
+                                                if ui.ctx().input(|i| i.key_pressed(egui::Key::Num0)) {
+                                                    self.preview_zoom_fit = true;
+                                                    self.preview_pan = egui::Vec2::ZERO;
+                                                }
+                                            }
+                                            if stage_resp.dragged() {
+                                                if self.preview_zoom_fit {
+                                                    self.preview_zoom = fit_scale;
+                                                    self.preview_zoom_fit = false;
+                                                }
+                                                self.preview_pan += stage_resp.drag_delta();
+                                                let size = egui::vec2(iw * self.preview_zoom, ih * self.preview_zoom);
+                                                self.preview_pan = clamp_pan(self.preview_pan, size, stage_rect.size());
+                                            }
+                                            let scale = if self.preview_zoom_fit { fit_scale } else { self.preview_zoom };
+                                            let size = egui::vec2(iw * scale, ih * scale);
+                                            let image_rect = egui::Rect::from_center_size(stage_rect.center() + self.preview_pan, size);
+                                            self.preview_image_rect = image_rect;
                                             self.preview_image_scale = scale;
-                                            if img_resp.clicked()
-                                                && matches!(self.preview_mode, PreviewMode::Ocr)
-                                            {
-                                                if let (Some(pos), Some(entry)) = (
-                                                    img_resp.interact_pointer_pos(),
-                                                    &self.preview_entry,
-                                                ) {
-                                                    let x = (pos.x - self.preview_image_rect.min.x)
-                                                        / self.preview_image_scale;
-                                                    let y = (pos.y - self.preview_image_rect.min.y)
-                                                        / self.preview_image_scale;
+                                            ui.painter().image(
+                                                tex.id(),
+                                                image_rect,
+                                                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+                                                egui::Color32::WHITE,
+                                            );
+                                            // Click (not drag) in OCR Boxes
+                                            // mode selects the block under the
+                                            // pointer — the list scrolls to
+                                            // its row and the box turns Max
+                                            // Blue (and vice versa).
+                                            if stage_resp.clicked() && matches!(self.preview_mode, PreviewMode::Ocr) {
+                                                if let (Some(pos), Some(entry)) = (stage_resp.interact_pointer_pos(), &self.preview_entry) {
+                                                    let x = (pos.x - image_rect.min.x) / scale;
+                                                    let y = (pos.y - image_rect.min.y) / scale;
                                                     self.selected_block = block_at(entry, x, y);
                                                     self.blocks_scroll_to_selected = true;
                                                     self.preview_key.clear();
                                                 }
                                             }
-                                        });
-                                    });
-                                } else {
-                                    ui.label("Run 'Scan & Extract Text' or paste JSON,\nthen switch here to verify OCR boxes or rendered captions.");
-                                }
-                            },
-                        );
+                                        } else {
+                                            ui.painter().text(
+                                                stage_rect.center(),
+                                                egui::Align2::CENTER_CENTER,
+                                                "Scan & Extract Text or paste translated JSON to preview.",
+                                                egui::FontId::proportional(crate::theme::BODY),
+                                                t.text_dim,
+                                            );
+                                        }
+                                        stage_resp
+                                    },
+                                )
+                                .inner;
+                            (filter_resp.id, stage_resp)
+                        })
+                        .inner;
+                    // Keyboard nav (Up/Down move, Enter focuses the stage):
+                    // active while nothing has focus, or while the filter
+                    // has it — the filter is the only text field in this tab.
+                    let focused = ui.ctx().memory(|m| m.focused());
+                    let list_nav = focused.is_none() || focused == Some(filter_id);
+                    if list_nav {
+                        let filtered = filter_file_names(&names, &self.preview_filter);
+                        if ui.ctx().input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+                            step_in_names(&mut self.preview_file, &filtered, 1);
+                            self.selected_block = None;
+                            self.preview_key.clear();
+                        }
+                        if ui.ctx().input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+                            step_in_names(&mut self.preview_file, &filtered, -1);
+                            self.selected_block = None;
+                            self.preview_key.clear();
+                        }
+                        if ui.ctx().input(|i| i.key_pressed(egui::Key::Enter)) {
+                            stage_resp.request_focus();
+                        }
+                    }
                 }
             }
             });
         });
     }
 
+}
+
+/// Step the selection within a (possibly filtered) name list, wrapping.
+fn step_in_names(current: &mut String, names: &[&String], delta: i32) {
+    if names.is_empty() {
+        return;
+    }
+    let idx = names.iter().position(|n| *n == current).unwrap_or(0) as i32;
+    let next = (idx + delta).rem_euclid(names.len() as i32) as usize;
+    *current = names[next].clone();
+}
+
+/// Clamp a stage pan so at least 40px of the image stays visible (and
+/// grabbable) in the stage.
+fn clamp_pan(pan: egui::Vec2, size: egui::Vec2, stage: egui::Vec2) -> egui::Vec2 {
+    let max_x = (size.x / 2.0 + stage.x / 2.0 - 40.0).max(0.0);
+    let max_y = (size.y / 2.0 + stage.y / 2.0 - 40.0).max(0.0);
+    egui::vec2(pan.x.clamp(-max_x, max_x), pan.y.clamp(-max_y, max_y))
 }
 
 fn step_preview(current: &mut String, names: &[String], delta: i32) {
@@ -1943,6 +2171,98 @@ fn step_preview(current: &mut String, names: &[String], delta: i32) {
     let idx = names.iter().position(|n| n == current).unwrap_or(0) as i32;
     let next = (idx + delta).rem_euclid(names.len() as i32) as usize;
     *current = names[next].clone();
+}
+
+/// A segmented control (mockup `.seg`): adjacent buttons, the selected one
+/// solid accent with white text, the rest card with a border. Returns the
+/// picked value, if the user clicked one.
+fn segmented<T: PartialEq + Copy>(ui: &mut egui::Ui, current: T, options: &[(T, &str)]) -> Option<T> {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let mut picked = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        let n = options.len();
+        for (i, (value, label)) in options.iter().enumerate() {
+            let selected = *value == current;
+            let r = t.radius_sm as u8;
+            let radius = if n == 1 {
+                egui::CornerRadius::same(r)
+            } else if i == 0 {
+                egui::CornerRadius { nw: r, ne: 0, sw: r, se: 0 }
+            } else if i == n - 1 {
+                egui::CornerRadius { nw: 0, ne: r, sw: 0, se: r }
+            } else {
+                egui::CornerRadius::ZERO
+            };
+            let text = egui::RichText::new(*label)
+                .color(if selected { egui::Color32::WHITE } else { t.text });
+            let btn = egui::Button::new(text)
+                .fill(if selected { t.accent } else { t.card })
+                .stroke(if selected {
+                    egui::Stroke::NONE
+                } else {
+                    egui::Stroke::new(1.0, t.card_border)
+                })
+                .corner_radius(radius);
+            let resp = ui.add(btn);
+            focus_ring(ui, &resp);
+            if resp.clicked() {
+                picked = Some(*value);
+            }
+        }
+    });
+    picked
+}
+
+/// A small status chip (file-list rows): coloured text on a tint of the
+/// same colour.
+fn status_chip(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
+    let frame = egui::Frame::new()
+        .fill(color.linear_multiply(0.15))
+        .corner_radius(egui::CornerRadius::same(4))
+        .inner_margin(egui::Margin::symmetric(6, 2));
+    frame.show(ui, |ui| {
+        ui.label(egui::RichText::new(text).size(crate::theme::CAPTION).color(color));
+    });
+}
+
+/// The file-list status chip for one image. Failed wins (the last render
+/// run), then rendered, then no text, then untranslated, then ready — all
+/// translated but not rendered yet. The plan's chip set has no "ready": it
+/// covers the state the other four miss.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileStatus {
+    Rendered,
+    NoText,
+    Failed,
+    Untranslated,
+    Ready,
+}
+
+fn file_status(entry: &crate::model::ImageEntry, rendered: bool, failed: bool) -> FileStatus {
+    if failed {
+        return FileStatus::Failed;
+    }
+    if rendered {
+        return FileStatus::Rendered;
+    }
+    if entry.blocks.is_empty() {
+        return FileStatus::NoText;
+    }
+    if entry.blocks.iter().any(|b| b.new_text.trim().is_empty()) {
+        return FileStatus::Untranslated;
+    }
+    FileStatus::Ready
+}
+
+fn file_status_label(status: FileStatus) -> &'static str {
+    match status {
+        FileStatus::Rendered => "rendered",
+        FileStatus::NoText => "no text",
+        FileStatus::Failed => "failed",
+        FileStatus::Untranslated => "untranslated",
+        FileStatus::Ready => "ready",
+    }
 }
 
 /// (file count, untranslated-block count) for a dataset. A block counts as
@@ -2028,41 +2348,7 @@ fn derive_workflow_state(
     }
 }
 
-/// Short display names for the file dropdown: the longest prefix every name
-/// shares is stripped (it carries no information), and anything still longer
-/// than 30 chars is middle-truncated so the differing `_N.jpg` suffix stays
-/// visible. One file, or an empty remainder, falls back to the full name.
-fn short_file_names(names: &[String]) -> Vec<String> {
-    if names.len() < 2 {
-        return names.to_vec();
-    }
-    let mut prefix: Vec<char> = names[0].chars().collect();
-    for n in &names[1..] {
-        let keep = prefix.iter().zip(n.chars()).take_while(|(a, b)| *a == b).count();
-        prefix.truncate(keep);
-        if prefix.is_empty() {
-            break;
-        }
-    }
-    let prefix: String = prefix.into_iter().collect();
-    names
-        .iter()
-        .map(|n| {
-            let short = n.strip_prefix(prefix.as_str()).unwrap_or(n.as_str());
-            let short = if short.is_empty() { n.as_str() } else { short };
-            let chars: Vec<char> = short.chars().collect();
-            if chars.len() > 30 {
-                let head: String = chars[..13].iter().collect();
-                let tail: String = chars[chars.len() - 14..].iter().collect();
-                format!("{head}…{tail}")
-            } else {
-                short.to_string()
-            }
-        })
-        .collect()
-}
-
-/// Case-insensitive substring filter for the file dropdown. An empty query
+/// Case-insensitive substring filter for the file list. An empty query
 /// matches everything.
 fn filter_file_names<'a>(names: &'a [String], query: &str) -> Vec<&'a String> {
     let q = query.trim().to_lowercase();
@@ -2547,32 +2833,79 @@ mod tests {
     }
 
     #[test]
-    fn short_file_names_strip_the_shared_prefix_and_keep_the_suffix() {
-        let names = vec![
-            "scene1_frame_01.jpg".to_string(),
-            "scene1_frame_02.jpg".to_string(),
-            "scene1_frame_10.jpg".to_string(),
-        ];
-        assert_eq!(short_file_names(&names), vec!["01.jpg", "02.jpg", "10.jpg"]);
-        // One file: nothing shared to strip.
-        assert_eq!(short_file_names(&names[..1]), vec!["scene1_frame_01.jpg"]);
-        // A long remainder is middle-truncated, suffix intact.
-        let long = vec![
-            "a_very_long_scene_name_alpha_version_extended_cut_01.jpg".to_string(),
-            "a_very_long_scene_name_beta_version_extended_cut_01.jpg".to_string(),
-        ];
-        let shorts = short_file_names(&long);
-        assert!(shorts[0].ends_with("01.jpg"));
-        assert!(shorts[0].chars().count() <= 30);
-    }
-
-    #[test]
     fn filter_file_names_is_case_insensitive_substring() {
         let names = vec!["Alpha_01.jpg".to_string(), "beta_02.jpg".to_string()];
         assert_eq!(filter_file_names(&names, "").len(), 2);
         assert_eq!(filter_file_names(&names, "ALPHA"), vec![&names[0]]);
         assert_eq!(filter_file_names(&names, "02"), vec![&names[1]]);
         assert!(filter_file_names(&names, "zzz").is_empty());
+    }
+
+    #[test]
+    fn file_status_covers_all_five_states() {
+        fn entry(blocks: Vec<(&str, &str)>) -> crate::model::ImageEntry {
+            crate::model::ImageEntry {
+                file: "a.png".into(),
+                width: 100,
+                height: 100,
+                raw_lines: vec![],
+                blocks: blocks
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (orig, new))| crate::model::Block {
+                        id: i,
+                        bbox: [0, 0, 10, 10],
+                        line_bboxes: vec![],
+                        original_text: orig.into(),
+                        new_text: new.into(),
+                        confidence: 0.9,
+                        text_color: [0, 0, 0],
+                        bg_color: [255, 255, 255],
+                        is_boxed: false,
+                        font_size_est: 20,
+                    })
+                    .collect(),
+                dropped: vec![],
+            }
+        }
+        // Failed wins over rendered.
+        assert_eq!(file_status(&entry(vec![("one", "uno")]), true, true), FileStatus::Failed);
+        assert_eq!(file_status(&entry(vec![("one", "uno")]), true, false), FileStatus::Rendered);
+        // No blocks at all: no text (even unrendered).
+        assert_eq!(file_status(&entry(vec![]), false, false), FileStatus::NoText);
+        // A block with no translation yet.
+        assert_eq!(file_status(&entry(vec![("one", "")]), false, false), FileStatus::Untranslated);
+        // All translated, not rendered: ready.
+        assert_eq!(file_status(&entry(vec![("one", "uno")]), false, false), FileStatus::Ready);
+        // A translation equal to the original still counts as translated
+        // for the chip (it is not empty); the render copies it unchanged.
+        assert_eq!(file_status(&entry(vec![("one", "one")]), false, false), FileStatus::Ready);
+    }
+
+    #[test]
+    fn step_in_names_wraps_and_ignores_an_empty_list() {
+        let names = vec!["b.jpg".to_string(), "a.jpg".to_string(), "c.jpg".to_string()];
+        let refs: Vec<&String> = names.iter().collect();
+        let mut cur = "c.jpg".to_string();
+        step_in_names(&mut cur, &refs, 1);
+        assert_eq!(cur, "b.jpg");
+        step_in_names(&mut cur, &refs, -1);
+        assert_eq!(cur, "c.jpg");
+        let mut cur = "b.jpg".to_string();
+        step_in_names(&mut cur, &[], 1);
+        assert_eq!(cur, "b.jpg");
+    }
+
+    #[test]
+    fn clamp_pan_keeps_forty_pixels_visible() {
+        let stage = egui::vec2(800.0, 600.0);
+        // A 100px image dragged far right: at most 40px may leave the stage.
+        let pan = clamp_pan(egui::vec2(1000.0, 0.0), egui::vec2(100.0, 100.0), stage);
+        assert_eq!(pan.x, 410.0);
+        // A huge image may pan far (its centre can leave the stage).
+        let pan = clamp_pan(egui::vec2(1000.0, 0.0), egui::vec2(2000.0, 1000.0), stage);
+        assert_eq!(pan.x, 1000.0);
+        assert_eq!(pan.y, 0.0);
     }
 
     #[test]

@@ -11,7 +11,7 @@ use std::cell::RefCell;
 
 use cosmic_text::{Buffer, Color, Metrics, Shaping, SwashCache, Wrap};
 use image::{Rgb, RgbImage};
-use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
+use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, StrokeDash, Transform};
 
 use crate::fonts::{attrs_for, font_system, load_custom_font};
 use crate::inpaint::inpaint_masked;
@@ -677,7 +677,11 @@ pub fn render_entry(
 }
 
 /// OCR diagnostic overlay — Python `render_ocr_diagnostic`.
-/// Kept blocks in green, dropped lines in orange, with `#id · conf · Boxed/Unboxed`
+/// Kept blocks in green, dropped lines in orange, with `#id · conf · kept`
+/// labels outside the box top-left (SPEC §5: 11px at display scale — the
+/// label size here scales with the image width so it stays legible at any
+/// zoom). Kept borders are solid, dropped borders dashed, so colour is not
+/// the only cue. The selected block (highlight) is Max Blue.
 /// tags. `highlight` (a block id) draws that block in Max Blue instead, so the
 /// preview can show which block the Detected Blocks list has selected.
 /// Returns an RGB image.
@@ -697,7 +701,7 @@ pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry, highlight: Opti
     let badge_size = 13.max((w as f32 * 0.017) as i32);
     let stroke_w = 2.max((w as f32 * 0.0025) as i32) as f32;
 
-    let rect_outline = |pixmap: &mut Pixmap, b: [i32; 4], color: [u8; 4], width: f32, fill: Option<[u8; 4]>| {
+    let rect_outline = |pixmap: &mut Pixmap, b: [i32; 4], color: [u8; 4], width: f32, fill: Option<[u8; 4]>, dashed: bool| {
         let [x1, y1, x2, y2] = clamp_box(b, wi, hi);
         if x2 <= x1 || y2 <= y1 {
             return;
@@ -710,27 +714,38 @@ pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry, highlight: Opti
                 pixmap.fill_rect(rect, &paint, Transform::identity(), None);
             }
         }
+        // A dashed outline for filtered (dropped) boxes, solid for kept —
+        // SPEC §5: the border style differs so colour is not the only cue.
+        // The dash scales with the stroke width so it reads at any image size.
+        let dash = dashed
+            .then(|| {
+                let d = (width * 3.0).max(6.0);
+                let g = (width * 2.0).max(4.0);
+                StrokeDash::new(vec![d, g], 0.0)
+            })
+            .flatten();
         let mut paint = Paint::default();
         paint.set_color_rgba8(color[0], color[1], color[2], color[3]);
         paint.anti_alias = true;
-        let stroke = Stroke { width, ..Default::default() };
+        let stroke = Stroke { width, dash: dash.clone(), ..Default::default() };
         if let Some(rect) = Rect::from_xywh(x1 as f32, y1 as f32, (x2 - x1) as f32, (y2 - y1) as f32) {
             let path = tiny_skia::PathBuilder::from_rect(rect);
             // A dark halo under the coloured outline, so it holds up on
             // light photo areas: the kept green is 2.28:1 and the dropped
             // orange 2.80:1 on white, below the 3:1 a non-text mark needs.
             // Drawn first, 2px wider, so it reads as a dark edge around the
-            // coloured line.
+            // coloured line. Dashed with the outline, so the halo doesn't
+            // fill the dashes back in as a solid dark line.
             let mut halo = Paint::default();
             halo.set_color_rgba8(0, 0, 0, 200);
             halo.anti_alias = true;
-            let halo_stroke = Stroke { width: width + 2.0, ..Default::default() };
+            let halo_stroke = Stroke { width: width + 2.0, dash, ..Default::default() };
             pixmap.stroke_path(&path, &halo, &halo_stroke, Transform::identity(), None);
             pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
         }
     };
 
-    let tag = |pixmap: &mut Pixmap, x: i32, y: i32, text: &str, bg: [u8; 4]| {
+    let tag = |pixmap: &mut Pixmap, x: i32, y: i32, text: &str, bg: [u8; 4], ink: [u8; 3]| {
         let tw = line_width(text, badge_size, None) as i32 + 10;
         let th = badge_size + 4;
         let ty = 0.max(y - th);
@@ -744,7 +759,7 @@ pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry, highlight: Opti
             pixmap,
             text,
             badge_size,
-            [255, 255, 255],
+            ink,
             255,
             x + 5,
             ty + 1,
@@ -762,6 +777,7 @@ pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry, highlight: Opti
             [249, 115, 22, 235],
             stroke_w,
             Some([249, 115, 22, 35]),
+            true,
         );
         tag(
             &mut pixmap,
@@ -769,6 +785,7 @@ pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry, highlight: Opti
             y1,
             &format!("DROP ({})", drop.reason),
             [194, 65, 12, 230],
+            [255, 255, 255],
         );
     }
     // One block painter for both the kept green and the highlighted blue;
@@ -778,16 +795,17 @@ pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry, highlight: Opti
                       stroke: [u8; 4],
                       width_extra: f32,
                       fill: [u8; 4],
-                      tag_bg: [u8; 4]| {
+                      tag_bg: [u8; 4],
+                      ink: [u8; 3]| {
         let [x1, y1, _, _] = clamp_box(blk.bbox, wi, hi);
-        rect_outline(pixmap, blk.bbox, stroke, stroke_w + width_extra, Some(fill));
-        let kind = if blk.is_boxed { "Boxed" } else { "Unboxed" };
+        rect_outline(pixmap, blk.bbox, stroke, stroke_w + width_extra, Some(fill), false);
         tag(
             pixmap,
             x1,
             y1,
-            &format!("#{} · {:.2} · {}", blk.id, blk.confidence, kind),
+            &format!("#{} · {:.2} · kept", blk.id, blk.confidence),
             tag_bg,
+            ink,
         );
     };
     for blk in &entry.blocks {
@@ -797,15 +815,13 @@ pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry, highlight: Opti
         draw_block(
             &mut pixmap,
             blk,
-            // SPEC §4 `ok` #4ADE80 (was #22C55E). The tag behind the
-            // label stays dark green: the label text is white, and white
-            // on #4ADE80 would be unreadable — the mockup's black-on-ok
-            // label is part of the Phase 3 stage work (label outside the
-            // box, top-left).
+            // SPEC §4 `ok` #4ADE80 (was #22C55E). The label is black on
+            // that green (11.23:1) — white on #4ADE80 would be unreadable.
             [74, 222, 128, 255],
             1.0,
             [74, 222, 128, 30],
-            [21, 128, 61, 240],
+            [74, 222, 128, 240],
+            [0, 0, 0],
         );
     }
     if let Some(id) = highlight {
@@ -819,6 +835,7 @@ pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry, highlight: Opti
                 3.0,
                 [47, 91, 255, 40],
                 [47, 91, 255, 240],
+                [255, 255, 255],
             );
         }
     }
