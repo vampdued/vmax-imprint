@@ -10,7 +10,9 @@ fn main() {
     // the Linux test/dev builds never invoke winres, so no rc.exe is ever
     // needed there. The Windows release workflow builds on a Windows
     // runner, where winres finds rc.exe via the MSVC toolchain.
-    if std::env::var("CARGO_CFG_TARGET_OS").map(|v| v == "windows").unwrap_or(false) {
+    let target_windows =
+        std::env::var("CARGO_CFG_TARGET_OS").map(|v| v == "windows").unwrap_or(false);
+    if target_windows {
         let mut res = winres::WindowsResource::new();
         res.set_icon("assets/vmax-icon.ico");
         res.compile().expect("winres: embed vmax-icon.ico");

@@ -331,7 +331,7 @@ impl CaptionStudioApp {
         }
         match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(self.editor_text.clone())) {
             Ok(()) => self.status = "Copied JSON to clipboard — paste it into your AI translator.".into(),
-            Err(e) => self.status = format!("Clipboard error: {e}"),
+            Err(e) => self.status = format!("Couldn't copy to the clipboard ({e}) — try again."),
         }
     }
 
@@ -342,7 +342,7 @@ impl CaptionStudioApp {
                 self.preview_key.clear();
                 self.status = "Pasted translated JSON from clipboard. Switch to Live Preview or Render.".into();
             }
-            Err(_) => self.status = "Clipboard empty — nothing found on the clipboard.".into(),
+            Err(_) => self.status = "Clipboard empty — copy the translated JSON first.".into(),
         }
     }
 
@@ -364,7 +364,7 @@ impl CaptionStudioApp {
                 Ok(()) => {
                     self.status = format!("Saved metadata to {}", path.file_name().unwrap_or_default().to_string_lossy());
                 }
-                Err(e) => self.status = format!("Save failed: {e}"),
+                Err(e) => self.status = format!("Couldn't save ({e}) — check the folder and try again."),
             }
         }
     }
@@ -387,7 +387,7 @@ impl CaptionStudioApp {
                     self.preview_key.clear();
                     self.status = format!("Loaded {n} images from {}", path.file_name().unwrap_or_default().to_string_lossy());
                 }
-                Err(e) => self.status = format!("Could not load JSON: {e}"),
+                Err(e) => self.status = format!("Couldn't load that JSON ({e}) — check the file and try again."),
             }
         }
     }
@@ -404,7 +404,7 @@ impl CaptionStudioApp {
                     self.preview_key.clear();
                     self.status = format!("Imported translations from {}", path.file_name().unwrap_or_default().to_string_lossy());
                 }
-                Err(e) => self.status = format!("Could not read file: {e}"),
+                Err(e) => self.status = format!("Couldn't read that file ({e}) — check the file and try again."),
             }
         }
     }
@@ -423,7 +423,7 @@ impl CaptionStudioApp {
             std::process::Command::new("xdg-open").arg(out).spawn()
         };
         if let Err(e) = res {
-            self.status = format!("Could not open folder: {e}");
+            self.status = format!("Couldn't open the folder ({e}) — check the path and try again.");
         }
     }
 
@@ -472,7 +472,7 @@ impl CaptionStudioApp {
         let (data, warnings, count) = match self.resolve_editor() {
             Ok(v) => v,
             Err(e) => {
-                self.status = format!("Couldn't parse the JSON — {e}");
+                self.status = format!("Couldn't parse the JSON — {e}. Fix the marked spot and try again.");
                 return;
             }
         };
@@ -533,7 +533,7 @@ impl CaptionStudioApp {
             match self.resolve_editor() {
                 Ok((d, _, _)) => d,
                 Err(e) => {
-                    self.verify_text = format!("Couldn't preview the JSON — {e}");
+                    self.verify_text = format!("Couldn't preview the JSON — {e}. Fix the marked spot and try again.");
                     return;
                 }
             }
@@ -634,7 +634,7 @@ impl CaptionStudioApp {
                     }
                     Err(e) => {
                         self.ocr_error = Some(e.clone());
-                        self.status = format!("OCR engine failed to start: {e}");
+                        self.status = format!("OCR engine failed to start — restart the app to retry. ({e})");
                         self.log_error(format!("OCR engine failed to start: {e}"));
                     }
                 },
@@ -786,7 +786,7 @@ fn render_worker(
 ) {
     use rayon::prelude::*;
     if let Err(e) = std::fs::create_dir_all(&output_dir) {
-        let _ = tx.send(WorkerMsg::Status(format!("Render error: {e}")));
+        let _ = tx.send(WorkerMsg::Status(format!("Couldn't start the render ({e}) — check the output folder and try again.")));
         let _ = tx.send(WorkerMsg::RenderDone { rendered: 0, copied: 0, failed: 0, cancelled: false });
         return;
     }
