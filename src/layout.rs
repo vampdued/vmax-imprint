@@ -196,66 +196,89 @@ pub fn group_lines_into_blocks(
     let mut result: Vec<Block> = Vec::new();
     let mut next_id = 1usize;
     for blk in blocks {
-        let mut ls: Vec<&RawLine> = blk;
-        let min_x = ls.iter().map(|l| l.bbox[0]).min().unwrap_or(0);
-        let min_y = ls.iter().map(|l| l.bbox[1]).min().unwrap_or(0);
-        let max_x = ls.iter().map(|l| l.bbox[2]).max().unwrap_or(0);
-        let max_y = ls.iter().map(|l| l.bbox[3]).max().unwrap_or(0);
-        let avg_line_h = ls.iter().map(|l| l.bbox[3] - l.bbox[1]).sum::<i32>() as f32
-            / ls.len() as f32;
-        let avg_line_h_i = avg_line_h as i32;
-
-        ls.sort_by_key(|l| {
-            (
-                (l.bbox[1] as f32 / (avg_line_h * 0.5).max(1.0)).round() as i32,
-                l.bbox[0],
-            )
-        });
-        let combined_text = ls
-            .iter()
-            .map(|l| l.text.trim())
-            .collect::<Vec<_>>()
-            .join(" ");
-        let avg_conf = (ls.iter().map(|l| l.score).sum::<f32>() / ls.len() as f32 * 100.0)
-            .round()
-            / 100.0;
-
-        let bg_color = median_rgb(
-            &ls.iter().map(|l| l.bg_color).collect::<Vec<_>>(),
-        );
-        let text_color = median_rgb(
-            &ls.iter().map(|l| l.text_color).collect::<Vec<_>>(),
-        );
-        let is_boxed =
-            ls.iter().filter(|l| l.is_boxed).count() as f32 >= ls.len() as f32 / 2.0;
-
-        let n_chars = combined_text.chars().count();
-        if !is_boxed && n_chars < min_chars {
+        let block = block_from_lines(&blk, next_id);
+        let n_chars = block.original_text.chars().count();
+        if !block.is_boxed && n_chars < min_chars {
             dropped.push(DroppedItem {
-                bbox: [min_x, min_y, max_x, max_y],
-                text: combined_text,
+                bbox: block.bbox,
+                text: block.original_text,
                 reason: format!("{n_chars} chars, needs {min_chars}"),
             });
             continue;
         }
 
-        result.push(Block {
-            id: next_id,
-            bbox: [min_x, min_y, max_x, max_y],
-            line_bboxes: ls.iter().map(|l| l.bbox).collect(),
-            original_text: combined_text,
-            new_text: String::new(),
-            confidence: avg_conf,
-            text_color,
-            bg_color,
-            is_boxed,
-            font_size_est: 16.max((avg_line_h * 1.05) as i32),
-        });
+        result.push(block);
         next_id += 1;
-        let _ = avg_line_h_i;
     }
 
     (result, dropped)
+}
+
+/// Merge a group of raw lines into one block (the shared merge used by the
+/// grouping and by promoting a dropped item back to a block). The id is the
+/// caller's — the grouping assigns OCR-sequence ids, a promotion takes the
+/// next free id.
+pub fn block_from_lines(lines: &[&RawLine], id: usize) -> Block {
+    let mut ls: Vec<&RawLine> = lines.to_vec();
+    let min_x = ls.iter().map(|l| l.bbox[0]).min().unwrap_or(0);
+    let min_y = ls.iter().map(|l| l.bbox[1]).min().unwrap_or(0);
+    let max_x = ls.iter().map(|l| l.bbox[2]).max().unwrap_or(0);
+    let max_y = ls.iter().map(|l| l.bbox[3]).max().unwrap_or(0);
+    let avg_line_h =
+        ls.iter().map(|l| l.bbox[3] - l.bbox[1]).sum::<i32>() as f32 / ls.len().max(1) as f32;
+    ls.sort_by_key(|l| {
+        (
+            (l.bbox[1] as f32 / (avg_line_h * 0.5).max(1.0)).round() as i32,
+            l.bbox[0],
+        )
+    });
+    let combined_text = ls
+        .iter()
+        .map(|l| l.text.trim())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let avg_conf = (ls.iter().map(|l| l.score).sum::<f32>() / ls.len().max(1) as f32 * 100.0)
+        .round()
+        / 100.0;
+    let bg_color = median_rgb(&ls.iter().map(|l| l.bg_color).collect::<Vec<_>>());
+    let text_color = median_rgb(&ls.iter().map(|l| l.text_color).collect::<Vec<_>>());
+    let is_boxed = ls.iter().filter(|l| l.is_boxed).count() as f32 >= ls.len() as f32 / 2.0;
+    Block {
+        id,
+        bbox: [min_x, min_y, max_x, max_y],
+        line_bboxes: ls.iter().map(|l| l.bbox).collect(),
+        original_text: combined_text,
+        new_text: String::new(),
+        confidence: avg_conf,
+        text_color,
+        bg_color,
+        is_boxed,
+        font_size_est: 16.max((avg_line_h * 1.05) as i32),
+        kept_override: None,
+    }
+}
+
+/// Promote a dropped item back to a block (the inspector's "Keep" toggle):
+/// rebuild the block from the raw lines inside the dropped box, with the
+/// next free id and a `kept` override so a later re-filter doesn't drop it
+/// again. Returns None when the raw lines are gone (an old captions.json
+/// without them) — the caller disables Keep in that case.
+pub fn promote_dropped(drop: &DroppedItem, raw_lines: &[RawLine], next_id: usize) -> Option<Block> {
+    let lines: Vec<&RawLine> = raw_lines
+        .iter()
+        .filter(|l| {
+            l.bbox[0] >= drop.bbox[0]
+                && l.bbox[1] >= drop.bbox[1]
+                && l.bbox[2] <= drop.bbox[2]
+                && l.bbox[3] <= drop.bbox[3]
+        })
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    let mut block = block_from_lines(&lines, next_id);
+    block.kept_override = Some(true);
+    Some(block)
 }
 
 #[cfg(test)]
@@ -324,5 +347,31 @@ mod tests {
         assert!(boxed);
         assert_eq!(bg, [18, 18, 18]); // snapped
         assert!(fg[0] > 200);
+    }
+
+    #[test]
+    fn promote_dropped_rebuilds_from_raw_lines() {
+        let raw = vec![
+            line([0, 0, 100, 20], "short", 0.4),
+            line([0, 30, 100, 50], "kept text here", 0.9),
+        ];
+        let (blocks, dropped) = group_lines_into_blocks(&raw, 0.6, 12);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(dropped.len(), 1);
+        let promoted = promote_dropped(&dropped[0], &raw, 99).expect("promotable");
+        assert_eq!(promoted.id, 99);
+        assert_eq!(promoted.original_text, "short");
+        assert_eq!(promoted.kept_override, Some(true));
+        assert!(promoted.kept());
+    }
+
+    #[test]
+    fn promote_dropped_needs_raw_lines() {
+        let drop = DroppedItem {
+            bbox: [0, 0, 100, 20],
+            text: "short".into(),
+            reason: "confidence 0.40, needed 0.60".into(),
+        };
+        assert!(promote_dropped(&drop, &[], 1).is_none());
     }
 }

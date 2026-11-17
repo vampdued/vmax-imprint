@@ -24,7 +24,9 @@ use crate::image_io::{is_image_file, load_image, save_image};
 use crate::layout::group_lines_into_blocks;
 use crate::model::{ExtractedData, Settings};
 use crate::ocr::OcrEngine;
-use crate::parser::{compact_map_from_data, parse_flexible_json_or_dict, resolve_data};
+use crate::parser::{
+    compact_map_from_data, merge_translations, parse_flexible_json_or_dict, resolve_data,
+};
 use crate::render::{render_entry, render_ocr_diagnostic};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,6 +156,11 @@ pub struct CaptionStudioApp {
     preview_file: String,
     preview_mode: PreviewMode,
     preview_key: String,
+    /// Fit-indicator cache for the inspector cards: (file, block, sizing,
+    /// font, uniform/smallest size, text) -> (fits, lines, size). Cleared
+    /// when it grows past 256 entries; the key carries everything the fit
+    /// depends on, so a stale entry is just unused.
+    fit_cache: std::collections::HashMap<String, (bool, usize, i32)>,
     preview_texture: Option<TextureHandle>,
     preview_size: [f32; 2],
     verify_text: String,
@@ -206,6 +213,16 @@ pub struct CaptionStudioApp {
     /// The Re-scan confirm modal (Scan again with edits): "Re-scan N
     /// images? Your edited translations will be cleared."
     confirm_rescan: bool,
+    /// The Paste Translated JSON modal (JSON tab, Phase 4 item 14): its
+    /// textarea content, and whether it is open.
+    show_paste_modal: bool,
+    paste_text: String,
+    /// The Bulk edit modal (the full-document editor, Phase 4 item 14):
+    /// whether it is open. The editor binds to `editor_text` directly.
+    show_bulk_edit: bool,
+    /// The per-file import error list (JSON tab, Phase 4 item 14): shown
+    /// in a modal after an import that skipped files; None = no report.
+    import_report: Option<Vec<String>>,
     /// When the threshold sliders last moved: dragging schedules a
     /// debounced (50 ms) instant `reapply_thresholds` instead of
     /// re-filtering on every slider tick.
@@ -249,6 +266,7 @@ impl CaptionStudioApp {
             preview_file: String::new(),
             preview_mode: PreviewMode::Rendered,
             preview_key: String::new(),
+            fit_cache: std::collections::HashMap::new(),
             preview_texture: None,
             preview_size: [0.0, 0.0],
             verify_text: String::new(),
@@ -276,6 +294,10 @@ impl CaptionStudioApp {
             confirm_copy_originals: false,
             pending_render: None,
             confirm_rescan: false,
+            show_paste_modal: false,
+            paste_text: String::new(),
+            show_bulk_edit: false,
+            import_report: None,
             thresholds_changed_at: None,
             render_summary: None,
             tx: tx.clone(),
@@ -539,8 +561,20 @@ impl CaptionStudioApp {
         let mut total_kept = 0usize;
         let mut total_dropped = 0usize;
         for img in data.images.iter_mut() {
+            // Manual Keep/Filter overrides survive a re-derivation: an
+            // overridden block is kept as-is (its id, translation and
+            // override stay), and a block the thresholds would drop is
+            // re-added rather than lost. Only non-overridden blocks are
+            // re-derived.
+            let overridden: Vec<crate::model::Block> = img
+                .blocks
+                .iter()
+                .filter(|b| b.kept_override.is_some())
+                .cloned()
+                .collect();
             let (blocks, dropped) = group_lines_into_blocks(&img.raw_lines, min_conf, min_chars);
             let mut blocks = blocks;
+            let mut dropped = dropped;
             if let Some(saved) = existing.get(&img.file) {
                 for b in blocks.iter_mut() {
                     if let Some(v) = saved.get(&b.original_text) {
@@ -548,8 +582,41 @@ impl CaptionStudioApp {
                     }
                 }
             }
-            total_kept += blocks.len();
-            total_dropped += dropped.len();
+            // Swap in the overridden blocks for any new block with the same
+            // original text (the id and override stay stable), then re-add
+            // the overridden blocks the thresholds dropped entirely.
+            for b in blocks.iter_mut() {
+                if let Some(old) = overridden
+                    .iter()
+                    .find(|o| o.original_text == b.original_text)
+                {
+                    *b = old.clone();
+                }
+            }
+            let kept_texts: std::collections::HashSet<String> =
+                blocks.iter().map(|b| b.original_text.clone()).collect();
+            for old in &overridden {
+                if !kept_texts.contains(&old.original_text) {
+                    blocks.push(old.clone());
+                }
+            }
+            // A re-added overridden block must not also appear as a dropped
+            // item: the thresholds dropped its lines, but the block itself
+            // is the card. (Matched by bbox containment, not text — two
+            // different lines can share the same text.)
+            dropped.retain(|d| {
+                !overridden.iter().any(|o| {
+                    d.bbox[0] >= o.bbox[0]
+                        && d.bbox[1] >= o.bbox[1]
+                        && d.bbox[2] <= o.bbox[2]
+                        && d.bbox[3] <= o.bbox[3]
+                })
+            });
+            // Restore the visual (top-to-bottom, left-to-right) order the
+            // grouping produces; the re-added blocks appended at the end.
+            blocks.sort_by_key(|b| (b.bbox[1], b.bbox[0]));
+            total_kept += blocks.iter().filter(|b| b.kept()).count();
+            total_dropped += dropped.len() + blocks.iter().filter(|b| !b.kept()).count();
             img.blocks = blocks;
             img.dropped = dropped;
         }
@@ -596,18 +663,6 @@ impl CaptionStudioApp {
         match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(self.editor_text.clone())) {
             Ok(()) => self.status = "Copied JSON to clipboard — paste it into your AI translator.".into(),
             Err(e) => self.status = format!("Couldn't copy to the clipboard ({e}) — try again."),
-        }
-    }
-
-    fn paste_clipboard(&mut self) {
-        match arboard::Clipboard::new().and_then(|mut cb| cb.get_text()) {
-            Ok(clip) => {
-                self.editor_text = clip;
-                self.clear_render_state();
-                self.preview_key.clear();
-                self.status = "Pasted translated JSON from clipboard. Switch to Live Preview or Render.".into();
-            }
-            Err(_) => self.status = "Clipboard empty — copy the translated JSON first.".into(),
         }
     }
 
@@ -666,10 +721,39 @@ impl CaptionStudioApp {
         {
             match std::fs::read_to_string(&path) {
                 Ok(text) => {
+                    // Trial-merge against the extracted scan to list the
+                    // files that won't import (unknown file, stale block
+                    // ids); the valid files import via the editor text.
+                    let mut report: Vec<String> = Vec::new();
+                    match parse_flexible_json_or_dict(text.trim()) {
+                        Ok(parsed) => {
+                            if let Some(data) = self.extracted.clone() {
+                                let (_, warnings, _) = merge_translations(&parsed, &data);
+                                report = warnings;
+                            }
+                        }
+                        Err(_) => {
+                            report.push(
+                                "The file isn't valid JSON — nothing was imported.".into(),
+                            );
+                        }
+                    }
                     self.editor_text = text;
                     self.clear_render_state();
                     self.preview_key.clear();
-                    self.status = format!("Imported translations from {}", path.file_name().unwrap_or_default().to_string_lossy());
+                    let name = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy();
+                    if report.is_empty() {
+                        self.status =
+                            format!("Imported translations from {name}");
+                    } else {
+                        self.import_report = Some(report);
+                        self.status = format!(
+                            "Imported translations from {name} — some files were skipped, see the report."
+                        );
+                    }
                 }
                 Err(e) => self.status = format!("Couldn't read that file ({e}) — check the file and try again."),
             }
@@ -1055,70 +1139,322 @@ impl CaptionStudioApp {
         names
     }
 
-    /// Structured Detected Blocks rows: one row per kept block (conf chip +
-    /// OCR text, dim, → NEW text when translated), dropped rows faint and
-    /// not selectable. Clicking a row selects the block and re-renders the
-    /// preview with its box in Max Blue.
-    fn show_block_rows(&mut self, ui: &mut egui::Ui, entry: &crate::model::ImageEntry) {
+    /// Inspector block cards (redesign Phase 4, item 13): one card per
+    /// block (kept + manually filtered) and one per dropped item. A block
+    /// card has a title row (id, conf, kept/filtered chip, Filter out /
+    /// Keep toggle), the read-only OCR text, an editable translation
+    /// textarea (edits flow into the compact JSON + live preview), and a
+    /// fit indicator. Clicking a card's title selects the block (the stage
+    /// highlights it); focusing the textarea selects it too.
+    fn show_block_cards(&mut self, ui: &mut egui::Ui, entry: &crate::model::ImageEntry) {
         use egui::text::{LayoutJob, TextFormat};
         let t = crate::theme::Tokens::get(ui.ctx());
-        let font = egui::FontId::monospace(crate::theme::CODE);
-        // Confidence at/above 0.90 reads as kept-and-sure (diagnostic green);
-        // below it the row carries the theme's amber warning instead.
-        let conf_green = t.ok;
-        for blk in &entry.blocks {
-            let mut job = LayoutJob::default();
-            let conf_col = if blk.confidence >= 0.90 { conf_green } else { t.warning };
-            job.append(
-                &format!("#{} ", blk.id),
-                0.0,
-                TextFormat { font_id: font.clone(), color: t.accent_ink, ..Default::default() },
-            );
-            job.append(
-                &format!("{:.2} ", blk.confidence),
-                0.0,
-                TextFormat { font_id: font.clone(), color: conf_col, ..Default::default() },
-            );
-            job.append(
-                &format!("OCR: \"{}\"", blk.original_text),
-                0.0,
-                TextFormat { font_id: font.clone(), color: t.text_dim, ..Default::default() },
-            );
-            let new_t = blk.new_text.trim();
-            if !new_t.is_empty() && new_t != blk.original_text.trim() {
-                job.append(
-                    &format!("  →  NEW: \"{}\"", new_t),
-                    0.0,
-                    TextFormat { font_id: font.clone(), color: t.text, ..Default::default() },
-                );
-            } else if new_t.is_empty() {
-                job.append(
-                    "  · untranslated",
-                    0.0,
-                    TextFormat { font_id: font.clone(), color: t.text_faint, ..Default::default() },
-                );
-            }
+        let mono = egui::FontId::monospace(crate::theme::CODE);
+        let file = entry.file.clone();
+        // Snapshot the entry so the cards can mutate `extracted` (a toggle,
+        // a promotion, a translation edit) without borrowing the preview
+        // entry while drawing it. The change shows on the next frame.
+        let blocks: Vec<crate::model::Block> = entry.blocks.clone();
+        let dropped: Vec<crate::model::DroppedItem> = entry.dropped.clone();
+        for blk in &blocks {
             let selected = self.selected_block == Some(blk.id);
-            let resp = ui.selectable_label(selected, job);
-            focus_ring(ui, &resp);
-            if selected && self.blocks_scroll_to_selected {
-                resp.scroll_to_me(Some(egui::Align::Center));
-                self.blocks_scroll_to_selected = false;
-            }
-            if resp.clicked() {
-                self.selected_block = Some(blk.id);
-                self.preview_key.clear();
+            let frame = egui::Frame::new()
+                .fill(t.card)
+                .stroke(egui::Stroke::new(
+                    1.0,
+                    if selected { t.accent } else { t.card_border },
+                ))
+                .corner_radius(t.r_sm())
+                .inner_margin(egui::Margin::same(12));
+            frame.show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    // Title: "Block #n" + conf. Green at/above the conf
+                    // threshold (it passes); amber below it.
+                    let mut job = LayoutJob::default();
+                    job.append(
+                        &format!("Block #{} ", blk.id),
+                        0.0,
+                        TextFormat {
+                            font_id: egui::FontId::proportional(crate::theme::CARD),
+                            color: t.text,
+                            ..Default::default()
+                        },
+                    );
+                    let conf_col = if blk.confidence >= self.safe_conf() {
+                        t.ok
+                    } else {
+                        t.warning
+                    };
+                    job.append(
+                        &format!("{:.2}", blk.confidence),
+                        0.0,
+                        TextFormat { font_id: mono.clone(), color: conf_col, ..Default::default() },
+                    );
+                    let title_resp = ui.selectable_label(selected, job);
+                    focus_ring(ui, &title_resp);
+                    if selected && self.blocks_scroll_to_selected {
+                        title_resp.scroll_to_me(Some(egui::Align::Center));
+                        self.blocks_scroll_to_selected = false;
+                    }
+                    if title_resp.clicked() {
+                        self.selected_block = Some(blk.id);
+                        self.preview_key.clear();
+                    }
+                    let (chip, col) = if blk.kept() {
+                        ("kept", t.ok)
+                    } else {
+                        ("filtered", t.warning)
+                    };
+                    status_chip(ui, chip, col);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if blk.kept() {
+                            let resp = ui
+                                .small_button("Filter out")
+                                .on_hover_text("Exclude this block from the render — the original text stays in the image. Reversible.");
+                            if resp.clicked() {
+                                self.set_block_override(&file, blk.id, false);
+                            }
+                        } else {
+                            let resp = ui
+                                .small_button("Keep")
+                                .on_hover_text("Render this block again with its translation.");
+                            if resp.clicked() {
+                                self.set_block_override(&file, blk.id, true);
+                            }
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                // The OCR text, read-only.
+                ui.label(
+                    egui::RichText::new(format!("\"{}\"", blk.original_text))
+                        .font(mono.clone())
+                        .color(t.text_dim),
+                );
+                ui.add_space(4.0);
+                // The translation, editable. A local copy + write-back (the
+                // entry is a resolved snapshot, not `extracted` itself).
+                let mut text = blk.new_text.clone();
+                let resp = egui::TextEdit::multiline(&mut text)
+                    .hint_text("Translation…")
+                    .font(mono.clone())
+                    .desired_rows(2)
+                    .desired_width(f32::INFINITY)
+                    .show(ui);
+                focus_ring(ui, &resp.response);
+                if resp.response.changed() {
+                    self.set_block_text(&file, blk.id, text);
+                }
+                if resp.response.has_focus() && self.selected_block != Some(blk.id) {
+                    self.selected_block = Some(blk.id);
+                    self.preview_key.clear();
+                }
+                ui.add_space(4.0);
+                // Fit indicator: what the render will actually do with the
+                // effective text (the translation, or the original while
+                // untranslated).
+                let (fits, lines, size) = self.fit_for(&file, entry, blk);
+                let eff = if blk.new_text.trim().is_empty() {
+                    blk.original_text.trim()
+                } else {
+                    blk.new_text.trim()
+                };
+                let chars = eff.chars().count();
+                let (label, col) = if fits {
+                    (
+                        format!("Fits plate · {lines} lines · {chars} chars"),
+                        t.ok,
+                    )
+                } else {
+                    (
+                        format!("Shrinks to {size}px · {lines} lines · {chars} chars"),
+                        t.warning,
+                    )
+                };
+                ui.label(
+                    egui::RichText::new(label)
+                        .size(crate::theme::CAPTION)
+                        .color(col),
+                );
+            });
+            ui.add_space(8.0);
+        }
+        for drop in &dropped {
+            let frame = egui::Frame::new()
+                .fill(t.card)
+                .stroke(egui::Stroke::new(1.0, t.card_border))
+                .corner_radius(t.r_sm())
+                .inner_margin(egui::Margin::same(12));
+            frame.show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("Filtered")
+                            .font(egui::FontId::proportional(crate::theme::CARD))
+                            .color(t.text_faint),
+                    );
+                    status_chip(ui, "filtered", t.warning);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Keep needs the raw lines to rebuild the block; an
+                        // old captions.json without them disables it.
+                        let promotable = !entry.raw_lines.is_empty();
+                        let resp = ui
+                            .add_enabled(
+                                promotable,
+                                egui::Button::new("Keep").small(),
+                            )
+                            .on_hover_text(if promotable {
+                                "Keep this text — it becomes a block you can translate."
+                            } else {
+                                "Re-scan to keep filtered text (this captions.json has no raw OCR lines)."
+                            });
+                        if resp.clicked() {
+                            self.promote_dropped_item(&file, drop);
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(format!("\"{}\"", drop.text))
+                        .font(mono.clone())
+                        .color(t.text_dim),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(&drop.reason)
+                        .size(crate::theme::CAPTION)
+                        .color(t.text_faint),
+                );
+            });
+            ui.add_space(8.0);
+        }
+    }
+
+    /// Rebuild the editor's compact JSON from the extracted scan, clear the
+    /// render state and the preview so the next frame re-renders. Call after
+    /// an inspector edit changes `extracted` (a translation, a Keep/Filter
+    /// toggle, a promotion).
+    fn sync_editor_from_extracted(&mut self) {
+        if let Some(data) = self.extracted.clone() {
+            let compact = compact_map_from_data(&data);
+            self.editor_text = serde_json::to_string_pretty(&compact).unwrap_or_default();
+        }
+        self.clear_render_state();
+        self.preview_key.clear();
+    }
+
+    /// Set a block's Keep/Filter override in `extracted`, then sync the
+    /// editor + preview. (The inspector draws the resolved preview entry,
+    /// so the change shows on the next frame.)
+    fn set_block_override(&mut self, file: &str, id: usize, kept: bool) {
+        if let Some(data) = self.extracted.as_mut() {
+            if let Some(entry) = data.entry_mut(file) {
+                if let Some(blk) = entry.blocks.iter_mut().find(|b| b.id == id) {
+                    blk.kept_override = Some(kept);
+                }
             }
         }
-        for drop in &entry.dropped {
-            let mut job = LayoutJob::default();
-            job.append(
-                &format!("[FILTERED · {}] \"{}\"", drop.reason, drop.text),
-                0.0,
-                TextFormat { font_id: font.clone(), color: t.text_faint, ..Default::default() },
-            );
-            ui.label(job);
+        self.sync_editor_from_extracted();
+    }
+
+    /// Promote a dropped item to a block in `extracted` (the inspector's
+    /// "Keep" toggle), then sync the editor + preview. Returns false when
+    /// the raw lines are gone (old captions.json) — the caller disables
+    /// Keep in that case.
+    fn promote_dropped_item(&mut self, file: &str, drop: &crate::model::DroppedItem) -> bool {
+        let promoted = self.extracted.as_ref().and_then(|data| {
+            data.entry(file).and_then(|entry| {
+                let next_id = entry.blocks.iter().map(|b| b.id).max().unwrap_or(0) + 1;
+                crate::layout::promote_dropped(drop, &entry.raw_lines, next_id)
+            })
+        });
+        let Some(block) = promoted else {
+            return false;
+        };
+        if let Some(data) = self.extracted.as_mut() {
+            if let Some(entry) = data.entry_mut(file) {
+                entry
+                    .dropped
+                    .retain(|d| d.text != drop.text || d.bbox != drop.bbox);
+                entry.blocks.push(block);
+            }
         }
+        self.sync_editor_from_extracted();
+        true
+    }
+
+    /// Write a block's translation into `extracted` (the inspector's
+    /// textarea), then sync the editor + preview.
+    fn set_block_text(&mut self, file: &str, id: usize, text: String) {
+        if let Some(data) = self.extracted.as_mut() {
+            if let Some(entry) = data.entry_mut(file) {
+                if let Some(blk) = entry.blocks.iter_mut().find(|b| b.id == id) {
+                    blk.new_text = text;
+                }
+            }
+        }
+        self.sync_editor_from_extracted();
+    }
+
+    /// (fits, lines, size) for a block's effective text under the current
+    /// sizing mode and font, using the same bounds the renderer uses.
+    /// Cached per (file, block, sizing, font, uniform/smallest size, text)
+    /// so the inspector doesn't re-shape every card every frame.
+    fn fit_for(
+        &mut self,
+        file: &str,
+        entry: &crate::model::ImageEntry,
+        blk: &crate::model::Block,
+    ) -> (bool, usize, i32) {
+        let text = if blk.new_text.trim().is_empty() {
+            blk.original_text.trim()
+        } else {
+            blk.new_text.trim()
+        };
+        let uniform = crate::render::uniform_size_for(entry);
+        let smallest = crate::render::smallest_size_for(
+            entry,
+            entry.width as i32,
+            if self.font_path.trim().is_empty() {
+                None
+            } else {
+                crate::fonts::load_custom_font(self.font_path.trim())
+            },
+        );
+        let key = format!(
+            "{}|{}|{:?}|{}|{}|{}|{}",
+            file,
+            blk.id,
+            self.sizing,
+            self.font_path.trim(),
+            uniform,
+            smallest,
+            text
+        );
+        if let Some(v) = self.fit_cache.get(&key) {
+            return *v;
+        }
+        let (start_size, max_w, max_h) = crate::render::fit_bounds_for(
+            blk,
+            self.sizing,
+            uniform,
+            smallest,
+            entry.width as i32,
+            entry.height as i32,
+        );
+        let custom_family = if self.font_path.trim().is_empty() {
+            None
+        } else {
+            crate::fonts::load_custom_font(self.font_path.trim())
+        };
+        let fitted = crate::render::fit_text_to_box(text, max_w, max_h, start_size, custom_family);
+        let v = (fitted.size >= start_size, fitted.lines.len(), fitted.size);
+        if self.fit_cache.len() > 256 {
+            self.fit_cache.clear();
+        }
+        self.fit_cache.insert(key, v);
+        v
     }
 
     // ------------------------------------------------------------ messages
@@ -1466,7 +1802,147 @@ impl eframe::App for CaptionStudioApp {
             }
         }
 
-        let modal_open = self.confirm_copy_originals || self.confirm_rescan;
+        // --- Paste Translated JSON modal (JSON tab, Phase 4 item 14) ---
+        // The pasted text goes into the editor on Apply; "Paste from
+        // clipboard" fills the textarea from the clipboard first.
+        if self.show_paste_modal {
+            let mut open = true;
+            egui::Window::new("Paste Translated JSON")
+                .collapsible(false)
+                .resizable(true)
+                .default_size([700.0, 450.0])
+                .open(&mut open)
+                .show(&ctx, |ui| {
+                    ui.label("Paste the translated JSON (the compact map from the AI) below, then Apply.");
+                    ui.add_space(8.0);
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.paste_text)
+                                .font(egui::TextStyle::Monospace)
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(20)
+                                .hint_text("{\"_1.jpg\": {\"1\": \"translation\"}}"),
+                        );
+                    });
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Paste from clipboard").clicked() {
+                            match arboard::Clipboard::new()
+                                .and_then(|mut cb| cb.get_text())
+                            {
+                                Ok(clip) => self.paste_text = clip,
+                                Err(_) => {
+                                    self.status =
+                                        "Clipboard empty — copy the translated JSON first.".into()
+                                }
+                            }
+                        }
+                        let apply = ui.button("Apply");
+                        focus_ring(ui, &apply);
+                        if apply.clicked() {
+                            self.editor_text = self.paste_text.clone();
+                            self.clear_render_state();
+                            self.preview_key.clear();
+                            self.show_paste_modal = false;
+                            self.status =
+                                "Pasted translated JSON. Switch to Live Preview or Render.".into();
+                        }
+                        let cancel = ui.button("Cancel");
+                        focus_ring(ui, &cancel);
+                        if cancel.clicked() {
+                            self.show_paste_modal = false;
+                        }
+                    });
+                });
+            if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.show_paste_modal = false;
+            }
+        }
+
+        // --- Bulk edit modal (JSON tab, Phase 4 item 14) ---
+        // The full-document editor, kept from the old JSON tab: it binds to
+        // `editor_text` directly, so edits are live the moment they are
+        // typed; Done just closes the modal.
+        if self.show_bulk_edit {
+            let mut open = true;
+            egui::Window::new("Bulk edit — Translation JSON")
+                .collapsible(false)
+                .resizable(true)
+                .default_size([900.0, 600.0])
+                .open(&mut open)
+                .show(&ctx, |ui| {
+                    ui.label("The full compact map for every image. Edits apply immediately; the per-image view and the preview update from here.");
+                    ui.add_space(8.0);
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        let t = crate::theme::Tokens::get(ui.ctx());
+                        let mut layouter =
+                            |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+                                let mut job = json_highlight_job(buf.as_str(), &t);
+                                job.wrap.max_width = wrap_width;
+                                ui.fonts_mut(|f| f.layout_job(job))
+                            };
+                        let resp = ui.add(
+                            egui::TextEdit::multiline(&mut self.editor_text)
+                                .font(egui::TextStyle::Monospace)
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(24)
+                                .layouter(&mut layouter)
+                                .hint_text("Scan images to fill this in, or paste translated JSON here."),
+                        )
+                        .accessible_name("Translation JSON");
+                        focus_ring(ui, &resp);
+                        if resp.changed() {
+                            self.preview_key.clear();
+                            self.resolve_preview_data();
+                        }
+                    });
+                    ui.add_space(8.0);
+                    let done = ui.button("Done");
+                    focus_ring(ui, &done);
+                    if done.clicked() {
+                        self.show_bulk_edit = false;
+                    }
+                });
+            if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.show_bulk_edit = false;
+            }
+        }
+
+        // --- Import report modal (JSON tab, Phase 4 item 14) ---
+        // After an import that skipped files, the per-file errors are
+        // listed here; the valid files were already imported.
+        if let Some(report) = self.import_report.clone() {
+            let mut open = true;
+            egui::Window::new("Import — some files skipped")
+                .collapsible(false)
+                .resizable(true)
+                .default_size([600.0, 300.0])
+                .open(&mut open)
+                .show(&ctx, |ui| {
+                    ui.label("The valid files were imported. These were skipped:");
+                    ui.add_space(8.0);
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for line in &report {
+                            ui.label(line);
+                        }
+                    });
+                    ui.add_space(8.0);
+                    let ok = ui.button("OK");
+                    focus_ring(ui, &ok);
+                    if ok.clicked() {
+                        self.import_report = None;
+                    }
+                });
+            if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.import_report = None;
+            }
+        }
+
+        let modal_open = self.confirm_copy_originals
+            || self.confirm_rescan
+            || self.show_paste_modal
+            || self.show_bulk_edit
+            || self.import_report.is_some();
 
         // --- Status bar ---
         egui::Panel::bottom("status_bar").show(ui, |ui| {
@@ -1816,9 +2292,9 @@ impl eframe::App for CaptionStudioApp {
 
         // --- Inspector (right column, SPEC §3: fixed 380px) ---
         // The Detected Blocks list moved out of the Preview tab: the stage
-        // keeps the image full-width and the inspector owns the blocks.
-        // Block cards (editable translations) and the JSON tab arrive in
-        // Phase 4; for now the inspector shows the Phase 2 rows as-is.
+        // keeps the image full-width and the inspector owns the blocks
+        // (cards, Phase 4 item 13). The JSON tab (item 14) lives in the
+        // central panel.
         egui::Panel::right("inspector")
             .exact_size(380.0)
             .resizable(false)
@@ -1840,8 +2316,8 @@ impl eframe::App for CaptionStudioApp {
                         }
                     }
                 }
-                // Structured rows (conf chip + OCR → NEW) instead of the old
-                // monospace blob, so a row can be clicked to highlight its
+                // Block cards (editable translations, Keep/Filter toggles,
+                // fit indicator), so a card can be clicked to highlight its
                 // box. When there is no entry yet (no scan, no JSON), the
                 // guidance text stays.
                 let entry = self.preview_entry.clone();
@@ -1851,7 +2327,7 @@ impl eframe::App for CaptionStudioApp {
                             if !entry.blocks.is_empty()
                                 || !entry.dropped.is_empty() =>
                         {
-                            self.show_block_rows(ui, entry);
+                            self.show_block_cards(ui, entry);
                         }
                         _ => {
                             ui.monospace(&self.verify_text);
@@ -1878,47 +2354,49 @@ impl eframe::App for CaptionStudioApp {
             ui.separator();
             match self.tab {
                 Tab::Json => {
+                    // Per-image read-only JSON (Phase 4 item 14): the preview
+                    // file's blocks only. Copy still copies the full compact
+                    // map for the AI; Paste opens a modal; Bulk edit opens
+                    // the full-document editor as a modal.
                     ui.horizontal(|ui| {
                         if icon_text_button(ui, "copy", "Copy JSON for AI").clicked() {
                             self.copy_compact_for_ai();
                         }
-                        if icon_text_button(ui, "clipboard-paste", "Paste Translated JSON").clicked() {
-                            self.paste_clipboard();
+                        if icon_text_button(ui, "clipboard-paste", "Paste Translated JSON…").clicked() {
+                            self.show_paste_modal = true;
+                            self.paste_text.clear();
                         }
-                        if icon_text_button(ui, "file-json", "Import Translated JSON...").clicked() {
+                        if icon_text_button(ui, "file-json", "Import Translated JSON…").clicked() {
                             self.load_translated_file();
+                        }
+                        if icon_text_button(ui, "file-json", "Bulk edit…").clicked() {
+                            self.show_bulk_edit = true;
                         }
                         if icon_text_button(ui, "arrow-right", "Verify in Preview").clicked() {
                             self.tab = Tab::Preview;
                         }
                     });
+                    let data = self.resolve_preview_data();
+                    let text = per_image_json(data.as_ref(), &self.preview_file);
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        // Syntax-highlighted JSON (keys, strings, numbers,
-                        // punctuation, empty strings) with a hint when it is
-                        // empty, so the editor reads as a document instead of
-                        // a wall of one-colour text.
                         let t = crate::theme::Tokens::get(ui.ctx());
                         let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
                             let mut job = json_highlight_job(buf.as_str(), &t);
                             job.wrap.max_width = wrap_width;
                             ui.fonts_mut(|f| f.layout_job(job))
                         };
+                        let mut text = text;
                         let resp = ui.add(
-                            egui::TextEdit::multiline(&mut self.editor_text)
+                            egui::TextEdit::multiline(&mut text)
                                 .font(egui::TextStyle::Monospace)
                                 .desired_width(f32::INFINITY)
                                 .desired_rows(30)
                                 .layouter(&mut layouter)
+                                .interactive(false)
                                 .hint_text("Scan images to fill this in, or paste translated JSON here."),
                         )
-                        .accessible_name("Translation JSON");
+                        .accessible_name("Translation JSON for this image");
                         focus_ring(ui, &resp);
-                        if resp.changed() {
-                            self.preview_key.clear();
-                            // Keep the status-bar counts + JSON validity live
-                            // while editing, not just on the Preview tab.
-                            self.resolve_preview_data();
-                        }
                     });
                 }
                 Tab::Preview => {
@@ -2246,10 +2724,12 @@ fn file_status(entry: &crate::model::ImageEntry, rendered: bool, failed: bool) -
     if rendered {
         return FileStatus::Rendered;
     }
-    if entry.blocks.is_empty() {
+    // Only kept blocks count: a file whose blocks are all filtered out
+    // renders nothing, so it reads as "no text", not "untranslated".
+    if entry.blocks.iter().all(|b| !b.kept()) {
         return FileStatus::NoText;
     }
-    if entry.blocks.iter().any(|b| b.new_text.trim().is_empty()) {
+    if entry.blocks.iter().any(|b| b.kept() && b.new_text.trim().is_empty()) {
         return FileStatus::Untranslated;
     }
     FileStatus::Ready
@@ -2265,15 +2745,37 @@ fn file_status_label(status: FileStatus) -> &'static str {
     }
 }
 
+/// The per-image compact JSON for one file (JSON tab, Phase 4 item 14):
+/// {"<file>": {<id>: "<translation>", ...}} — the same values the full
+/// compact map carries, read-only. Empty when there is no entry for the file.
+fn per_image_json(data: Option<&crate::model::ExtractedData>, file: &str) -> String {
+    let Some(entry) = data.and_then(|d| d.entry(file)) else {
+        return String::new();
+    };
+    let mut map = serde_json::Map::new();
+    for blk in &entry.blocks {
+        let text = if blk.new_text.trim().is_empty() {
+            blk.original_text.clone()
+        } else {
+            blk.new_text.clone()
+        };
+        map.insert(blk.id.to_string(), serde_json::Value::String(text));
+    }
+    let mut doc = serde_json::Map::new();
+    doc.insert(file.to_string(), serde_json::Value::Object(map));
+    serde_json::to_string_pretty(&serde_json::Value::Object(doc)).unwrap_or_default()
+}
+
 /// (file count, untranslated-block count) for a dataset. A block counts as
 /// untranslated while its new text is empty — nothing has been entered yet.
+/// Filtered-out blocks need no translation, so they count in neither.
 fn counts_for(data: &crate::model::ExtractedData) -> (usize, usize) {
     let files = data.images.len();
     let untranslated = data
         .images
         .iter()
         .flat_map(|e| e.blocks.iter())
-        .filter(|b| b.new_text.trim().is_empty())
+        .filter(|b| b.kept() && b.new_text.trim().is_empty())
         .count();
     (files, untranslated)
 }
@@ -2287,17 +2789,29 @@ fn derive_workflow_state(
 ) -> WorkflowState {
     let (images, total_blocks, translated, unchanged) = match data {
         Some(d) => {
-            let total = d.images.iter().flat_map(|e| e.blocks.iter()).count();
+            // Only kept blocks count towards Translate: a filtered-out
+            // block needs no translation, and an image with no kept blocks
+            // is copied unchanged.
+            let total = d
+                .images
+                .iter()
+                .flat_map(|e| e.blocks.iter())
+                .filter(|b| b.kept())
+                .count();
             let translated = d
                 .images
                 .iter()
                 .flat_map(|e| e.blocks.iter())
                 .filter(|b| {
                     let t = b.new_text.trim();
-                    !t.is_empty() && t != b.original_text.trim()
+                    b.kept() && !t.is_empty() && t != b.original_text.trim()
                 })
                 .count();
-            let unchanged = d.images.iter().filter(|e| e.blocks.is_empty()).count();
+            let unchanged = d
+                .images
+                .iter()
+                .filter(|e| e.blocks.iter().all(|b| !b.kept()))
+                .count();
             (d.images.len(), total, translated, unchanged)
         }
         None => (0, 0, 0, 0),
@@ -2863,6 +3377,7 @@ mod tests {
                         bg_color: [255, 255, 255],
                         is_boxed: false,
                         font_size_est: 20,
+                        kept_override: None,
                     })
                     .collect(),
                 dropped: vec![],
@@ -2880,6 +3395,11 @@ mod tests {
         // A translation equal to the original still counts as translated
         // for the chip (it is not empty); the render copies it unchanged.
         assert_eq!(file_status(&entry(vec![("one", "one")]), false, false), FileStatus::Ready);
+        // A block the user filtered out needs no translation: the file
+        // reads as "no text", not "untranslated".
+        let mut e = entry(vec![("one", "")]);
+        e.blocks[0].kept_override = Some(false);
+        assert_eq!(file_status(&e, false, false), FileStatus::NoText);
     }
 
     #[test]
@@ -2963,6 +3483,7 @@ mod tests {
                         bg_color: [255, 255, 255],
                         is_boxed: false,
                         font_size_est: 20,
+                        kept_override: None,
                     })
                     .collect(),
                 dropped: vec![],
@@ -3017,6 +3538,7 @@ mod tests {
             bg_color: [0, 0, 0],
             is_boxed: true,
             font_size_est: 10,
+            kept_override: None,
         }
     }
 
@@ -3043,6 +3565,76 @@ mod tests {
             ],
         };
         assert_eq!(counts_for(&data), (2, 1));
+    }
+
+    #[test]
+    fn filtered_blocks_skip_the_workflow_counts() {
+        // One filtered-out untranslated block + one kept translated block:
+        // Translate counts only the kept block, so it is done.
+        let mut filtered = test_block(0, "");
+        filtered.kept_override = Some(false);
+        let data = crate::model::ExtractedData {
+            images: vec![crate::model::ImageEntry {
+                file: "a.png".into(),
+                width: 100,
+                height: 100,
+                raw_lines: vec![],
+                blocks: vec![filtered, test_block(1, "z")],
+                dropped: vec![],
+            }],
+        };
+        assert_eq!(counts_for(&data), (1, 0));
+        let wf = derive_workflow_state(Some(&data), None);
+        assert_eq!(wf.subtitles[1], "1 of 1 translated");
+        assert_eq!(wf.current, WorkflowStep::Review);
+        // An image with no kept blocks at all is copied unchanged.
+        let mut filtered = test_block(0, "");
+        filtered.kept_override = Some(false);
+        let data = crate::model::ExtractedData {
+            images: vec![crate::model::ImageEntry {
+                file: "a.png".into(),
+                width: 100,
+                height: 100,
+                raw_lines: vec![],
+                blocks: vec![filtered],
+                dropped: vec![],
+            }],
+        };
+        let wf = derive_workflow_state(Some(&data), None);
+        assert_eq!(wf.subtitles[2], "1 unchanged");
+        assert_eq!(wf.current, WorkflowStep::Review);
+    }
+
+    #[test]
+    fn per_image_json_shows_one_file_only() {
+        let data = crate::model::ExtractedData {
+            images: vec![
+                crate::model::ImageEntry {
+                    file: "a.png".into(),
+                    width: 100,
+                    height: 100,
+                    raw_lines: vec![],
+                    blocks: vec![test_block(1, "uno"), test_block(2, "")],
+                    dropped: vec![],
+                },
+                crate::model::ImageEntry {
+                    file: "b.png".into(),
+                    width: 100,
+                    height: 100,
+                    raw_lines: vec![],
+                    blocks: vec![test_block(1, "dos")],
+                    dropped: vec![],
+                },
+            ],
+        };
+        let text = per_image_json(Some(&data), "a.png");
+        assert!(text.contains("\"a.png\""));
+        assert!(!text.contains("\"b.png\""));
+        // Block 1 has a translation, block 2 falls back to the original.
+        assert!(text.contains("\"1\": \"uno\""));
+        assert!(text.contains("\"2\": \"x\""));
+        assert_eq!(per_image_json(Some(&data), "missing.png"), "");
+        assert_eq!(per_image_json(None, "a.png"), "");
     }
 
     #[test]

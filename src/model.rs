@@ -40,6 +40,22 @@ pub struct Block {
     pub bg_color: [u8; 3],
     pub is_boxed: bool,
     pub font_size_est: i32,
+    /// Manual Keep/Filter override from the inspector (redesign Phase 4):
+    /// `None` = no override (the block is kept — it survived the thresholds
+    /// to be here at all), `Some(false)` = the user filtered it out,
+    /// `Some(true)` = the user kept a block the thresholds would drop
+    /// (a promoted dropped item). Old JSON loads as `None`; `None` is not
+    /// written, so the wire shape is unchanged for un-overridden blocks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept_override: Option<bool>,
+}
+
+impl Block {
+    /// The block's effective kept state: a manual override wins; otherwise
+    /// a block is kept.
+    pub fn kept(&self) -> bool {
+        self.kept_override.unwrap_or(true)
+    }
 }
 
 /// One image in the extracted set.

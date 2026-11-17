@@ -374,13 +374,109 @@ fn per_block_bounds(blk: &crate::model::Block, avg_h: f32, w: i32) -> (i32, i32,
     (start_size, max_w, max_h)
 }
 
+/// The uniform size for an entry (median `font_size_est` of the blocks
+/// that have a translation and are kept), shared by the renderer and the
+/// inspector's fit indicator.
+pub fn uniform_size_for(entry: &ImageEntry) -> i32 {
+    let mut ests: Vec<i32> = entry
+        .blocks
+        .iter()
+        .filter(|b| b.kept() && !b.new_text.trim().is_empty())
+        .map(|b| b.font_size_est.max(16))
+        .collect();
+    ests.sort_unstable();
+    ests.get(ests.len() / 2).copied().unwrap_or(16)
+}
+
+/// The smallest per-block fitted size for an entry (UniformSmallest mode),
+/// shared by the renderer and the inspector.
+pub fn smallest_size_for(
+    entry: &ImageEntry,
+    wi: i32,
+    custom_family: Option<&'static str>,
+) -> i32 {
+    let mut sizes: Vec<i32> = Vec::new();
+    for blk in entry
+        .blocks
+        .iter()
+        .filter(|b| b.kept() && !b.new_text.trim().is_empty())
+    {
+        let line_bboxes = if blk.line_bboxes.is_empty() {
+            vec![blk.bbox]
+        } else {
+            blk.line_bboxes.clone()
+        };
+        let avg_h = line_bboxes.iter().map(|b| (b[3] - b[1]) as f32).sum::<f32>()
+            / line_bboxes.len() as f32;
+        let (start_size, max_w, max_h) = per_block_bounds(blk, avg_h, wi);
+        let fitted = fit_text_to_box(blk.new_text.trim(), max_w, max_h, start_size, custom_family);
+        sizes.push(fitted.size);
+    }
+    sizes.into_iter().min().unwrap_or(16)
+}
+
+/// The fit bounds (start size, max width, max height) for one block under a
+/// sizing mode — the same bounds `render_entry` uses, so the inspector's fit
+/// indicator reports what the render will actually do.
+pub fn fit_bounds_for(
+    blk: &crate::model::Block,
+    sizing: crate::model::SizingMode,
+    uniform_size: i32,
+    smallest_size: i32,
+    wi: i32,
+    hi: i32,
+) -> (i32, i32, i32) {
+    use crate::model::SizingMode;
+    let [x1, y1, _, y2] = blk.bbox;
+    let line_bboxes = if blk.line_bboxes.is_empty() {
+        vec![blk.bbox]
+    } else {
+        blk.line_bboxes.clone()
+    };
+    let avg_h = line_bboxes.iter().map(|b| (b[3] - b[1]) as f32).sum::<f32>()
+        / line_bboxes.len() as f32;
+    match sizing {
+        SizingMode::PerBlock => per_block_bounds(blk, avg_h, wi),
+        SizingMode::UniformGrow => {
+            // The plate grows to the very edge, so a long line at the
+            // uniform size stays on one line instead of wrapping at
+            // the w-56 margin and colliding with the block above.
+            //
+            // But the fit width is the width available FROM THE TEXT
+            // ORIGIN, not the full image width: the text is drawn at
+            // start_x (the block's left edge plus a margin), so a line
+            // `wi` wide starting at x≈36 overruns the right edge by
+            // exactly that offset and tiny-skia clips the glyphs (the
+            // cut plates on _3.jpg, 2026-11-17). Estimate the pad
+            // from the uniform size up front; the real pad can only
+            // shrink from here (the fit never grows the size), so the
+            // estimate stays safe.
+            let pad_est = 14.max((uniform_size as f32 * 0.45) as i32);
+            let start_est = (pad_est + 12).max(x1);
+            let max_w = (wi - start_est - pad_est).max(16);
+            // Plate grows downward from y1 (top/middle blocks) or
+            // upward from y2 (bottom blocks); the fit must keep the
+            // plate inside the image.
+            let max_h = if y2 > (hi as f32 * 0.65) as i32 {
+                y2.max(16)
+            } else {
+                (hi - y1).max(16)
+            };
+            (uniform_size, max_w, max_h)
+        }
+        SizingMode::UniformSmallest => {
+            let (_, max_w, max_h) = per_block_bounds(blk, avg_h, wi);
+            (smallest_size, max_w, max_h)
+        }
+    }
+}
+
 pub fn render_entry(
     img: &RgbImage,
     entry: &ImageEntry,
     custom_font: Option<&str>,
     sizing: crate::model::SizingMode,
 ) -> RgbImage {
-    use crate::model::SizingMode;
     let custom_family = custom_font.and_then(load_custom_font);
     let (w, h) = (img.width(), img.height());
     let (wi, hi) = (w as i32, h as i32);
@@ -389,39 +485,21 @@ pub fn render_entry(
     let mut jobs: Vec<RenderJob> = Vec::new();
 
     // Uniform modes need one size for the whole image, computed up front
-    // from the blocks that actually have a translation.
-    let live: Vec<&crate::model::Block> = entry
-        .blocks
-        .iter()
-        .filter(|b| !b.new_text.trim().is_empty())
-        .collect();
+    // from the blocks that actually have a translation and are kept
+    // (a filtered-out block renders nothing, so it must not set the size).
     // UniformGrow (A): the original's size — the median of the blocks'
     // font_size_est. UniformSmallest (C): the smallest per-block fit.
-    let uniform_size = {
-        let mut ests: Vec<i32> = live.iter().map(|b| b.font_size_est.max(16)).collect();
-        ests.sort_unstable();
-        ests.get(ests.len() / 2).copied().unwrap_or(16)
-    };
-    let smallest_size = {
-        let mut sizes: Vec<i32> = Vec::new();
-        for blk in &live {
-            let line_bboxes = if blk.line_bboxes.is_empty() {
-                vec![blk.bbox]
-            } else {
-                blk.line_bboxes.clone()
-            };
-            let avg_h = line_bboxes.iter().map(|b| (b[3] - b[1]) as f32).sum::<f32>()
-                / line_bboxes.len() as f32;
-            let (start_size, max_w, max_h) = per_block_bounds(blk, avg_h, wi);
-            let fitted = fit_text_to_box(blk.new_text.trim(), max_w, max_h, start_size, custom_family);
-            sizes.push(fitted.size);
-        }
-        sizes.into_iter().min().unwrap_or(16)
-    };
+    let uniform_size = uniform_size_for(entry);
+    let smallest_size = smallest_size_for(entry, wi, custom_family);
 
     for blk in &entry.blocks {
         let new_text = blk.new_text.trim();
         if new_text.is_empty() {
+            continue;
+        }
+        // A filtered-out block keeps its translation in the JSON but
+        // renders nothing — the original text stays in the image.
+        if !blk.kept() {
             continue;
         }
         let [x1, y1, x2, y2] = blk.bbox;
@@ -433,50 +511,10 @@ pub fn render_entry(
         let avg_h = line_bboxes.iter().map(|b| (b[3] - b[1]) as f32).sum::<f32>()
             / line_bboxes.len() as f32;
 
-        // Fit bounds per sizing mode. PerBlock is the original behaviour.
-        // UniformGrow uses one size for all blocks and lets the plate grow:
-        // full image width and the vertical space available from the
-        // block's anchor, so the fit only shrinks if the plate would run
-        // off the image. UniformSmallest uses one (small) size for all
-        // blocks inside their original footprints.
-        let (start_size, max_w, max_h) = match sizing {
-            SizingMode::PerBlock => per_block_bounds(blk, avg_h, wi),
-            SizingMode::UniformGrow => {
-                // The plate grows to the very edge, so a long line at the
-                // uniform size stays on one line instead of wrapping at
-                // the w-56 margin and colliding with the block above (the
-                // Python scan's median font_size_est is 53 vs Rust's 51,
-                // and b3's line at 53 is 1395px — just over w-56=1384 —
-                // so the margin alone flips it to 2 lines and its plate
-                // grows up into the block above).
-                //
-                // But the fit width is the width available FROM THE TEXT
-                // ORIGIN, not the full image width: the text is drawn at
-                // start_x (the block's left edge plus a margin), so a line
-                // `wi` wide starting at x≈36 overruns the right edge by
-                // exactly that offset and tiny-skia clips the glyphs (the
-                // cut plates on _3.jpg, 2026-11-17). Estimate the pad
-                // from the uniform size up front; the real pad can only
-                // shrink from here (the fit never grows the size), so the
-                // estimate stays safe.
-                let pad_est = 14.max((uniform_size as f32 * 0.45) as i32);
-                let start_est = (pad_est + 12).max(x1);
-                let max_w = (wi - start_est - pad_est).max(16);
-                // Plate grows downward from y1 (top/middle blocks) or
-                // upward from y2 (bottom blocks); the fit must keep the
-                // plate inside the image.
-                let max_h = if y2 > (h as f32 * 0.65) as i32 {
-                    y2.max(16)
-                } else {
-                    (hi - y1).max(16)
-                };
-                (uniform_size, max_w, max_h)
-            }
-            SizingMode::UniformSmallest => {
-                let (_, max_w, max_h) = per_block_bounds(blk, avg_h, wi);
-                (smallest_size, max_w, max_h)
-            }
-        };
+        // Fit bounds per sizing mode — the shared helper, so the inspector's
+        // fit indicator reports the same bounds the render uses.
+        let (start_size, max_w, max_h) =
+            fit_bounds_for(blk, sizing, uniform_size, smallest_size, wi, hi);
 
         let mut fitted = fit_text_to_box(new_text, max_w, max_h, start_size, custom_family);
         // Shared guard: no mode may draw past the right edge. The fit
@@ -796,14 +834,16 @@ pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry, highlight: Opti
                       width_extra: f32,
                       fill: [u8; 4],
                       tag_bg: [u8; 4],
-                      ink: [u8; 3]| {
+                      ink: [u8; 3],
+                      label: &str,
+                      dashed: bool| {
         let [x1, y1, _, _] = clamp_box(blk.bbox, wi, hi);
-        rect_outline(pixmap, blk.bbox, stroke, stroke_w + width_extra, Some(fill), false);
+        rect_outline(pixmap, blk.bbox, stroke, stroke_w + width_extra, Some(fill), dashed);
         tag(
             pixmap,
             x1,
             y1,
-            &format!("#{} · {:.2} · kept", blk.id, blk.confidence),
+            &format!("#{} · {:.2} · {}", blk.id, blk.confidence, label),
             tag_bg,
             ink,
         );
@@ -812,22 +852,42 @@ pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry, highlight: Opti
         if Some(blk.id) == highlight {
             continue;
         }
-        draw_block(
-            &mut pixmap,
-            blk,
-            // SPEC §4 `ok` #4ADE80 (was #22C55E). The label is black on
-            // that green (11.23:1) — white on #4ADE80 would be unreadable.
-            [74, 222, 128, 255],
-            1.0,
-            [74, 222, 128, 30],
-            [74, 222, 128, 240],
-            [0, 0, 0],
-        );
+        if blk.kept() {
+            draw_block(
+                &mut pixmap,
+                blk,
+                // SPEC §4 `ok` #4ADE80 (was #22C55E). The label is black on
+                // that green (11.23:1) — white on #4ADE80 would be unreadable.
+                [74, 222, 128, 255],
+                1.0,
+                [74, 222, 128, 30],
+                [74, 222, 128, 240],
+                [0, 0, 0],
+                "kept",
+                false,
+            );
+        } else {
+            // Manually filtered out: drawn like a dropped item (dashed
+            // orange border, "filtered" tag) so the stage shows the state
+            // the render will honour.
+            draw_block(
+                &mut pixmap,
+                blk,
+                [249, 115, 22, 235],
+                1.0,
+                [249, 115, 22, 35],
+                [194, 65, 12, 230],
+                [255, 255, 255],
+                "filtered",
+                true,
+            );
+        }
     }
     if let Some(id) = highlight {
         if let Some(blk) = entry.blocks.iter().find(|b| b.id == id) {
             // Max Blue #2F5BFF, drawn thicker so it reads as selected even
-            // at a glance.
+            // at a glance. The tag names the block's state (kept/filtered).
+            let label = if blk.kept() { "kept" } else { "filtered" };
             draw_block(
                 &mut pixmap,
                 blk,
@@ -836,6 +896,8 @@ pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry, highlight: Opti
                 [47, 91, 255, 40],
                 [47, 91, 255, 240],
                 [255, 255, 255],
+                label,
+                false,
             );
         }
     }
@@ -883,6 +945,7 @@ mod tests {
                 bg_color: [18, 18, 18],
                 is_boxed: true,
                 font_size_est: 40,
+                        kept_override: None,
             }],
             dropped: vec![],
         }
@@ -966,6 +1029,7 @@ mod tests {
             bg_color: [18, 18, 18],
             is_boxed: true,
             font_size_est: 50,
+            kept_override: None,
         };
         let entry = ImageEntry {
             file: "u.jpg".to_string(),
@@ -1021,6 +1085,7 @@ mod tests {
                 bg_color: [18, 18, 18],
                 is_boxed: true,
                 font_size_est: 51,
+                        kept_override: None,
             }],
             dropped: vec![],
         };
@@ -1059,5 +1124,22 @@ mod tests {
         // An unknown id highlights nothing.
         let unknown = render_ocr_diagnostic(&img, &entry, Some(99));
         assert_eq!(plain.as_raw(), unknown.as_raw());
+    }
+
+    #[test]
+    fn filtered_block_renders_nothing_and_diagnostic_marks_it() {
+        let img = RgbImage::new(400, 200);
+        let mut entry = test_entry();
+        // The block has a translation; filtering it out must leave the
+        // image untouched (the original text stays).
+        let rendered = render_entry(&img, &entry, None, crate::model::SizingMode::UniformGrow);
+        assert_ne!(rendered.as_raw(), img.as_raw());
+        entry.blocks[0].kept_override = Some(false);
+        let rendered = render_entry(&img, &entry, None, crate::model::SizingMode::UniformGrow);
+        assert_eq!(rendered.as_raw(), img.as_raw());
+        // The diagnostic draws the filtered block differently from kept.
+        let kept_diag = render_ocr_diagnostic(&img, &test_entry(), None);
+        let filtered_diag = render_ocr_diagnostic(&img, &entry, None);
+        assert_ne!(kept_diag.as_raw(), filtered_diag.as_raw());
     }
 }

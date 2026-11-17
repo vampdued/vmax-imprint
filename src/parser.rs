@@ -373,6 +373,7 @@ mod tests {
                 bg_color: [0, 0, 0],
                 is_boxed: true,
                 font_size_est: 20,
+                        kept_override: None,
             }],
             dropped: vec![],
         });
