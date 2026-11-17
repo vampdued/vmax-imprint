@@ -39,9 +39,6 @@ pub static ICONS: &[(&str, &[u8])] = &[
     // VMAX interlock mark (brand kit v1.1, white on transparent). Not a
     // Lucide glyph: it is the app's brand mark, used in the title bar.
     ("vmax-mark", include_bytes!("../assets/icons/vmax-mark.svg")),
-    // VMAX horizontal lockup (icon + wordmark, brand kit v1.1, white on
-    // transparent). Used in the About dialog only, tinted per theme.
-    ("vmax-lockup", include_bytes!("../assets/icons/vmax-lockup.svg")),
 ];
 
 /// Every icon the UI uses (plus `square`, the unknown-name fallback); the
@@ -67,7 +64,6 @@ pub const USED_ICONS: &[&str] = &[
     "check",
     "square",
     "vmax-mark",
-    "vmax-lockup",
 ];
 
 fn white_icons() -> &'static HashMap<&'static str, Arc<[u8]>> {
@@ -143,8 +139,8 @@ pub fn button_box(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, 
 
     if resp.has_focus() {
         // `accent_ink` (#8FA8FF), not `accent`: the Max Blue ring was 2.44:1
-        // against the field it sits on (below the 3:1 a focus indicator
-        // needs); accent_ink is 5.47:1 there and 9.21:1 on chrome.
+        // against the old field; accent_ink is 9.21:1 on the field and on
+        // chrome (both black now — the contrast test pins this).
         ui.painter().rect_stroke(rect.expand(1.0), t.radius_sm, Stroke::new(1.5, t.accent_ink), egui::StrokeKind::Outside);
     }
 

@@ -132,13 +132,6 @@ pub struct Settings {
     /// The left panel's width, dragged by the user; restored on launch.
     #[serde(default = "default_panel_width")]
     pub panel_width: f32,
-    /// Theme id ("midnight" / "daylight"), restored on launch.
-    #[serde(default = "default_theme")]
-    pub theme: String,
-}
-
-pub fn default_theme() -> String {
-    "midnight".to_string()
 }
 
 pub fn default_conf() -> f64 {
@@ -161,7 +154,6 @@ impl Default for Settings {
             minchars: 12,
             sizing: SizingMode::UniformGrow,
             panel_width: default_panel_width(),
-            theme: default_theme(),
         }
     }
 }

@@ -797,9 +797,14 @@ pub fn render_ocr_diagnostic(img: &RgbImage, entry: &ImageEntry, highlight: Opti
         draw_block(
             &mut pixmap,
             blk,
-            [34, 197, 94, 255],
+            // SPEC §4 `ok` #4ADE80 (was #22C55E). The tag behind the
+            // label stays dark green: the label text is white, and white
+            // on #4ADE80 would be unreadable — the mockup's black-on-ok
+            // label is part of the Phase 3 stage work (label outside the
+            // box, top-left).
+            [74, 222, 128, 255],
             1.0,
-            [34, 197, 94, 30],
+            [74, 222, 128, 30],
             [21, 128, 61, 240],
         );
     }

@@ -1,12 +1,20 @@
-//! VMAX brand system: two themes (Midnight dark, Daylight light), colour
-//! tokens, radii and type.
+//! VMAX brand system: Midnight dark only (the redesign handoff, SPEC §4,
+//! says dark theme only — the Daylight theme and its switch were removed
+//! 2026-11-17), colour tokens, radii and type.
 //!
 //! The brand kit is VMAX v1.1 (`~/workspace/user/files/vmax-brand-kit.zip`):
 //! Black #000000, White #FFFFFF, Max Blue #2F5BFF, Graphite #17181B, Steel
 //! #9AA1AD, blue-text-on-dark #8FA8FF. Chakra Petch for display (headings,
-//! app title), IBM Plex Sans for everything people read, JetBrains Mono
-//! for code. The caption *rendering* fonts (`fonts.rs`, DejaVu /
-//! cosmic-text) are untouched — this only styles the egui UI chrome.
+//! app title), IBM Plex Sans for everything people read, IBM Plex Mono
+//! for code, log and JSON. The caption *rendering* fonts (`fonts.rs`,
+//! DejaVu / cosmic-text) are untouched — this only styles the egui UI chrome.
+//!
+//! The handoff token set (SPEC §4) is the surface scale: bg #000, p1
+//! #0b0c0e, p2 #17181B, p3 #202228, hairline ln #2b2e35, ok #4ADE80,
+//! warn #FBBF24, err #F87171. `ln` is a hairline only (1.31:1 on card —
+//! far below the 3:1 a control edge needs), so interactive controls get a
+//! separate `field_border` derived from Steel; `ln` edges cards, gutters
+//! and separators, never a button or a field.
 //!
 //! A calm desktop look: black/graphite surfaces, lightly rounded cards and
 //! controls, sentence-case Plex throughout, and Max Blue — in small,
@@ -24,37 +32,10 @@ use std::sync::Arc;
 pub enum ThemeKind {
     #[default]
     Studio,
-    /// Port-complete but inactive: the app applies Studio only and has no
-    /// theme switch yet. Covered by the `light_theme_applies` test so the
-    /// port stays honest if a switch is added later.
-    StudioLight,
 }
 
 impl ThemeKind {
-    pub const ALL: [ThemeKind; 2] = [ThemeKind::Studio, ThemeKind::StudioLight];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            ThemeKind::Studio => "Midnight (dark)",
-            ThemeKind::StudioLight => "Daylight",
-        }
-    }
-
-    /// The value stored in settings, if a theme switch is ever added.
-    pub fn id(self) -> &'static str {
-        match self {
-            ThemeKind::Studio => "midnight",
-            ThemeKind::StudioLight => "daylight",
-        }
-    }
-
-    pub fn from_id(s: &str) -> ThemeKind {
-        match s.trim().to_ascii_lowercase().replace(['_', ' '], "-").as_str() {
-            // "studio-light" is the pre-VMAX id; both map to Daylight.
-            "studio-light" | "light" | "daylight" => ThemeKind::StudioLight,
-            _ => ThemeKind::Studio,
-        }
-    }
+    pub const ALL: [ThemeKind; 1] = [ThemeKind::Studio];
 }
 
 /// Colour and shape tokens.
@@ -89,6 +70,9 @@ pub struct Tokens {
     pub shadow: Color32,
     pub danger: Color32,
     pub warning: Color32,
+    /// Success green (SPEC §4 `ok` #4ADE80): confidence chips, kept
+    /// boxes, done states.
+    pub ok: Color32,
     pub code_bg: Color32,
     pub radius_sm: f32,
     pub radius: f32,
@@ -102,79 +86,57 @@ pub const BRAND: Color32 = Color32::from_rgb(0x2f, 0x5b, 0xff);
 
 /// Max Blue's supporting colours, from the VMAX kit.
 pub const BLUE_TEXT_ON_DARK: Color32 = Color32::from_rgb(0x8f, 0xa8, 0xff);
-pub const GRAPHITE: Color32 = Color32::from_rgb(0x17, 0x18, 0x1b);
 pub const STEEL: Color32 = Color32::from_rgb(0x9a, 0xa1, 0xad);
+
+/// Redesign-handoff surface scale (SPEC §4): p1 #0b0c0e, p2 #17181B,
+/// p3 #202228, hairline ln #2b2e35, ok #4ADE80, warn #FBBF24, err #F87171.
+pub const P1: Color32 = Color32::from_rgb(0x0b, 0x0c, 0x0e);
+pub const P2: Color32 = Color32::from_rgb(0x17, 0x18, 0x1b);
+pub const P3: Color32 = Color32::from_rgb(0x20, 0x22, 0x28);
+pub const LN: Color32 = Color32::from_rgb(0x2b, 0x2e, 0x35);
+pub const OK_GREEN: Color32 = Color32::from_rgb(0x4a, 0xde, 0x80);
+pub const WARN_AMBER: Color32 = Color32::from_rgb(0xfb, 0xbf, 0x24);
+pub const ERR_RED: Color32 = Color32::from_rgb(0xf8, 0x71, 0x71);
 
 impl Tokens {
     pub fn for_kind(kind: ThemeKind) -> Self {
         match kind {
-            // VMAX midnight: black chrome, graphite canvas, raised surfaces
-            // as white overlays on graphite (the kit defines only six
-            // colours, so the steps between them are derived: card +4%,
-            // raised +8%, field +12% white over graphite). Text is white,
-            // secondary text is Steel; the accent is Max Blue.
+            // VMAX midnight on the SPEC §4 surface scale: black chrome,
+            // p1 canvas, p2 cards, p3 raised/hover, black fields (the
+            // mockup's inputs sit on bg-black), `ln` hairlines. Text is
+            // white, secondary text is Steel; the accent is Max Blue.
             ThemeKind::Studio => Tokens {
                 kind,
                 chrome: Color32::BLACK,
-                canvas: GRAPHITE,
-                card: mix(GRAPHITE, Color32::WHITE, 0.04),
-                card_border: mix(GRAPHITE, Color32::WHITE, 0.14),
-                raised: mix(GRAPHITE, Color32::WHITE, 0.08),
-                // A visible step above `raised`, so controls read as
-                // something to use rather than more card.
-                field: mix(GRAPHITE, Color32::WHITE, 0.12),
-                field_border: mix(STEEL, GRAPHITE, 0.35),
-                hover: mix(GRAPHITE, Color32::WHITE, 0.10),
-                pressed: mix(GRAPHITE, Color32::WHITE, 0.16),
+                canvas: P1,
+                card: P2,
+                card_border: LN,
+                raised: P3,
+                // A field reads as something to type in because it is
+                // black on a p2 card, edged in `field_border` below.
+                field: Color32::BLACK,
+                // 3.62:1 on card, 4.28:1 on chrome (measured) — the SPEC
+                // hairline `ln` is only 1.31:1 on card, so it must never
+                // edge an interactive control.
+                field_border: mix(STEEL, P2, 0.35),
+                hover: P3,
+                pressed: LN,
                 text: Color32::WHITE,
                 text_dim: STEEL,
-                // Faint is canvas/chrome-only: 4.84:1 on canvas, but 4.39:1
-                // on card and 3.40:1 on field (below AA) — the contrast
-                // test pins this. Text on field uses text_dim instead.
-                text_faint: mix(STEEL, GRAPHITE, 0.20),
+                // Faint is canvas/chrome-only: 5.13:1 on canvas, 5.5:1 on
+                // chrome (measured) — the contrast test pins this. Text on
+                // field uses text_dim instead (8.08:1).
+                text_faint: mix(STEEL, P1, 0.20),
                 icon_rest: STEEL,
                 accent: BRAND,
                 accent_ink: BLUE_TEXT_ON_DARK,
                 accent_soft: Color32::from_rgba_unmultiplied(0x2f, 0x5b, 0xff, 44),
-                separator: mix(GRAPHITE, Color32::WHITE, 0.08),
+                separator: LN,
                 shadow: Color32::from_black_alpha(120),
-                danger: Color32::from_rgb(0xff, 0x62, 0x59),
-                warning: Color32::from_rgb(0xe0, 0xa2, 0x3a),
+                danger: ERR_RED,
+                warning: WARN_AMBER,
+                ok: OK_GREEN,
                 code_bg: Color32::BLACK,
-                radius_sm: RADIUS_SM,
-                radius: RADIUS,
-                radius_lg: RADIUS_LG,
-            },
-
-            // VMAX daylight: white canvas, black text, Steel-free muted
-            // graphite for secondary text, Max Blue accent. (The kit's
-            // daylight theme: bg #FFFFFF, text #000000, muted #17181B.)
-            ThemeKind::StudioLight => Tokens {
-                kind,
-                chrome: Color32::from_rgb(0xf4, 0xf4, 0xf5),
-                canvas: Color32::WHITE,
-                card: Color32::WHITE,
-                card_border: Color32::from_rgb(0xd9, 0xd9, 0xdb),
-                // A step above `card` (#ffffff), not a copy of `chrome` —
-                // the old value was identical to chrome and code_bg.
-                raised: Color32::from_rgb(0xf4, 0xf4, 0xf5),
-                field: Color32::WHITE,
-                field_border: Color32::from_rgb(0x8a, 0x8a, 0x8e),
-                hover: Color32::from_rgb(0xef, 0xef, 0xf0),
-                pressed: Color32::from_rgb(0xe4, 0xe4, 0xe6),
-                text: Color32::BLACK,
-                text_dim: GRAPHITE,
-                text_faint: Color32::from_rgb(0x5d, 0x5c, 0x5e),
-                icon_rest: Color32::from_rgb(0x4f, 0x4f, 0x52),
-                accent: BRAND,
-                accent_ink: BRAND,
-                accent_soft: Color32::from_rgba_unmultiplied(0x2f, 0x5b, 0xff, 28),
-                separator: Color32::from_rgb(0xdb, 0xda, 0xd8),
-                shadow: Color32::from_black_alpha(20),
-                danger: Color32::from_rgb(0xb3, 0x26, 0x1e),
-                warning: Color32::from_rgb(0x9a, 0x67, 0x00),
-                // A step below `chrome` so code reads as sunken, not a copy of it.
-                code_bg: Color32::from_rgb(0xf0, 0xf0, 0xf1),
                 radius_sm: RADIUS_SM,
                 radius: RADIUS,
                 radius_lg: RADIUS_LG,
@@ -227,16 +189,18 @@ const PLEX_FACES: [(&str, f32); 3] = [
 ];
 
 /// Chakra Petch, the brand display face: app title and headings only, never
-/// body copy. Static SemiBold (+ Bold for the title bar). OFL, see
-/// `assets/fonts/ChakraPetch-OFL.txt`.
+/// body copy. Static SemiBold (+ Medium for the 500 weight, Bold for the
+/// title bar). OFL, see `assets/fonts/ChakraPetch-OFL.txt`.
 pub static CHAKRA_PETCH_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/ChakraPetch-SemiBold.ttf");
+pub static CHAKRA_PETCH_MEDIUM: &[u8] = include_bytes!("../assets/fonts/ChakraPetch-Medium.ttf");
 pub static CHAKRA_PETCH_BOLD: &[u8] = include_bytes!("../assets/fonts/ChakraPetch-Bold.ttf");
 
-/// JetBrains Mono (code). OFL, see `assets/fonts/JetBrainsMono-OFL.txt`.
-pub static JETBRAINS_MONO: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf");
+/// IBM Plex Mono (code, log, JSON, values). OFL, see
+/// `assets/fonts/IBMPlexMono-OFL.txt`.
+pub static IBM_PLEX_MONO: &[u8] = include_bytes!("../assets/fonts/IBMPlexMono-Regular.ttf");
 
 /// Install IBM Plex Sans (three weights: text, labels, and semibold for
-/// headings), Chakra Petch (display) and JetBrains Mono (code). The default
+/// headings), Chakra Petch (display) and IBM Plex Mono (code). The default
 /// egui fonts stay behind them as fallbacks (emoji, CJK, and anything Plex
 /// does not cover).
 pub fn install_fonts(ctx: &egui::Context) {
@@ -248,12 +212,13 @@ pub fn install_fonts(ctx: &egui::Context) {
     }
 
     fonts.font_data.insert("ChakraPetch".to_owned(), Arc::new(FontData::from_static(CHAKRA_PETCH_SEMIBOLD)));
+    fonts.font_data.insert("ChakraPetch-Medium".to_owned(), Arc::new(FontData::from_static(CHAKRA_PETCH_MEDIUM)));
     fonts.font_data.insert("ChakraPetch-Bold".to_owned(), Arc::new(FontData::from_static(CHAKRA_PETCH_BOLD)));
 
-    fonts.font_data.insert("JetBrainsMono".to_owned(), Arc::new(FontData::from_static(JETBRAINS_MONO)));
+    fonts.font_data.insert("IBMPlexMono".to_owned(), Arc::new(FontData::from_static(IBM_PLEX_MONO)));
 
     fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "IBMPlexSans".to_owned());
-    fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "JetBrainsMono".to_owned());
+    fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "IBMPlexMono".to_owned());
 
     let base: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     for (fam, stack) in weighted_families(&base) {
@@ -312,7 +277,7 @@ pub const LABEL: f32 = 13.0;
 pub const CAPTION: f32 = 12.0;
 pub const TINY: f32 = 11.0;
 
-/// Code, paths and numbers in JetBrains Mono.
+/// Code, paths and numbers in IBM Plex Mono.
 pub const CODE: f32 = 12.5;
 
 /// The spacing steps: the gaps between things are built from these. (Panel and
@@ -515,10 +480,10 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind, roomy: bool) {
 
     // Buttons and combo boxes are field-coloured boxes with a hairline edge.
     // One edge for every control, ours and egui's: firm at rest (field_border
-    // is 3.28:1 on card and 4.28:1 on chrome in Midnight, 3.44:1 / 3.13:1 in
-    // Daylight — all above the 3:1 a non-text edge needs; the old card_border
-    // edge was 1.53:1, so buttons were nearly invisible at rest), firmer
-    // under the pointer, the app colour while it's pressed or open.
+    // is 3.62:1 on card and 4.28:1 on chrome — above the 3:1 a non-text edge
+    // needs; the SPEC hairline `ln` is only 1.31:1 on card, so it edges
+    // cards and gutters, never a control), firmer under the pointer, the app
+    // colour while it's pressed or open.
     for (wv, bg, weak, stroke) in [
         (&mut w.inactive, t.field, t.field, t.field_border),
         (&mut w.hovered, t.hover, t.hover, t.field_border),
@@ -591,18 +556,6 @@ mod tests {
         assert_eq!(crate::theme::display(18.0).family, FontFamily::Name("display".into()));
     }
 
-    #[test]
-    fn light_theme_applies() {
-        let ctx = egui::Context::default();
-        install_fonts(&ctx);
-        apply(&ctx, ThemeKind::StudioLight, false);
-        let t = Tokens::get(&ctx);
-        assert_eq!(t.kind, ThemeKind::StudioLight);
-        assert!(!t.dark());
-        assert_eq!(t.text, Color32::BLACK);
-        assert_eq!(t.canvas, Color32::WHITE);
-    }
-
     /// Relative luminance (WCAG 2.1) of an opaque colour.
     fn luminance(c: Color32) -> f32 {
         let f = |v: u8| {
@@ -618,13 +571,17 @@ mod tests {
         (hi + 0.05) / (lo + 0.05)
     }
 
-    /// Every text pair the UI actually uses, in both themes, must pass
-    /// WCAG AA (4.5:1 for text, 3:1 for the focus ring and control edges).
-    /// Measured values (2026-11-17): Midnight faint is 4.84:1 on canvas
-    /// but 4.39:1 on card and 3.40:1 on field — so `text_faint` is only
-    /// for text on canvas/chrome (dropped rows, "untranslated" flags);
-    /// the JSON editor uses `text_dim` on field instead (4.79:1).
-    /// Daylight faint passes everywhere (6.65:1).
+    /// Every text pair the UI actually uses must pass WCAG AA (4.5:1 for
+    /// text, 3:1 for the focus ring and control edges). Measured values
+    /// (2026-11-17, SPEC palette): text 19.57:1 on canvas, dim 7.52:1,
+    /// faint (`mix(Steel, p1, 0.20)` #7d838d) 5.13:1 on canvas and 5.5:1
+    /// on chrome — so `text_faint` is only for text on canvas/chrome
+    /// (dropped rows, "untranslated" flags); the JSON editor uses
+    /// `text_dim` on field instead (8.08:1). ok #4ADE80 is 11.23:1,
+    /// warning #FBBF24 11.72:1, danger #F87171 7.07:1 on canvas.
+    /// The SPEC hairline `ln` is 1.31:1 on card — a gutter only, never a
+    /// control edge; `field_border` (3.62:1 on card, 4.28:1 on chrome)
+    /// edges interactive controls instead.
     #[test]
     fn vmax_contrast_pairs_pass_aa() {
         for kind in ThemeKind::ALL {
@@ -643,6 +600,7 @@ mod tests {
             }
             assert!(contrast(Color32::WHITE, t.accent) >= 4.5, "{kind:?} white/accent");
             // Functional text.
+            assert!(contrast(t.ok, t.canvas) >= 4.5, "{kind:?} ok/canvas");
             assert!(contrast(t.warning, t.canvas) >= 4.5, "{kind:?} warning/canvas");
             assert!(contrast(t.danger, t.canvas) >= 4.5, "{kind:?} danger/canvas");
             // The focus ring (accent_ink, 1.5px) on the surfaces it rings.
@@ -653,18 +611,6 @@ mod tests {
             for (bg, name) in [(t.card, "card"), (t.chrome, "chrome")] {
                 assert!(contrast(t.field_border, bg) >= 3.0, "{kind:?} edge/{name}");
             }
-        }
-    }
-
-    #[test]
-    fn theme_ids_round_trip() {
-        assert_eq!(ThemeKind::from_id("midnight"), ThemeKind::Studio);
-        assert_eq!(ThemeKind::from_id("daylight"), ThemeKind::StudioLight);
-        // The pre-VMAX id still maps to Daylight.
-        assert_eq!(ThemeKind::from_id("studio-light"), ThemeKind::StudioLight);
-        assert_eq!(ThemeKind::from_id("bogus"), ThemeKind::Studio);
-        for kind in ThemeKind::ALL {
-            assert_eq!(ThemeKind::from_id(kind.id()), kind);
         }
     }
 

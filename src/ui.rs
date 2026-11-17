@@ -88,9 +88,6 @@ pub struct CaptionStudioApp {
     conf: f64,
     minchars: i32,
     sizing: crate::model::SizingMode,
-    /// Active theme (Midnight / Daylight), restored on launch and saved
-    /// whenever the switch changes.
-    theme: crate::theme::ThemeKind,
 
     // Data
     extracted: Option<ExtractedData>,
@@ -129,8 +126,6 @@ pub struct CaptionStudioApp {
     /// Preview zoom: Fit (the whole image in the pane) or 100% (native
     /// resolution, pan with the ScrollArea).
     preview_zoom_fit: bool,
-    /// The About dialog is open.
-    show_about: bool,
     /// Status-bar counts for the dataset the preview shows.
     preview_file_count: usize,
     preview_untranslated: usize,
@@ -158,8 +153,8 @@ impl CaptionStudioApp {
         // The caption *rendering* fonts (fonts.rs) are untouched.
         crate::theme::install_fonts(&cc.egui_ctx);
         let settings = Settings::load();
-        let theme = crate::theme::ThemeKind::from_id(&settings.theme);
-        crate::theme::apply(&cc.egui_ctx, theme, false);
+        // Dark only (redesign handoff, SPEC §4): no theme switch.
+        crate::theme::apply(&cc.egui_ctx, crate::theme::ThemeKind::Studio, false);
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
         let (tx, rx) = unbounded::<WorkerMsg>();
@@ -170,7 +165,6 @@ impl CaptionStudioApp {
             conf: settings.conf,
             minchars: settings.minchars,
             sizing: settings.sizing,
-            theme,
             extracted: None,
             editor_text: String::new(),
             ocr: None,
@@ -192,7 +186,6 @@ impl CaptionStudioApp {
             preview_filter: String::new(),
             preview_filter_focus: false,
             preview_zoom_fit: true,
-            show_about: false,
             preview_file_count: 0,
             preview_untranslated: 0,
             preview_json_error: None,
@@ -248,7 +241,6 @@ impl CaptionStudioApp {
             minchars: self.minchars.max(0),
             sizing: self.sizing,
             panel_width: self.panel_width,
-            theme: self.theme.id().to_string(),
         }
         .save();
     }
@@ -700,7 +692,7 @@ impl CaptionStudioApp {
         } else if let Ok((data, _, _)) = self.resolve_editor() {
             names = data.images.iter().map(|e| e.file.clone()).collect();
         }
-        names.sort();
+        names.sort_by(|a, b| natural_cmp(a, b));
         names
     }
 
@@ -714,7 +706,7 @@ impl CaptionStudioApp {
         let font = egui::FontId::monospace(crate::theme::CODE);
         // Confidence at/above 0.90 reads as kept-and-sure (diagnostic green);
         // below it the row carries the theme's amber warning instead.
-        let conf_green = egui::Color32::from_rgb(34, 197, 94);
+        let conf_green = t.ok;
         for blk in &entry.blocks {
             let mut job = LayoutJob::default();
             let conf_col = if blk.confidence >= 0.90 { conf_green } else { t.warning };
@@ -1051,40 +1043,7 @@ impl eframe::App for CaptionStudioApp {
             }
         }
 
-        // --- About dialog ---
-        // The lockup is white artwork tinted with the text colour, so it
-        // reads white on Midnight and black on Daylight; the wordmark is
-        // used as supplied, never retyped.
-        if self.show_about {
-            let mut open = true;
-            egui::Window::new("About Caption Studio")
-                .collapsible(false)
-                .resizable(false)
-                .open(&mut open)
-                .show(&ctx, |ui| {
-                    let t = crate::theme::Tokens::get(ui.ctx());
-                    ui.add(crate::icons::image_sized(
-                        "vmax-lockup",
-                        egui::vec2(310.0, 50.0),
-                        t.text,
-                    ));
-                    ui.label(crate::theme::heading("Caption Studio", crate::theme::SECTION));
-                    ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
-                    ui.label(crate::theme::label_text(
-                        "Batch Image Translator & OCR Verifier",
-                        crate::theme::SMALL,
-                    ));
-                    let close = ui.button("Close");
-                    focus_ring(ui, &close);
-                    if close.clicked() {
-                        self.show_about = false;
-                    }
-                });
-            if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.show_about = false;
-            }
-        }
-        let modal_open = self.confirm_copy_originals || self.show_about;
+        let modal_open = self.confirm_copy_originals;
 
         // --- Status bar ---
         egui::Panel::bottom("status_bar").show(ui, |ui| {
@@ -1162,21 +1121,11 @@ impl eframe::App for CaptionStudioApp {
                 // Title bar: the VMAX interlock mark (32px wide, the kit's
                 // minimum on-screen size) beside the app title in Chakra
                 // Petch, with the subtitle below. The mark is tinted with
-                // the text colour, so it reads white on Midnight and black
-                // on Daylight.
+                // the text colour, so it reads white on the dark theme.
                 ui.horizontal(|ui| {
                     let t = crate::theme::Tokens::get(ui.ctx());
                     ui.add(crate::icons::image_sized("vmax-mark", egui::vec2(32.0, 24.0), t.text));
                     ui.label(crate::theme::heading("Caption Studio", crate::theme::SECTION));
-                    // About lives at the right end of the title row, where
-                    // a reader looks for it; it opens the dialog below.
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let about = ui.small_button("About");
-                        focus_ring(ui, &about);
-                        if about.clicked() {
-                            self.show_about = true;
-                        }
-                    });
                 });
                 ui.label(crate::theme::label_text("Batch Image Translator & OCR Verifier", crate::theme::SMALL));
                 if let Some(e) = &self.ocr_error {
@@ -1309,22 +1258,6 @@ impl eframe::App for CaptionStudioApp {
                                 self.cancel.store(true, Ordering::SeqCst);
                             }
                         });
-                    });
-                });
-
-                egui::CollapsingHeader::new("Appearance").default_open(true).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let theme_label = ui.label("Theme:").id;
-                        for kind in crate::theme::ThemeKind::ALL {
-                            let resp = ui
-                                .selectable_value(&mut self.theme, kind, kind.label())
-                                .labelled_by(theme_label);
-                            focus_ring(ui, &resp);
-                            if resp.changed() {
-                                crate::theme::apply(ui.ctx(), kind, false);
-                                self.save_settings();
-                            }
-                        }
                     });
                 });
 
@@ -1744,6 +1677,62 @@ fn filter_file_names<'a>(names: &'a [String], query: &str) -> Vec<&'a String> {
     names.iter().filter(|n| n.to_lowercase().contains(&q)).collect()
 }
 
+/// Natural ordering for file names: digit runs compare by value, so
+/// `2 of 75.png` sorts before `10 of 75.png` (plain `sort()` puts 10
+/// first — redesign defect 2, SPEC §11). Non-digit runs compare
+/// lexicographically; equal numbers tie-break on fewer leading zeros.
+fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering::*;
+    let (mut ai, mut bi) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        match (ai.peek(), bi.peek()) {
+            (None, None) => return Equal,
+            (None, Some(_)) => return Less,
+            (Some(_), None) => return Greater,
+            (Some(&ac), Some(&bc)) => {
+                if ac.is_ascii_digit() && bc.is_ascii_digit() {
+                    let mut an = String::new();
+                    while let Some(&c) = ai.peek() {
+                        if c.is_ascii_digit() {
+                            an.push(c);
+                            ai.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    let mut bn = String::new();
+                    while let Some(&c) = bi.peek() {
+                        if c.is_ascii_digit() {
+                            bn.push(c);
+                            bi.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    let at = an.trim_start_matches('0');
+                    let bt = bn.trim_start_matches('0');
+                    let ord = at.len().cmp(&bt.len()).then_with(|| at.cmp(bt));
+                    if ord != Equal {
+                        return ord;
+                    }
+                    // Same number: fewer leading zeros first.
+                    let ord = an.len().cmp(&bn.len());
+                    if ord != Equal {
+                        return ord;
+                    }
+                } else {
+                    let ord = ac.cmp(&bc);
+                    if ord != Equal {
+                        return ord;
+                    }
+                    ai.next();
+                    bi.next();
+                }
+            }
+        }
+    }
+}
+
 /// The id of the first kept block whose box contains the point (image
 /// pixels), for click-to-select in the OCR Boxes view. Dropped boxes are
 /// not selectable.
@@ -1797,10 +1786,10 @@ fn focus_ring(ui: &egui::Ui, resp: &egui::Response) {
         ui.painter().rect_stroke(
             resp.rect.expand(1.0),
             t.radius_sm,
-            // `accent_ink`, not `accent`: the indigo ring was 2.44:1 against
-            // the field it sits on (below the 3:1 a focus indicator needs);
-            // accent_ink is 5.47:1 there and 9.21:1 on chrome (Midnight;
-            // Daylight is 5.17:1 / 4.70:1 — the contrast test pins these).
+            // `accent_ink`, not `accent`: accent_ink is 9.21:1 on the field
+            // and on chrome (both black now — the contrast test pins this),
+            // while the Max Blue ring would be 4.06:1: it passes, but the
+            // lighter blue reads as the focus colour everywhere else too.
             egui::Stroke::new(1.5, t.accent_ink),
             egui::StrokeKind::Outside,
         );
@@ -1811,9 +1800,9 @@ fn focus_ring(ui: &egui::Ui, resp: &egui::Response) {
 /// values in the text colour, numbers/booleans/null in amber, punctuation
 /// dimmed, and empty strings (`""`) visibly dimmed so a missing translation
 /// reads as empty instead of blending in. "Dimmed" here is `text_dim`, not
-/// `text_faint`: the editor sits on the field background, where faint is
-/// 3.40:1 in Midnight (below AA) while dim is 4.79:1 — faint is only for
-/// text on canvas/chrome, where it passes. Tolerant of invalid JSON (the user
+/// `text_faint`: faint would pass on the field now (5.5:1 on black), but dim
+/// (8.08:1) is kept because an empty string must read as a deliberate
+/// signal, not ambient chrome text. Tolerant of invalid JSON (the user
 /// is mid-edit) — it tokenizes by shape and never parses. Byte-safe: the
 /// structural characters are all ASCII, so scanning bytes for them can never
 /// mistake a multi-byte character for one, and spans only ever start and end
@@ -1920,7 +1909,7 @@ fn json_highlight_job(text: &str, t: &crate::theme::Tokens) -> egui::text::Layou
 }
 
 /// The VMAX interlock mark as the window/taskbar icon (white on
-/// transparent; the title bar is dark in both themes). If the embedded PNG
+/// transparent; the title bar is dark). If the embedded PNG
 /// ever fails to decode, the app still starts, just without an icon.
 static VMAX_ICON_PNG: &[u8] = include_bytes!("../assets/icons/vmax-icon-1024.png");
 
@@ -1928,8 +1917,10 @@ pub fn run_app() -> eframe::Result<()> {
     let icon = eframe::icon_data::from_png_bytes(VMAX_ICON_PNG).unwrap_or_default();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1160.0, 680.0])
-            .with_min_inner_size([920.0, 550.0])
+            // Redesign handoff (SPEC §3): minimum 1280×720; the old
+            // 1160×680 initial size is below the new minimum.
+            .with_inner_size([1600.0, 900.0])
+            .with_min_inner_size([1280.0, 720.0])
             .with_icon(icon)
             .with_title("Caption Studio — Batch Image Translator & OCR Verifier"),
         ..Default::default()
@@ -2007,6 +1998,26 @@ mod tests {
         assert_eq!(filter_file_names(&names, "ALPHA"), vec![&names[0]]);
         assert_eq!(filter_file_names(&names, "02"), vec![&names[1]]);
         assert!(filter_file_names(&names, "zzz").is_empty());
+    }
+
+    #[test]
+    fn natural_sort_orders_numbers_by_value() {
+        let mut names = vec![
+            "10 of 75.png".to_string(),
+            "2 of 75.png".to_string(),
+            "1 of 75.png".to_string(),
+            "13 of 75.png".to_string(),
+            "9 of 75.png".to_string(),
+        ];
+        names.sort_by(|a, b| natural_cmp(a, b));
+        assert_eq!(
+            names,
+            vec!["1 of 75.png", "2 of 75.png", "9 of 75.png", "10 of 75.png", "13 of 75.png"]
+        );
+        // Leading zeros tie-break, non-digit runs stay lexicographic.
+        assert_eq!(natural_cmp("01.jpg", "1.jpg"), std::cmp::Ordering::Greater);
+        assert_eq!(natural_cmp("a2", "a10"), std::cmp::Ordering::Less);
+        assert_eq!(natural_cmp("a", "b"), std::cmp::Ordering::Less);
     }
 
     fn test_block(id: usize, new_text: &str) -> crate::model::Block {
