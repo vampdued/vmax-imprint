@@ -583,18 +583,6 @@ impl CaptionStudioApp {
         }
     }
 
-    /// Run a stepper item's action (SPEC §5: stepper items are clickable):
-    /// Scan runs a scan, Translate opens the JSON tab, Review focuses the
-    /// stage, Render runs a render.
-    fn run_step(&mut self, step: WorkflowStep) {
-        match step {
-            WorkflowStep::Scan => self.start_extract(),
-            WorkflowStep::Translate => self.tab = Tab::Json,
-            WorkflowStep::Review => self.tab = Tab::Preview,
-            WorkflowStep::Render => self.start_render(),
-        }
-    }
-
     /// Copy the activity log to the clipboard.
     fn copy_log(&mut self) {
         // In display order (newest first, matching the table).
@@ -1124,11 +1112,14 @@ impl CaptionStudioApp {
             )
         });
         let selected = name == self.preview_file;
-        // 60px: the thumbnail (44px) + two text lines + padding. At 52px
+        // 64px: the thumbnail (44px) + two text lines + padding. At 52px
         // the status chip sat on the row's bottom edge and the selection
-        // stroke cut straight through it.
+        // stroke cut straight through it; at 60px the thumbnail and the
+        // chip still filled the row edge-to-edge (shot 03: "the image
+        // and content are overflowing"), so the row grows again to give
+        // both clear breathing room.
         let (rect, resp) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 60.0), egui::Sense::click());
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 64.0), egui::Sense::click());
         let resp = resp.accessible_name(format!(
             "{} · {} blocks{}",
             name,
@@ -2492,10 +2483,16 @@ impl eframe::App for CaptionStudioApp {
                     ui.separator();
                     let wf = self.workflow_state();
                     // The primary reserves ~200px on the right; the four
-                    // steps share the rest.
+                    // steps share the rest. The stepper is a status
+                    // display only — it used to run the step's action on
+                    // click, which duplicated the header primary (Scan /
+                    // Render) and the tabs (Translate / Review), so the
+                    // click handler was removed (round-2 duplicate-button
+                    // unification). Navigation lives in the tabs; the
+                    // action lives in the header primary.
                     let steps_w = (ui.available_width() - 200.0).max(0.0);
                     for (i, step) in WorkflowStep::ALL.iter().enumerate() {
-                        let resp = step_button(
+                        step_button(
                             ui,
                             (steps_w / 4.0 - 8.0).max(0.0),
                             i + 1,
@@ -2503,9 +2500,6 @@ impl eframe::App for CaptionStudioApp {
                             &wf.subtitles[i],
                             wf.states[i],
                         );
-                        if resp.clicked() {
-                            self.run_step(*step);
-                        }
                         ui.add_space(8.0);
                     }
                     ui.add_enabled_ui(!self.busy, |ui| {
@@ -2575,15 +2569,19 @@ impl eframe::App for CaptionStudioApp {
                                         ))
                                         .id;
                                     ui.horizontal(|ui| {
+                                        // Forced to 36px like the path rows
+                                        // above: a bare singleline TextEdit
+                                        // sizes to its text and came out a
+                                        // different height (shot 01: "no
+                                        // consistent size").
+                                        let field_w = ui.available_width()
+                                            - 36.0
+                                            - ui.spacing().item_spacing.x;
                                         let resp = ui
-                                            .add(
+                                            .add_sized(
+                                                egui::vec2(field_w, 36.0),
                                                 egui::TextEdit::singleline(&mut self.font_path)
-                                                    .hint_text(".ttf  .otf  .ttc")
-                                                    .desired_width(
-                                                        ui.available_width()
-                                                            - 36.0
-                                                            - ui.spacing().item_spacing.x,
-                                                    ),
+                                                    .hint_text(".ttf  .otf  .ttc"),
                                             )
                                             .labelled_by(font_label);
                                         focus_ring(ui, &resp);
@@ -2773,7 +2771,10 @@ impl eframe::App for CaptionStudioApp {
                                 // Project section (SPEC §2): the 2×2 grid, now complete —
                                 // Scan again joins Save / Load / Open output. Scan again
                                 // with edits asks first (confirm modal, §9 copy); without
-                                // edits it scans straight away.
+                                // edits it scans straight away. It is disabled until a
+                                // scan exists — before the first scan the header
+                                // primary "Scan images" is the only scan button, so the
+                                // two never read as duplicates.
                                 sidebar_section(ui, "PROJECT", |ui| {
                                     // Two rows of two buttons, each exactly half the
                                     // inner width — the grid sized buttons to their
@@ -2799,15 +2800,22 @@ impl eframe::App for CaptionStudioApp {
                                     });
                                     ui.add_space(8.0);
                                     ui.horizontal(|ui| {
-                                        if icon_text_button_sized(ui, "scan", "Scan again", half)
+                                        ui.add_enabled_ui(self.extracted.is_some(), |ui| {
+                                            if icon_text_button_sized(
+                                                ui,
+                                                "scan",
+                                                "Scan again",
+                                                half,
+                                            )
                                             .clicked()
-                                        {
-                                            if self.has_translations() {
-                                                self.confirm_rescan = true;
-                                            } else {
-                                                self.start_extract();
+                                            {
+                                                if self.has_translations() {
+                                                    self.confirm_rescan = true;
+                                                } else {
+                                                    self.start_extract();
+                                                }
                                             }
-                                        }
+                                        });
                                         if icon_text_button_sized(
                                             ui,
                                             "folder-open",
@@ -2918,32 +2926,37 @@ impl eframe::App for CaptionStudioApp {
                             }
                             self.show_bulk_edit = true;
                         }
-                        if icon_text_button(ui, "arrow-right", "Verify in Preview").clicked() {
-                            self.tab = Tab::Preview;
-                        }
+                        // No "Verify in Preview" button here: the header
+                        // primary "Review" already jumps to the preview
+                        // (and to the first untranslated block), and the
+                        // "Live Preview & OCR Check" tab is the same
+                        // navigation — three ways to one place.
                     });
                     let data = self.resolve_preview_data();
                     let text = per_image_json(data.as_ref(), &self.preview_file);
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        let t = crate::theme::Tokens::get(ui.ctx());
-                        let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
-                            let mut job = json_highlight_job(buf.as_str(), &t);
-                            job.wrap.max_width = wrap_width;
-                            ui.fonts_mut(|f| f.layout_job(job))
-                        };
-                        let mut text = text;
-                        let resp = ui.add(
-                            egui::TextEdit::multiline(&mut text)
-                                .font(egui::TextStyle::Monospace)
-                                .desired_width(f32::INFINITY)
-                                .desired_rows(30)
-                                .layouter(&mut layouter)
-                                .interactive(false)
-                                .hint_text("Scan images to fill this in, or paste translated JSON here."),
-                        )
-                        .accessible_name("Translation JSON for this image");
-                        focus_ring(ui, &resp);
-                    });
+                    // The editor fills the rest of the central panel: a
+                    // fixed 30-row height left a dead gap below it when
+                    // the log was closed (shot 01: "the border isn't
+                    // responsive"). The multiline TextEdit scrolls
+                    // internally, so no outer ScrollArea is needed.
+                    let t = crate::theme::Tokens::get(ui.ctx());
+                    let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+                        let mut job = json_highlight_job(buf.as_str(), &t);
+                        job.wrap.max_width = wrap_width;
+                        ui.fonts_mut(|f| f.layout_job(job))
+                    };
+                    let mut text = text;
+                    let resp = ui.add_sized(
+                        ui.available_size(),
+                        egui::TextEdit::multiline(&mut text)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(f32::INFINITY)
+                            .layouter(&mut layouter)
+                            .interactive(false)
+                            .hint_text("Scan images to fill this in, or paste translated JSON here."),
+                    )
+                    .accessible_name("Translation JSON for this image");
+                    focus_ring(ui, &resp);
                 }
                 Tab::Preview => {
                     // The dataset is resolved once per frame: the file list
@@ -3362,6 +3375,11 @@ fn segmented<T: PartialEq + Copy>(
                 t.text
             });
             let btn = egui::Button::new(text)
+                // 32px, the Medium control height: the segmented groups
+                // came out shorter than the chevron buttons beside them
+                // (shot 03: "not consistent shape"), so the two groups
+                // and the toolbar read as different controls.
+                .min_size(egui::vec2(0.0, 32.0))
                 .fill(if selected { t.accent } else { t.card })
                 .stroke(if selected {
                     egui::Stroke::NONE
@@ -3673,8 +3691,11 @@ fn block_at(entry: &crate::model::ImageEntry, x: f32, y: f32) -> Option<usize> {
 /// green ✓ once done) beside the step label and its live subtitle. Done
 /// steps get a green circle, the current step a blue circle + blue border,
 /// future steps a dim circle + hairline border. Custom-painted because a
-/// plain egui button can't carry the circle + two text sizes; the response
-/// is focusable and gets the same focus ring as the other buttons.
+/// plain egui button can't carry the circle + two text sizes. Status only:
+/// the stepper used to run the step's action on click, which duplicated
+/// the header primary (Scan / Render) and the tabs (Translate / Review),
+/// so it is no longer clickable or focusable — navigation lives in the
+/// tabs, the action in the header primary.
 fn step_button(
     ui: &mut egui::Ui,
     width: f32,
@@ -3684,10 +3705,10 @@ fn step_button(
     state: StepState,
 ) -> egui::Response {
     let t = crate::theme::Tokens::get(ui.ctx());
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 40.0), egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 40.0), egui::Sense::hover());
     let resp = resp.accessible_name(format!("Step {number}: {label}, {subtitle}"));
     let painter = ui.painter_at(rect);
-    let bg = if resp.hovered() { t.hover } else { t.card };
+    let bg = t.card;
     let border = match state {
         StepState::Current => t.accent,
         _ => t.card_border,
@@ -3736,7 +3757,6 @@ fn step_button(
         egui::FontId::proportional(12.0),
         t.text_dim,
     );
-    focus_ring(ui, &resp);
     resp
 }
 
@@ -3829,14 +3849,23 @@ fn path_row(ui: &mut egui::Ui, label: &str, path: &str) -> egui::Response {
                     egui::vec2(field_w - 16.0, 36.0),
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
-                        ui.label(
-                            egui::RichText::new(shown)
-                                .font(egui::FontId::proportional(crate::theme::BODY))
-                                .color(if path.is_empty() {
-                                    t.text_faint
-                                } else {
-                                    t.text
-                                }),
+                        // No wrap: the tail-ellipsis already fits the text
+                        // to this width, and a wrapped second line would
+                        // make the field taller than the 36px the other
+                        // rows use (shot 01: "no consistent size").
+                        // `.truncate()` is the safety net — it cuts the
+                        // text (with …) instead of wrapping it.
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(shown)
+                                    .font(egui::FontId::proportional(crate::theme::BODY))
+                                    .color(if path.is_empty() {
+                                        t.text_faint
+                                    } else {
+                                        t.text
+                                    }),
+                            )
+                            .truncate(),
                         );
                     },
                 );
@@ -3891,9 +3920,9 @@ fn icon_text_button_sized(
 }
 
 /// A primary action: accent fill, white icon and label. The screen's main
-/// steps (Scan, Render, "Verify in Preview") get this so they read as the
-/// thing to do, not as one more secondary button. `full_width` makes it the
-/// panel's full width at the default control height (Scan and Render).
+/// steps (Scan, Review, Render) get this so they read as the thing to do,
+/// not as one more secondary button. `full_width` makes it the panel's full
+/// width at the default control height (Scan and Render).
 fn primary_icon_text_button(
     ui: &mut egui::Ui,
     icon: &str,
@@ -4384,6 +4413,10 @@ impl CaptionStudioApp {
         self.import_report = None;
         self.show_log = true;
         self.preview_zoom_fit = true;
+        // Reset the manual zoom too: the toolbar's zoom button shows
+        // `preview_zoom` as a %, so leaving a stale 2.0 from the
+        // zoomed-pan shot would read "200%" on every later Fit shot.
+        self.preview_zoom = 1.0;
         self.preview_pan = egui::Vec2::ZERO;
         self.selected_block = None;
         st.shot_done
