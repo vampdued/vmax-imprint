@@ -1,9 +1,8 @@
-//! Dual-column GUI — port of `CaptionReplacerApp` (tkinter) to eframe/egui.
-//!
-//! Left column: folders & font, OCR threshold tuning (instant re-filter
-//! from stored `raw_lines`, no re-inference), batch workflow, activity log.
-//! Right column: tabbed workspace — Translation JSON editor and Live
-//! Preview & OCR Check (Rendered / OCR Boxes / Original).
+//! Redesign layout (SPEC §3) — header (brand + 4-step stepper + the one
+//! primary) / sidebar 316px (folders & font, OCR threshold tuning,
+//! Project) / workspace (tabbed: Translation JSON editor and Live Preview
+//! & OCR Check — Rendered / OCR Boxes / Original) / inspector 380px
+//! (Detected Blocks) / activity log 188px / status bar 32px.
 //!
 //! OCR is pre-warmed in a background thread at launch. Scanning runs on a
 //! worker thread; rendering runs on a worker thread with rayon inside.
@@ -32,6 +31,50 @@ use crate::render::{render_entry, render_ocr_diagnostic};
 enum Tab {
     Json,
     Preview,
+}
+
+/// The four workflow steps (SPEC §2): Scan → Translate → Review → Render.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkflowStep {
+    Scan,
+    Translate,
+    Review,
+    Render,
+}
+
+impl WorkflowStep {
+    const ALL: [WorkflowStep; 4] = [
+        WorkflowStep::Scan,
+        WorkflowStep::Translate,
+        WorkflowStep::Review,
+        WorkflowStep::Render,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            WorkflowStep::Scan => "Scan",
+            WorkflowStep::Translate => "Translate",
+            WorkflowStep::Review => "Review",
+            WorkflowStep::Render => "Render",
+        }
+    }
+}
+
+/// A step's state in the header stepper: done (✓), current (blue), or
+/// still to do (numbered).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StepState {
+    Todo,
+    Current,
+    Done,
+}
+
+/// Everything the header needs to draw the stepper and its primary.
+struct WorkflowState {
+    current: WorkflowStep,
+    states: [StepState; 4],
+    subtitles: [String; 4],
+    images: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,9 +181,11 @@ pub struct CaptionStudioApp {
     cancel: Arc<AtomicBool>,
     confirm_copy_originals: bool,
     pending_render: Option<ExtractedData>,
-    /// The left panel's width, restored from settings and kept in sync as
-    /// the user drags the divider (saved with the rest of the settings).
-    panel_width: f32,
+    /// The last completed render run (rendered, copied unchanged, failed),
+    /// for the workflow stepper and the status bar. Cleared whenever the
+    /// dataset changes (scan, load, paste, threshold change) so a stale
+    /// "done" never survives new edits.
+    render_summary: Option<(usize, usize, usize)>,
 
     tx: Sender<WorkerMsg>,
     rx: Receiver<WorkerMsg>,
@@ -196,7 +241,7 @@ impl CaptionStudioApp {
             cancel: Arc::new(AtomicBool::new(false)),
             confirm_copy_originals: false,
             pending_render: None,
-            panel_width: settings.panel_width,
+            render_summary: None,
             tx: tx.clone(),
             rx,
         };
@@ -240,7 +285,6 @@ impl CaptionStudioApp {
             conf: self.conf.clamp(0.0, 1.0),
             minchars: self.minchars.max(0),
             sizing: self.sizing,
-            panel_width: self.panel_width,
         }
         .save();
     }
@@ -267,6 +311,98 @@ impl CaptionStudioApp {
         resolve_data(raw, &self.extracted, &input_dir)
     }
 
+    /// The workflow stepper's state (SPEC §2): Scan → Translate → Review →
+    /// Render. Scan is done once an extraction exists; Translate is done
+    /// when every kept block has a real translation (non-empty and different
+    /// from the original); Review is done when Render is; Render is done
+    /// when a render run completed after the last dataset change. The
+    /// current step is the first one not done (Render again once all are
+    /// done — re-render after edits). Translations are read from the
+    /// resolved data (editor JSON merged over the scan), the same source
+    /// the preview renders.
+    fn workflow_state(&self) -> WorkflowState {
+        let data: Option<ExtractedData> = if self.extracted.is_some() {
+            match self.resolve_editor() {
+                Ok((d, _, _)) => Some(d),
+                Err(_) => self.extracted.clone(),
+            }
+        } else {
+            None
+        };
+        derive_workflow_state(data.as_ref(), self.render_summary)
+    }
+
+    /// The header primary for the current step (SPEC §2): Scan images →
+    /// Review → Render N images. Translate's primary goes to Review (and
+    /// jumps to the first file with an untranslated block); once Render is
+    /// done the primary re-renders.
+    fn header_primary(&self) -> (&'static str, String) {
+        match self.workflow_state().current {
+            WorkflowStep::Scan => ("scan", "Scan images".to_string()),
+            WorkflowStep::Translate => ("eye", "Review".to_string()),
+            WorkflowStep::Review | WorkflowStep::Render => {
+                ("play", format!("Render {} images", self.workflow_state().images))
+            }
+        }
+    }
+
+    /// Run the header primary's action for the current step.
+    fn run_header_primary(&mut self) {
+        match self.workflow_state().current {
+            WorkflowStep::Scan => self.start_extract(),
+            WorkflowStep::Translate => {
+                self.tab = Tab::Preview;
+                // Jump to the first file with an untranslated block.
+                if let Ok((data, _, _)) = self.resolve_editor() {
+                    if let Some(entry) = data.images.iter().find(|e| {
+                        e.blocks.iter().any(|b| {
+                            let t = b.new_text.trim();
+                            t.is_empty() || t == b.original_text.trim()
+                        })
+                    }) {
+                        self.set_preview_file(entry.file.clone());
+                    }
+                } else if let Some(data) = &self.extracted {
+                    if let Some(entry) = data.images.iter().find(|e| {
+                        e.blocks.iter().any(|b| {
+                            let t = b.new_text.trim();
+                            t.is_empty() || t == b.original_text.trim()
+                        })
+                    }) {
+                        self.set_preview_file(entry.file.clone());
+                    }
+                }
+            }
+            WorkflowStep::Review | WorkflowStep::Render => self.start_render(),
+        }
+    }
+
+    /// Run a stepper item's action (SPEC §5: stepper items are clickable):
+    /// Scan runs a scan, Translate opens the JSON tab, Review focuses the
+    /// stage, Render runs a render.
+    fn run_step(&mut self, step: WorkflowStep) {
+        match step {
+            WorkflowStep::Scan => self.start_extract(),
+            WorkflowStep::Translate => self.tab = Tab::Json,
+            WorkflowStep::Review => self.tab = Tab::Preview,
+            WorkflowStep::Render => self.start_render(),
+        }
+    }
+
+    /// Copy the activity log to the clipboard.
+    fn copy_log(&mut self) {
+        let text = self
+            .log_lines
+            .iter()
+            .map(|l| l.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text)) {
+            Ok(()) => self.status = "Activity log copied to clipboard.".into(),
+            Err(_) => self.status = "Couldn't copy the log — try again.".into(),
+        }
+    }
+
     // ------------------------------------------------------------ actions
 
     fn browse_input(&mut self) {
@@ -274,6 +410,7 @@ impl CaptionStudioApp {
             self.input_dir = folder.to_string_lossy().to_string();
             self.output_dir = folder.join("translated_output").to_string_lossy().to_string();
             self.extracted = None;
+            self.render_summary = None;
             self.preview_texture = None;
             self.preview_key.clear();
             self.save_settings();
@@ -307,6 +444,7 @@ impl CaptionStudioApp {
             self.status = "Run 'Scan & Extract Text' first, then adjust thresholds anytime.".into();
             return;
         };
+        self.render_summary = None;
         if !data.images.iter().any(|img| !img.raw_lines.is_empty()) {
             self.status = "This captions.json predates raw OCR storage. Click 'Scan & Extract Text' once to enable instant tuning.".into();
             return;
@@ -377,6 +515,7 @@ impl CaptionStudioApp {
         match arboard::Clipboard::new().and_then(|mut cb| cb.get_text()) {
             Ok(clip) => {
                 self.editor_text = clip;
+                self.render_summary = None;
                 self.preview_key.clear();
                 self.status = "Pasted translated JSON from clipboard. Switch to Live Preview or Render.".into();
             }
@@ -422,6 +561,7 @@ impl CaptionStudioApp {
                     self.editor_text = serde_json::to_string_pretty(&compact_map_from_data(&data))
                         .unwrap_or_default();
                     self.extracted = Some(data);
+                    self.render_summary = None;
                     self.preview_key.clear();
                     self.status = format!("Loaded {n} images from {}", path.file_name().unwrap_or_default().to_string_lossy());
                 }
@@ -439,6 +579,7 @@ impl CaptionStudioApp {
             match std::fs::read_to_string(&path) {
                 Ok(text) => {
                     self.editor_text = text;
+                    self.render_summary = None;
                     self.preview_key.clear();
                     self.status = format!("Imported translations from {}", path.file_name().unwrap_or_default().to_string_lossy());
                 }
@@ -479,6 +620,7 @@ impl CaptionStudioApp {
             return;
         }
         self.busy = true;
+        self.render_summary = None;
         self.cancel.store(false, Ordering::SeqCst);
         self.progress = 0.0;
         self.status = "Starting scan…".into();
@@ -807,6 +949,7 @@ impl CaptionStudioApp {
                 WorkerMsg::RenderDone { rendered, copied, failed, cancelled } => {
                     self.busy = false;
                     self.progress = 1.0;
+                    self.render_summary = Some((rendered, copied, failed));
                     let prefix = if cancelled { "Stopped — " } else { "Complete — " };
                     let summary = format!("{prefix}rendered {rendered}, copied {copied} unchanged, failed {failed}");
                     self.log(summary.clone());
@@ -1107,27 +1250,117 @@ impl eframe::App for CaptionStudioApp {
             });
         });
 
-        // --- Left column ---
-        let panel_resp = egui::Panel::left("left_panel")
-            .resizable(true)
-            .default_size(self.panel_width)
+        // --- Activity log (bottom row, SPEC §3: 188px) ---
+        // Moved out of the sidebar in the redesign: the log is a full-width
+        // strip above the status bar, with its bar (ACTIVITY + Copy log +
+        // Stop) and the lines below. Filters and newest-first ordering are
+        // Phase 5; the lines render exactly as before for now.
+        egui::Panel::bottom("activity_log").exact_size(188.0).show(ui, |ui| {
+            ui.add_enabled_ui(!modal_open, |ui| {
+                ui.horizontal(|ui| {
+                    let t = crate::theme::Tokens::get(ui.ctx());
+                    ui.label(egui::RichText::new("ACTIVITY").font(crate::theme::display(13.0)).color(t.accent_ink));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Stop is only meaningful while a job runs — it stays
+                        // disabled at idle so its state tells the truth.
+                        ui.add_enabled_ui(self.busy, |ui| {
+                            if icon_text_button(ui, "octagon-x", "Stop").clicked() {
+                                self.cancel.store(true, Ordering::SeqCst);
+                            }
+                        });
+                        if icon_text_button(ui, "copy", "Copy log").clicked() {
+                            self.copy_log();
+                        }
+                    });
+                });
+                ui.separator();
+                // Severity is a short coloured tag that can't wrap away from
+                // its message; the message itself stays in the plain text
+                // colour so the log reads quietly instead of shouting in
+                // amber.
+                let t = crate::theme::Tokens::get(ui.ctx());
+                egui::ScrollArea::vertical()
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        for line in &self.log_lines {
+                            ui.horizontal(|ui| {
+                                match line.level {
+                                    LogLevel::Warn => {
+                                        ui.colored_label(t.warning, egui::RichText::new("WARN").monospace().small());
+                                    }
+                                    LogLevel::Error => {
+                                        ui.colored_label(t.danger, egui::RichText::new("ERROR").monospace().small());
+                                    }
+                                    LogLevel::Info => {}
+                                }
+                                ui.monospace(&line.text);
+                            });
+                        }
+                    });
+            });
+        });
+
+        // --- Header (SPEC §3: 60px) ---
+        // Brand (316px, aligned with the sidebar) | the 4-step stepper |
+        // the one primary for the current step. The old title bar lived in
+        // the sidebar; the old Scan/Render primaries lived in Batch Workflow
+        // — both are here now, and there is exactly one primary.
+        egui::Panel::top("header").exact_size(60.0).show(ui, |ui| {
+            ui.add_enabled_ui(!modal_open, |ui| {
+                ui.horizontal_centered(|ui| {
+                    let t = crate::theme::Tokens::get(ui.ctx());
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(316.0, 60.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.add(crate::icons::image_sized("vmax-mark", egui::vec2(32.0, 24.0), t.text));
+                            ui.vertical(|ui| {
+                                ui.label(crate::theme::heading("Caption Studio", crate::theme::SECTION));
+                                ui.label(crate::theme::label_text("Batch image translator", crate::theme::CAPTION));
+                            });
+                        },
+                    );
+                    ui.separator();
+                    let wf = self.workflow_state();
+                    // The primary reserves ~200px on the right; the four
+                    // steps share the rest.
+                    let steps_w = (ui.available_width() - 200.0).max(0.0);
+                    for (i, step) in WorkflowStep::ALL.iter().enumerate() {
+                        let resp = step_button(
+                            ui,
+                            (steps_w / 4.0 - 8.0).max(0.0),
+                            i + 1,
+                            step.label(),
+                            &wf.subtitles[i],
+                            wf.states[i],
+                        );
+                        if resp.clicked() {
+                            self.run_step(*step);
+                        }
+                        ui.add_space(8.0);
+                    }
+                    ui.add_enabled_ui(!self.busy, |ui| {
+                        let (icon, label) = self.header_primary();
+                        if primary_icon_text_button(ui, icon, &label, false).clicked() {
+                            self.run_header_primary();
+                        }
+                    });
+                });
+            });
+        });
+
+        // --- Left column (sidebar, SPEC §3: fixed 316px) ---
+        // The title bar moved to the header; the old panel-width persistence
+        // retired with the fixed width (Q: no resizable sidebar in the
+        // redesign — the mockup's columns are fixed).
+        egui::Panel::left("sidebar")
+            .exact_size(316.0)
+            .resizable(false)
             .show(ui, |ui| {
             ui.add_enabled_ui(!modal_open, |ui| {
                 // No outer ScrollArea: the fixed sections fit (tuning starts
-                // collapsed, ~470px against ~990px at the default size), so
-                // the Activity Log below can take the remaining panel height
-                // instead of living in a fixed 220px box with dead space
-                // under it.
-                // Title bar: the VMAX interlock mark (32px wide, the kit's
-                // minimum on-screen size) beside the app title in Chakra
-                // Petch, with the subtitle below. The mark is tinted with
-                // the text colour, so it reads white on the dark theme.
-                ui.horizontal(|ui| {
-                    let t = crate::theme::Tokens::get(ui.ctx());
-                    ui.add(crate::icons::image_sized("vmax-mark", egui::vec2(32.0, 24.0), t.text));
-                    ui.label(crate::theme::heading("Caption Studio", crate::theme::SECTION));
-                });
-                ui.label(crate::theme::label_text("Batch Image Translator & OCR Verifier", crate::theme::SMALL));
+                // collapsed), so nothing here needs to scroll at the default
+                // size.
                 if let Some(e) = &self.ocr_error {
                     ui.colored_label(crate::theme::Tokens::get(ui.ctx()).danger, format!("OCR failed to start — restart the app to retry. ({e})"));
                 } else if !self.ocr_ready {
@@ -1227,76 +1460,75 @@ impl eframe::App for CaptionStudioApp {
                     });
                 });
 
-                egui::CollapsingHeader::new("Batch Workflow").default_open(true).show(ui, |ui| {
-                    ui.add_enabled_ui(!self.busy, |ui| {
-                        if primary_icon_text_button(ui, "scan", "Scan & Extract Text", true).clicked() {
-                            self.start_extract();
+                // Project card (SPEC §2): Save / Load / Open output. Scan
+                // and Render live in the header primary now; the Live
+                // Preview button is gone (defect 3 — the Preview tab is the
+                // only way in); Stop lives in the activity bar. "Scan again"
+                // arrives in Phase 2 with its confirm modal.
+                egui::CollapsingHeader::new("Project").default_open(true).show(ui, |ui| {
+                    egui::Grid::new("project_grid").num_columns(2).spacing([8.0, 8.0]).show(ui, |ui| {
+                        if icon_text_button(ui, "save", "Save captions").clicked() {
+                            self.save_full_json();
                         }
-                        ui.horizontal(|ui| {
-                            if icon_text_button(ui, "save", "Save captions.json").clicked() {
-                                self.save_full_json();
-                            }
-                            if icon_text_button(ui, "folder-open", "Load captions.json").clicked() {
-                                self.load_full_json();
-                            }
-                        });
-                        if primary_icon_text_button(ui, "play", "Render Translated Images", true).clicked() {
-                            self.start_render();
+                        if icon_text_button(ui, "folder-open", "Load captions").clicked() {
+                            self.load_full_json();
                         }
-                    });
-                    ui.horizontal(|ui| {
-                        if icon_text_button(ui, "eye", "Live Preview & OCR Check").clicked() {
-                            self.tab = Tab::Preview;
-                        }
-                        if icon_text_button(ui, "folder-open", "Open Output Folder").clicked() {
+                        ui.end_row();
+                        if icon_text_button(ui, "folder-open", "Open output").clicked() {
                             self.open_output_folder();
                         }
-                        // Stop is only meaningful while a job runs — it stays
-                        // disabled at idle so its state tells the truth.
-                        ui.add_enabled_ui(self.busy, |ui| {
-                            if icon_text_button(ui, "octagon-x", "Stop").clicked() {
-                                self.cancel.store(true, Ordering::SeqCst);
-                            }
-                        });
+                        ui.end_row();
                     });
                 });
+            });
+        });
 
-                egui::CollapsingHeader::new("Activity Log").default_open(true).show(ui, |ui| {
-                    // The log fills the rest of the panel: it sizes to its
-                    // content up to the remaining height, then scrolls, always
-                    // showing the newest line. Severity is a short coloured
-                    // tag that can't wrap away from its message; the message
-                    // itself stays in the plain text colour so the log reads
-                    // quietly instead of shouting in amber.
-                    let t = crate::theme::Tokens::get(ui.ctx());
-                    egui::ScrollArea::vertical()
-                        .max_height(ui.available_height())
-                        .stick_to_bottom(true)
-                        .show(ui, |ui| {
-                            for line in &self.log_lines {
-                                ui.horizontal(|ui| {
-                                    match line.level {
-                                        LogLevel::Warn => {
-                                            ui.colored_label(t.warning, egui::RichText::new("WARN").monospace().small());
-                                        }
-                                        LogLevel::Error => {
-                                            ui.colored_label(t.danger, egui::RichText::new("ERROR").monospace().small());
-                                        }
-                                        LogLevel::Info => {}
-                                    }
-                                    ui.monospace(&line.text);
-                                });
-                            }
-                        });
+        // --- Inspector (right column, SPEC §3: fixed 380px) ---
+        // The Detected Blocks list moved out of the Preview tab: the stage
+        // keeps the image full-width and the inspector owns the blocks.
+        // Block cards (editable translations) and the JSON tab arrive in
+        // Phase 4; for now the inspector shows the Phase 2 rows as-is.
+        egui::Panel::right("inspector")
+            .exact_size(380.0)
+            .resizable(false)
+            .show(ui, |ui| {
+            ui.add_enabled_ui(!modal_open, |ui| {
+                ui.label(crate::theme::heading("Detected Blocks", crate::theme::CARD));
+                let copy_resp = ui.small_button("Copy block list");
+                focus_ring(ui, &copy_resp);
+                if copy_resp.clicked() {
+                    match arboard::Clipboard::new()
+                        .and_then(|mut cb| cb.set_text(self.verify_text.clone()))
+                    {
+                        Ok(()) => {
+                            self.status = "Block list copied to clipboard.".into()
+                        }
+                        Err(_) => {
+                            self.status =
+                                "Couldn't copy the block list — try again.".into()
+                        }
+                    }
+                }
+                // Structured rows (conf chip + OCR → NEW) instead of the old
+                // monospace blob, so a row can be clicked to highlight its
+                // box. When there is no entry yet (no scan, no JSON), the
+                // guidance text stays.
+                let entry = self.preview_entry.clone();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    match &entry {
+                        Some(entry)
+                            if !entry.blocks.is_empty()
+                                || !entry.dropped.is_empty() =>
+                        {
+                            self.show_block_rows(ui, entry);
+                        }
+                        _ => {
+                            ui.monospace(&self.verify_text);
+                        }
+                    }
                 });
             });
-            });
-        // Keep the persisted width in sync with the divider the user drags —
-        // the saved value is what the next launch restores.
-        let w = panel_resp.response.rect.width();
-        if (w - self.panel_width).abs() > 0.5 {
-            self.panel_width = w;
-        }
+        });
 
         // --- Right column: tabbed workspace ---
         // The central workspace sits on `canvas` (the main reading surface),
@@ -1325,7 +1557,7 @@ impl eframe::App for CaptionStudioApp {
                         if icon_text_button(ui, "file-json", "Import Translated JSON...").clicked() {
                             self.load_translated_file();
                         }
-                        if primary_icon_text_button(ui, "arrow-right", "Verify in Preview", false).clicked() {
+                        if icon_text_button(ui, "arrow-right", "Verify in Preview").clicked() {
                             self.tab = Tab::Preview;
                         }
                     });
@@ -1467,23 +1699,20 @@ impl eframe::App for CaptionStudioApp {
                         let hundred = ui.selectable_value(&mut self.preview_zoom_fit, false, "100%");
                         focus_ring(ui, &hundred);
                     });
-                    // Image left, Detected Blocks right. The old layout
-                    // stacked the image above the blocks and the image's
-                    // ScrollArea ate the whole height, so the blocks — the
-                    // text alternative to the image, and the main
-                    // OCR-verification affordance — sat below the fold with
-                    // no way to reach them, and a portrait image left half
-                    // the panel as dead black space. Side by side, both are
-                    // always on screen.
-                    let blocks_w = 340.0;
-                    ui.horizontal_top(|ui| {
-                        let total = ui.available_size();
-                        let gap = ui.spacing().item_spacing.x;
-                        let image_w = (total.x - blocks_w - gap).max(240.0);
-                        // --- Image pane ---
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(image_w, total.y),
-                            egui::Layout::top_down(egui::Align::LEFT),
+                    // The image takes the full width now — the Detected
+                    // Blocks list lives in the inspector (right column).
+                    // The green/orange legend stays with the image it
+                    // describes (OCR Boxes mode only — the other modes draw
+                    // no coloured boxes).
+                    if matches!(self.preview_mode, PreviewMode::Ocr) {
+                        ui.label(crate::theme::label_text("Green boxes = kept · Orange boxes = filtered out", crate::theme::CAPTION));
+                    }
+                    let total = ui.available_size();
+                    let image_w = total.x.max(240.0);
+                    // --- Image pane ---
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(image_w, total.y),
+                        egui::Layout::top_down(egui::Align::LEFT),
                             |ui| {
                                 if let Some(tex) = &self.preview_texture {
                                     let (iw, ih) = (self.preview_size[0], self.preview_size[1]);
@@ -1554,55 +1783,6 @@ impl eframe::App for CaptionStudioApp {
                                 }
                             },
                         );
-                        // --- Detected Blocks pane ---
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(blocks_w, total.y),
-                            egui::Layout::top_down(egui::Align::LEFT),
-                            |ui| {
-                                // The green/orange legend belongs with the
-                                // image it describes (OCR Boxes mode only —
-                                // the other modes draw no coloured boxes).
-                                if matches!(self.preview_mode, PreviewMode::Ocr) {
-                                    ui.label(crate::theme::label_text("Green boxes = kept · Orange boxes = filtered out", crate::theme::CAPTION));
-                                }
-                                ui.label(crate::theme::heading("Detected Blocks", crate::theme::CARD));
-                                let copy_resp = ui.small_button("Copy block list");
-                                focus_ring(ui, &copy_resp);
-                                if copy_resp.clicked() {
-                                    match arboard::Clipboard::new()
-                                        .and_then(|mut cb| cb.set_text(self.verify_text.clone()))
-                                    {
-                                        Ok(()) => {
-                                            self.status = "Block list copied to clipboard.".into()
-                                        }
-                                        Err(_) => {
-                                            self.status =
-                                                "Couldn't copy the block list — try again.".into()
-                                        }
-                                    }
-                                }
-                                // Structured rows (conf chip + OCR → NEW)
-                                // instead of the old monospace blob, so a row
-                                // can be clicked to highlight its box. When
-                                // there is no entry yet (no scan, no JSON),
-                                // the guidance text stays.
-                                let entry = self.preview_entry.clone();
-                                egui::ScrollArea::vertical().show(ui, |ui| {
-                                    match &entry {
-                                        Some(entry)
-                                            if !entry.blocks.is_empty()
-                                                || !entry.dropped.is_empty() =>
-                                        {
-                                            self.show_block_rows(ui, entry);
-                                        }
-                                        _ => {
-                                            ui.monospace(&self.verify_text);
-                                        }
-                                    }
-                                });
-                            },
-                        );
-                    });
                 }
             }
             });
@@ -1631,6 +1811,76 @@ fn counts_for(data: &crate::model::ExtractedData) -> (usize, usize) {
         .filter(|b| b.new_text.trim().is_empty())
         .count();
     (files, untranslated)
+}
+
+/// Pure derivation of the header stepper state from a dataset + the last
+/// render summary (see `workflow_state` for the rules). Kept pure so the
+/// step logic is unit-tested without building the app.
+fn derive_workflow_state(
+    data: Option<&crate::model::ExtractedData>,
+    render_summary: Option<(usize, usize, usize)>,
+) -> WorkflowState {
+    let (images, total_blocks, translated, unchanged) = match data {
+        Some(d) => {
+            let total = d.images.iter().flat_map(|e| e.blocks.iter()).count();
+            let translated = d
+                .images
+                .iter()
+                .flat_map(|e| e.blocks.iter())
+                .filter(|b| {
+                    let t = b.new_text.trim();
+                    !t.is_empty() && t != b.original_text.trim()
+                })
+                .count();
+            let unchanged = d.images.iter().filter(|e| e.blocks.is_empty()).count();
+            (d.images.len(), total, translated, unchanged)
+        }
+        None => (0, 0, 0, 0),
+    };
+    let scan_done = data.is_some();
+    // Zero kept blocks after a scan is vacuously done (nothing to
+    // translate); with nothing scanned at all, Translate is still to do.
+    let translate_done = scan_done && (total_blocks == 0 || translated == total_blocks);
+    let render_done = render_summary.is_some();
+    let done = [scan_done, translate_done, render_done, render_done];
+    let current_idx = done.iter().position(|d| !d).unwrap_or(3);
+    let mut states = [StepState::Todo; 4];
+    for (i, s) in states.iter_mut().enumerate() {
+        *s = if done[i] {
+            StepState::Done
+        } else if i == current_idx {
+            StepState::Current
+        } else {
+            StepState::Todo
+        };
+    }
+    let subtitles = [
+        if scan_done {
+            format!("{images} images · {total_blocks} blocks")
+        } else {
+            "No images yet".to_string()
+        },
+        if scan_done {
+            format!("{translated} of {total_blocks} translated")
+        } else {
+            "—".to_string()
+        },
+        if scan_done {
+            format!("{unchanged} unchanged")
+        } else {
+            "—".to_string()
+        },
+        match render_summary {
+            Some((r, _, _)) => format!("{r} rendered"),
+            None => "Not rendered yet".to_string(),
+        },
+    ];
+    WorkflowState {
+        current: WorkflowStep::ALL[current_idx],
+        states,
+        subtitles,
+        images,
+    }
 }
 
 /// Short display names for the file dropdown: the longest prefix every name
@@ -1749,6 +1999,75 @@ fn block_at(entry: &crate::model::ImageEntry, x: f32, y: f32) -> Option<usize> {
 
 /// A text button with a Lucide icon to its left, tinted like the label
 /// (dimmed when the button is disabled).
+/// One item of the header stepper (SPEC §2): a 22px circle (number, or a
+/// green ✓ once done) beside the step label and its live subtitle. Done
+/// steps get a green circle, the current step a blue circle + blue border,
+/// future steps a dim circle + hairline border. Custom-painted because a
+/// plain egui button can't carry the circle + two text sizes; the response
+/// is focusable and gets the same focus ring as the other buttons.
+fn step_button(
+    ui: &mut egui::Ui,
+    width: f32,
+    number: usize,
+    label: &str,
+    subtitle: &str,
+    state: StepState,
+) -> egui::Response {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 40.0), egui::Sense::click());
+    let resp = resp.accessible_name(format!("Step {number}: {label}, {subtitle}"));
+    let painter = ui.painter_at(rect);
+    let bg = if resp.hovered() {
+        t.hover
+    } else {
+        t.card
+    };
+    let border = match state {
+        StepState::Current => t.accent,
+        _ => t.card_border,
+    };
+    painter.rect(rect, t.radius_sm, bg, egui::Stroke::new(1.0, border), egui::StrokeKind::Inside);
+    let circle_center = egui::pos2(rect.min.x + 21.0, rect.center().y);
+    let (circle_fill, circle_text) = match state {
+        StepState::Done => (t.ok, egui::Color32::BLACK),
+        StepState::Current => (t.accent, egui::Color32::WHITE),
+        StepState::Todo => (egui::Color32::TRANSPARENT, t.text_faint),
+    };
+    painter.circle_filled(circle_center, 11.0, circle_fill);
+    if matches!(state, StepState::Todo) {
+        painter.circle_stroke(circle_center, 11.0, egui::Stroke::new(1.0, t.text_faint));
+    }
+    let mark = if matches!(state, StepState::Done) {
+        "✓".to_string()
+    } else {
+        number.to_string()
+    };
+    painter.text(
+        circle_center,
+        egui::Align2::CENTER_CENTER,
+        mark,
+        crate::theme::display(12.0),
+        circle_text,
+    );
+    let text_x = rect.min.x + 42.0;
+    painter.text(
+        egui::pos2(text_x, rect.center().y - 8.0),
+        egui::Align2::LEFT_CENTER,
+        label,
+        crate::theme::medium(13.0),
+        t.text,
+    );
+    painter.text(
+        egui::pos2(text_x, rect.center().y + 8.0),
+        egui::Align2::LEFT_CENTER,
+        subtitle,
+        egui::FontId::proportional(12.0),
+        t.text_dim,
+    );
+    focus_ring(ui, &resp);
+    resp
+}
+
 fn icon_text_button(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Response {
     let t = crate::theme::Tokens::get(ui.ctx());
     let tint = if ui.is_enabled() { t.text } else { t.text_faint };
@@ -2018,6 +2337,70 @@ mod tests {
         assert_eq!(natural_cmp("01.jpg", "1.jpg"), std::cmp::Ordering::Greater);
         assert_eq!(natural_cmp("a2", "a10"), std::cmp::Ordering::Less);
         assert_eq!(natural_cmp("a", "b"), std::cmp::Ordering::Less);
+    }
+
+    #[test]
+    fn workflow_steps_advance_with_data_and_render() {
+        fn entry(file: &str, blocks: Vec<(&str, &str)>) -> crate::model::ImageEntry {
+            crate::model::ImageEntry {
+                file: file.to_string(),
+                width: 100,
+                height: 100,
+                raw_lines: vec![],
+                blocks: blocks
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (orig, new))| crate::model::Block {
+                        id: i,
+                        bbox: [0, 0, 10, 10],
+                        line_bboxes: vec![],
+                        original_text: orig.to_string(),
+                        new_text: new.to_string(),
+                        confidence: 0.9,
+                        text_color: [0, 0, 0],
+                        bg_color: [255, 255, 255],
+                        is_boxed: false,
+                        font_size_est: 20,
+                    })
+                    .collect(),
+                dropped: vec![],
+            }
+        }
+        // Nothing scanned: Scan is current.
+        let wf = derive_workflow_state(None, None);
+        assert_eq!(wf.current, WorkflowStep::Scan);
+        assert_eq!(
+            wf.states,
+            [StepState::Current, StepState::Todo, StepState::Todo, StepState::Todo]
+        );
+        assert_eq!(wf.subtitles[0], "No images yet");
+        // Scanned, one of three translated (a translation equal to the
+        // original does NOT count): Translate is current.
+        let data = crate::model::ExtractedData {
+            images: vec![
+                entry("a.png", vec![("one", "uno"), ("two", ""), ("three", "three")]),
+                entry("b.png", vec![]),
+            ],
+        };
+        let wf = derive_workflow_state(Some(&data), None);
+        assert_eq!(wf.current, WorkflowStep::Translate);
+        assert_eq!(
+            wf.states,
+            [StepState::Done, StepState::Current, StepState::Todo, StepState::Todo]
+        );
+        assert_eq!(wf.subtitles[1], "1 of 3 translated");
+        assert_eq!(wf.subtitles[2], "1 unchanged");
+        // All translated: Review is current.
+        let data = crate::model::ExtractedData {
+            images: vec![entry("a.png", vec![("one", "uno"), ("two", "dos")])],
+        };
+        let wf = derive_workflow_state(Some(&data), None);
+        assert_eq!(wf.current, WorkflowStep::Review);
+        // Rendered: everything done, current stays Render (re-render).
+        let wf = derive_workflow_state(Some(&data), Some((2, 0, 0)));
+        assert_eq!(wf.current, WorkflowStep::Render);
+        assert_eq!(wf.states, [StepState::Done; 4]);
+        assert_eq!(wf.subtitles[3], "2 rendered");
     }
 
     fn test_block(id: usize, new_text: &str) -> crate::model::Block {
