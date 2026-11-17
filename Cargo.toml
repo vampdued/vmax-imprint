@@ -13,7 +13,7 @@ path = "src/main.rs"
 # GUI: eframe + egui (+ egui_extras for image textures)
 eframe = "0.37"
 egui = "0.37"
-egui_extras = { version = "0.37", features = ["image"] }
+egui_extras = { version = "0.37", features = ["image", "svg"] }
 
 # OCR: ort 2.0.0-rc.15 wraps ONNX Runtime 1.31.
 # Static linking, no DLL at runtime:

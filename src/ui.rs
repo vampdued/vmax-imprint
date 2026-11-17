@@ -88,7 +88,14 @@ pub struct CaptionStudioApp {
 }
 
 impl CaptionStudioApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // Craft-style UI chrome (ported theme/font/icon patterns): Figtree +
+        // JetBrains Mono, Studio dark tokens, and the Lucide SVG loader.
+        // The caption *rendering* fonts (fonts.rs) are untouched.
+        crate::theme::install_fonts(&cc.egui_ctx);
+        crate::theme::apply(&cc.egui_ctx, crate::theme::ThemeKind::Studio, false);
+        egui_extras::install_image_loaders(&cc.egui_ctx);
+
         let settings = Settings::load();
         let (tx, rx) = unbounded::<WorkerMsg>();
         let app = CaptionStudioApp {
@@ -834,10 +841,10 @@ impl eframe::App for CaptionStudioApp {
             .resizable(true)
             .default_size(370.0)
             .show(ui, |ui| {
-                ui.heading("Caption Studio");
-                ui.label("Batch Image Translator & OCR Verifier");
+                ui.label(crate::theme::heading("Caption Studio", crate::theme::CARD));
+                ui.label(crate::theme::label_text("Batch Image Translator & OCR Verifier", crate::theme::SMALL));
                 if let Some(e) = &self.ocr_error {
-                    ui.colored_label(egui::Color32::RED, format!("OCR error: {e}"));
+                    ui.colored_label(crate::theme::Tokens::get(ui.ctx()).danger, format!("OCR error: {e}"));
                 } else if !self.ocr_ready {
                     ui.label("Warming up OCR engine…");
                 }
@@ -847,21 +854,21 @@ impl eframe::App for CaptionStudioApp {
                     ui.label("Input Folder:");
                     ui.horizontal(|ui| {
                         ui.text_edit_singleline(&mut self.input_dir);
-                        if ui.button("Browse").clicked() {
+                        if crate::icons::button(ui, "folder", crate::theme::ControlSize::Small, false, "Browse…").clicked() {
                             self.browse_input();
                         }
                     });
                     ui.label("Output Folder:");
                     ui.horizontal(|ui| {
                         ui.text_edit_singleline(&mut self.output_dir);
-                        if ui.button("Browse").clicked() {
+                        if crate::icons::button(ui, "folder", crate::theme::ControlSize::Small, false, "Browse…").clicked() {
                             self.browse_output();
                         }
                     });
                     ui.label("Custom Font (.ttf / .otf, optional):");
                     ui.horizontal(|ui| {
                         ui.text_edit_singleline(&mut self.font_path);
-                        if ui.button("Browse").clicked() {
+                        if crate::icons::button(ui, "folder", crate::theme::ControlSize::Small, false, "Browse…").clicked() {
                             self.browse_font();
                         }
                     });
@@ -901,10 +908,10 @@ impl eframe::App for CaptionStudioApp {
                         }
                     });
                     ui.horizontal(|ui| {
-                        if ui.button("Apply Thresholds (Instant)").clicked() {
+                        if icon_text_button(ui, "check", "Apply Thresholds (Instant)").clicked() {
                             self.reapply_thresholds();
                         }
-                        if ui.button("Inspect OCR Boxes").clicked() {
+                        if icon_text_button(ui, "search", "Inspect OCR Boxes").clicked() {
                             self.preview_mode = PreviewMode::Ocr;
                             self.tab = Tab::Preview;
                             self.preview_key.clear();
@@ -914,29 +921,29 @@ impl eframe::App for CaptionStudioApp {
 
                 egui::CollapsingHeader::new("2. Batch Workflow").default_open(true).show(ui, |ui| {
                     ui.add_enabled_ui(!self.busy, |ui| {
-                        if ui.button("Scan & Extract Text").clicked() {
+                        if icon_text_button(ui, "scan", "Scan & Extract Text").clicked() {
                             self.start_extract();
                         }
                         ui.horizontal(|ui| {
-                            if ui.button("Save captions.json").clicked() {
+                            if icon_text_button(ui, "save", "Save captions.json").clicked() {
                                 self.save_full_json();
                             }
-                            if ui.button("Load captions.json").clicked() {
+                            if icon_text_button(ui, "folder-open", "Load captions.json").clicked() {
                                 self.load_full_json();
                             }
                         });
-                        if ui.button("Render Translated Images").clicked() {
+                        if icon_text_button(ui, "play", "Render Translated Images").clicked() {
                             self.start_render();
                         }
                     });
                     ui.horizontal(|ui| {
-                        if ui.button("Live Preview").clicked() {
+                        if icon_text_button(ui, "eye", "Live Preview").clicked() {
                             self.tab = Tab::Preview;
                         }
-                        if ui.button("Open Output").clicked() {
+                        if icon_text_button(ui, "folder-open", "Open Output").clicked() {
                             self.open_output_folder();
                         }
-                        if ui.button("Stop").clicked() {
+                        if icon_text_button(ui, "octagon-x", "Stop").clicked() {
                             self.cancel.store(true, Ordering::SeqCst);
                         }
                     });
@@ -964,16 +971,16 @@ impl eframe::App for CaptionStudioApp {
             match self.tab {
                 Tab::Json => {
                     ui.horizontal(|ui| {
-                        if ui.button("Copy JSON for AI").clicked() {
+                        if icon_text_button(ui, "copy", "Copy JSON for AI").clicked() {
                             self.copy_compact_for_ai();
                         }
-                        if ui.button("Paste Translated JSON").clicked() {
+                        if icon_text_button(ui, "clipboard-paste", "Paste Translated JSON").clicked() {
                             self.paste_clipboard();
                         }
-                        if ui.button("Import .json File...").clicked() {
+                        if icon_text_button(ui, "file-json", "Import .json File...").clicked() {
                             self.load_translated_file();
                         }
-                        if ui.button("Verify OCR / Preview ->").clicked() {
+                        if icon_text_button(ui, "arrow-right", "Verify OCR / Preview ->").clicked() {
                             self.tab = Tab::Preview;
                         }
                     });
@@ -993,7 +1000,7 @@ impl eframe::App for CaptionStudioApp {
                     self.refresh_preview(&ctx);
                     ui.horizontal(|ui| {
                         let names = self.file_names();
-                        if ui.button("◀").clicked() {
+                        if crate::icons::button(ui, "chevron-left", crate::theme::ControlSize::Small, false, "Previous file").clicked() {
                             step_preview(&mut self.preview_file, &names, -1);
                             self.preview_key.clear();
                         }
@@ -1004,7 +1011,7 @@ impl eframe::App for CaptionStudioApp {
                                     ui.selectable_value(&mut self.preview_file, n.clone(), n);
                                 }
                             });
-                        if ui.button("▶").clicked() {
+                        if crate::icons::button(ui, "chevron-right", crate::theme::ControlSize::Small, false, "Next file").clicked() {
                             step_preview(&mut self.preview_file, &names, 1);
                             self.preview_key.clear();
                         }
@@ -1043,6 +1050,15 @@ fn step_preview(current: &mut String, names: &[String], delta: i32) {
     let idx = names.iter().position(|n| n == current).unwrap_or(0) as i32;
     let next = (idx + delta).rem_euclid(names.len() as i32) as usize;
     *current = names[next].clone();
+}
+
+/// A text button with a Lucide icon to its left, tinted like the label
+/// (dimmed when the button is disabled).
+fn icon_text_button(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Response {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let tint = if ui.is_enabled() { t.text } else { t.text_faint };
+    let image = crate::icons::image(icon, crate::theme::ControlSize::Small.icon(), tint);
+    ui.add(egui::Button::image_and_text(image, label))
 }
 
 pub fn run_app() -> eframe::Result<()> {

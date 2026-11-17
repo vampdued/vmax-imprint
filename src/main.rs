@@ -13,6 +13,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod fonts;
+mod icons;
 mod image_io;
 mod inpaint;
 mod layout;
@@ -20,6 +21,11 @@ mod model;
 mod ocr;
 mod parser;
 mod render;
+// Design-system scale (theme.rs): a library surface ported from
+// craft-anything. Most of its constants/helpers are not used yet by this
+// small app; that is intentional, not dead code to strip.
+#[allow(dead_code)]
+mod theme;
 mod ui;
 
 use std::path::PathBuf;
