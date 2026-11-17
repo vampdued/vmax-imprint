@@ -296,7 +296,36 @@ Verified against local main `cebd449` (files: `src/ui.rs`, `src/theme.rs`,
 - **Q9 — Fonts download: A — YES.** Download IBM Plex Mono + Chakra
   Petch Medium 500 (OFL, official repos) into `assets/fonts/`.
 
+## 7. Build record — Phase 0 (2026-11-17, branch `feature/redesign-handoff`, commit `2db9d02`)
+
+- Fonts downloaded (google/fonts raw): `IBMPlexMono-Regular.ttf` + OFL,
+  `ChakraPetch-Medium.ttf`. The IBM/plex raw path 404'd; google/fonts
+  `ofl/ibmplexmono/` is the working source.
+- SPEC token set applied to `theme.rs` (measured, not guessed): faint
+  5.13:1 canvas / 5.5:1 chrome, dim 7.52/6.83/8.08, ok 11.23 on canvas,
+  field_border 3.62 on card / 4.28 on chrome. `ln` measured 1.31:1 on
+  card — gutter only, never a control edge (documented in the file).
+- Daylight theme, Appearance switch, About dialog + lockup icon removed
+  (Q2/Q4). `Settings.theme` retired; old settings files still load.
+- Natural sort + test; kept-box stroke/fill now #4ADE80 (tag stays dark
+  green — white label text; black-on-ok label is Phase 3 stage work).
+- Window: initial 1600×900, min 1280×720.
+- Tests 31/31 green (was 32: deleted `light_theme_applies` +
+  `theme_ids_round_trip`, added `natural_sort_orders_numbers_by_value`);
+  same 6 pre-existing warnings, no new ones.
+- **Main is pushed-pending:** local main `94116a4` (5 commits ahead of
+  origin `a4b4aab`) still needs his fresh token to push. The redesign
+  branch stays local until he says push.
+
 ## 6. Open questions from SPEC §13 — answered from the repo
+- Target stack/runtime: **Rust + eframe/egui 0.37** (in-process backend).
+- Existing backend API/CLI: in-process functions + worker threads over
+  channels; headless `--ocr-test` exists. No HTTP/CLI boundary to keep.
+- Minimum window: proposed 1280×720 (Q6).
+- Light theme: SPEC says never; Q2 is the decision.
+- File-name scheme: real filenames, natural-sorted; "N of 75.png" is the
+  mockup's sample data.
+- Settings persist: `~/.caption_replacer.json` (add window size keys).
 - Target stack/runtime: **Rust + eframe/egui 0.37** (in-process backend).
 - Existing backend API/CLI: in-process functions + worker threads over
   channels; headless `--ocr-test` exists. No HTTP/CLI boundary to keep.
