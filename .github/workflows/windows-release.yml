@@ -8,40 +8,22 @@ on:
     tags:
       - "v*"
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  test-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install system deps
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev libgl1-mesa-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
-      # The ort crate downloads ONNX Runtime from pyke's CDN at build time;
-      # that CDN 403s from some networks, so the Linux test job uses the
-      # official ONNX Runtime release instead (dynamic link, tests only).
-      # The Windows job below keeps static linking via pyke.
-      - name: Fetch official ONNX Runtime (Linux, for tests)
-        run: |
-          curl -sL -o /tmp/ort.tgz https://github.com/microsoft/onnxruntime/releases/download/v1.32.0/onnxruntime-linux-x64-1.32.0.tgz
-          mkdir -p /tmp/ort && tar xzf /tmp/ort.tgz -C /tmp/ort
-          echo "ORT_LIB_LOCATION=/tmp/ort/onnxruntime-linux-x64-1.32.0/lib" >> $GITHUB_ENV
-          echo "ORT_PREFER_DYNAMIC_LINK=1" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=/tmp/ort/onnxruntime-linux-x64-1.32.0/lib" >> $GITHUB_ENV
-      - name: Test
-        run: cargo test --locked
-
   build-windows:
-    needs: test-linux
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
+      - name: Run tests
+        shell: pwsh
+        run: cargo test --locked --target x86_64-pc-windows-msvc
       # Retry the build: ort's static lib comes from pyke's CDN, which
       # occasionally serves a bad file (checksum mismatch) — v1.0.2's
       # first Windows build failed exactly that way. Cargo resumes cleanly.
@@ -65,7 +47,6 @@ jobs:
           Get-ChildItem (Split-Path $exe) -Filter *.dll | ForEach-Object { throw "unexpected DLL: $($_.Name)" }
           Write-Host "exe size: $((Get-Item $exe).Length) bytes"
       - name: Upload exe
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
           name: vmax-imprint-windows
