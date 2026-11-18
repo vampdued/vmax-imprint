@@ -173,10 +173,10 @@ fn log_visible<'a>(lines: &'a [LogLine], filter: LogFilter) -> Vec<&'a LogLine> 
 /// in 64–480px.
 fn log_height_after_drag(height: f32, delta_y: f32) -> Option<f32> {
     let new_h = height - delta_y;
-    if new_h < 48.0 {
+    if new_h < 90.0 {
         None
     } else {
-        Some(new_h.clamp(64.0, 480.0))
+        Some(new_h.clamp(140.0, 480.0))
     }
 }
 
@@ -398,7 +398,7 @@ impl CaptionStudioApp {
             log_follow: true,
             log_len_seen: 0,
             show_log: settings.show_log,
-            log_height: settings.log_height.clamp(100.0, 420.0),
+            log_height: settings.log_height.clamp(140.0, 420.0),
             shot_test: None,
             last_save_path: None,
             status: "Choose an input folder, then click 'Scan images'.".to_string(),
@@ -462,7 +462,7 @@ impl CaptionStudioApp {
             conf: self.conf.clamp(0.0, 1.0),
             minchars: self.minchars.max(0),
             sizing: self.sizing,
-            log_height: self.log_height.clamp(100.0, 420.0),
+            log_height: self.log_height.clamp(140.0, 420.0),
             show_log: self.show_log,
         }
         .save();
@@ -990,15 +990,29 @@ impl CaptionStudioApp {
                 .to_string();
             match std::fs::read_to_string(&path) {
                 Ok(s) => {
-                    if let Ok(data) = serde_json::from_str::<ExtractedData>(&s) {
-                        let n = data.images.len();
-                        self.editor_text =
-                            serde_json::to_string_pretty(&compact_map_from_data(&data))
-                                .unwrap_or_default();
-                        self.extracted = Some(data);
-                        self.clear_render_state();
-                        self.preview_key.clear();
-                        self.status = format!("Loaded {n} images from {name}");
+                    let is_captions_project = serde_json::from_str::<serde_json::Value>(&s)
+                        .ok()
+                        .and_then(|v| {
+                            v.as_object()
+                                .and_then(|o| o.get("images"))
+                                .map(|imgs| imgs.is_array())
+                        })
+                        .unwrap_or(false);
+                    if is_captions_project {
+                        if let Ok(data) = serde_json::from_str::<ExtractedData>(&s) {
+                            let n = data.images.len();
+                            self.editor_text =
+                                serde_json::to_string_pretty(&compact_map_from_data(&data))
+                                    .unwrap_or_default();
+                            self.extracted = Some(data);
+                            self.clear_render_state();
+                            self.preview_key.clear();
+                            self.status = format!("Loaded {n} images from {name}");
+                        } else {
+                            self.status = format!(
+                                "Couldn't parse {name} — invalid captions.json structure."
+                            );
+                        }
                     } else if let Ok(parsed) = parse_flexible_json_or_dict(s.trim()) {
                         let mut report: Vec<String> = Vec::new();
                         if let Some(data) = self.extracted.clone() {
@@ -2768,12 +2782,20 @@ impl eframe::App for CaptionStudioApp {
         // away from the top. The panel is resizable (drag its top edge) and
         // closable (the X in its header); the status bar brings it back.
         if self.show_log {
-            let log_h = self.log_height.clamp(100.0, 420.0);
+            let log_h = self.log_height.clamp(140.0, 420.0);
+            let t = crate::theme::Tokens::get(&ctx);
+            let log_frame = egui::Frame::side_top_panel(&ctx.global_style())
+                .fill(t.chrome)
+                .inner_margin(egui::Margin::symmetric(10, 4))
+                .stroke(egui::Stroke::new(1.0, t.separator));
             egui::Panel::bottom("activity_log")
+                .frame(log_frame)
                 .exact_size(log_h)
                 .resizable(false)
                 .show(ui, |ui| {
-                    ui.set_min_height(log_h);
+                    let inner_h = (log_h - 8.0).max(120.0);
+                    ui.set_min_height(inner_h);
+                    ui.set_max_height(inner_h);
                     ui.add_enabled_ui(!modal_open, |ui| {
                         let t = crate::theme::Tokens::get(ui.ctx());
                         let handle = ui.allocate_response(
@@ -2798,7 +2820,7 @@ impl eframe::App for CaptionStudioApp {
                             },
                         );
                         if handle.double_clicked() {
-                            self.log_height = 160.0;
+                            self.log_height = 180.0;
                             self.save_settings();
                         }
                         if handle.dragged() {
@@ -2859,7 +2881,10 @@ impl eframe::App for CaptionStudioApp {
                         ui.separator();
                         let visible = log_visible(&self.log_lines, self.log_filter);
                         let new_lines = self.log_lines.len() != self.log_len_seen;
+                        let scroll_h = ui.available_height().max(40.0);
                         let out = egui::ScrollArea::vertical()
+                            .max_height(scroll_h)
+                            .min_scrolled_height(scroll_h)
                             .auto_shrink([false, false])
                             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
                             .show(ui, |ui| {
@@ -6527,11 +6552,11 @@ mod tests {
         assert_eq!(log_height_after_drag(188.0, -20.0), Some(208.0));
         // Dragging down shrinks it.
         assert_eq!(log_height_after_drag(188.0, 20.0), Some(168.0));
-        // It never goes below 64 or above 480 while open.
-        assert_eq!(log_height_after_drag(70.0, 10.0), Some(64.0));
+        // It never goes below 140 or above 480 while open.
+        assert_eq!(log_height_after_drag(150.0, 20.0), Some(140.0));
         assert_eq!(log_height_after_drag(470.0, -20.0), Some(480.0));
-        // Dragging down past 48 closes the panel instead.
-        assert_eq!(log_height_after_drag(64.0, 20.0), None);
+        // Dragging down past 90 closes the panel instead.
+        assert_eq!(log_height_after_drag(140.0, 60.0), None);
         assert_eq!(log_height_after_drag(188.0, 200.0), None);
     }
 

@@ -160,7 +160,7 @@ pub struct Settings {
 }
 
 pub fn default_log_height() -> f32 {
-    160.0
+    180.0
 }
 
 pub fn default_show_log() -> bool {
@@ -183,7 +183,7 @@ impl Default for Settings {
             conf: 0.6,
             minchars: 12,
             sizing: SizingMode::UniformGrow,
-            log_height: 160.0,
+            log_height: 180.0,
             show_log: true,
         }
     }
