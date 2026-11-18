@@ -621,6 +621,7 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind, roomy: bool) {
         s.spacing.scroll = scroll_style();
         s.spacing.tooltip_width = 320.0;
         s.interaction.tooltip_delay = 0.3;
+        s.animation_time = 0.0;
     });
 }
 

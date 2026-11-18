@@ -155,6 +155,70 @@ pub fn button(
 }
 
 /// [`button`] in a box of any size.
+/// Bordered square icon button matching 36px input fields (`t.field` fill,
+/// `t.hover` on hover, `1px t.field_border` stroke, `t.radius_sm` corners).
+pub fn button_box_bordered(
+    ui: &mut egui::Ui,
+    name: &str,
+    box_size: f32,
+    selected: bool,
+    tooltip: &str,
+) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(box_size), Sense::click());
+    let fill = if selected {
+        t.accent_soft
+    } else if resp.hovered() {
+        t.hover
+    } else {
+        t.field
+    };
+    let border = if selected || resp.hovered() {
+        t.accent
+    } else {
+        t.field_border
+    };
+    ui.painter().rect(
+        rect,
+        t.radius_sm,
+        fill,
+        Stroke::new(1.0, border),
+        egui::StrokeKind::Inside,
+    );
+    let tint = if selected {
+        t.accent_ink
+    } else if resp.hovered() {
+        t.text
+    } else {
+        t.icon_rest
+    };
+    paint(ui, rect, name, (box_size * 0.50).round(), tint);
+    if resp.has_focus() {
+        ui.painter().rect_stroke(
+            rect.expand(1.0),
+            t.radius_sm,
+            Stroke::new(1.5, t.accent_ink),
+            egui::StrokeKind::Outside,
+        );
+    }
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::Role::Button,
+            true,
+            if tooltip.is_empty() { name } else { tooltip },
+        )
+    });
+    if resp.has_focus() && !resp.hovered() && !tooltip.is_empty() {
+        resp.show_tooltip_text(tooltip);
+    }
+    if tooltip.is_empty() {
+        resp
+    } else {
+        resp.on_hover_text(tooltip)
+    }
+}
+
 pub fn button_box(
     ui: &mut egui::Ui,
     name: &str,
