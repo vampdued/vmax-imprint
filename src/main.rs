@@ -42,7 +42,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Some("--help") | Some("-h") => {
-            println!("Caption Studio — batch image caption extractor, translator & renderer");
+            println!("VMAX Imprint — batch image text extractor, translator & renderer");
             println!();
             println!("Usage:");
             println!("  caption-studio                 Launch the GUI");

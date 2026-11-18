@@ -321,7 +321,6 @@ pub struct CaptionStudioApp {
     paste_text: String,
     /// The Bulk edit modal (the full-document editor, Phase 4 item 14):
     /// whether it is open. The editor binds to `editor_text` directly.
-    show_bulk_edit: bool,
     /// The per-file import error list (JSON tab, Phase 4 item 14): shown
     /// in a modal after an import that skipped files; None = no report.
     import_report: Option<Vec<String>>,
@@ -409,7 +408,6 @@ impl CaptionStudioApp {
             pending_render: None,
             show_paste_modal: false,
             paste_text: String::new(),
-            show_bulk_edit: false,
             import_report: None,
             thresholds_changed_at: None,
             render_summary: None,
@@ -598,7 +596,7 @@ impl CaptionStudioApp {
 
     fn browse_input(&mut self) {
         if let Some(folder) = rfd::FileDialog::new()
-            .set_title("Select Input Images Folder")
+            .set_title("Select input images folder")
             .pick_folder()
         {
             self.input_dir = normalize_display_path(&folder.to_string_lossy());
@@ -621,7 +619,7 @@ impl CaptionStudioApp {
 
     fn add_input_files(&mut self) {
         if let Some(files) = rfd::FileDialog::new()
-            .set_title("Add Images to Batch")
+            .set_title("Add images to batch")
             .add_filter("Images", &["jpg", "jpeg", "png", "webp", "bmp"])
             .pick_files()
         {
@@ -776,7 +774,7 @@ impl CaptionStudioApp {
 
     fn browse_output(&mut self) {
         if let Some(folder) = rfd::FileDialog::new()
-            .set_title("Select Output Folder")
+            .set_title("Select output folder")
             .pick_folder()
         {
             self.output_dir = normalize_display_path(&folder.to_string_lossy());
@@ -786,7 +784,7 @@ impl CaptionStudioApp {
 
     fn browse_font(&mut self) {
         if let Some(file) = rfd::FileDialog::new()
-            .set_title("Select Font File")
+            .set_title("Select font file")
             .add_filter("Font files", &["ttf", "otf", "ttc"])
             .pick_file()
         {
@@ -1074,7 +1072,7 @@ impl CaptionStudioApp {
     /// false when the user cancelled the file picker.
     fn load_translated_file(&mut self) -> bool {
         if let Some(path) = rfd::FileDialog::new()
-            .set_title("Select Translated JSON File")
+            .set_title("Select translated JSON file")
             .add_filter("JSON files", &["json"])
             .pick_file()
         {
@@ -2158,7 +2156,13 @@ impl CaptionStudioApp {
                         .file_name()
                         .map(|s| s.to_string_lossy().into_owned())
                         .unwrap_or_else(|| self.output_dir.clone());
-                    self.status = format!("{summary}. Saved to {leaf}.");
+                    self.status = if cancelled {
+                        format!("Render stopped — saved to {leaf}.")
+                    } else if failed > 0 {
+                        format!("Saved to {leaf} ({failed} failed — see log).")
+                    } else {
+                        format!("Saved {} images to {leaf}.", rendered + copied)
+                    };
                 }
             }
         }
@@ -2412,7 +2416,6 @@ impl eframe::App for CaptionStudioApp {
 
         let modal_open = self.confirm_copy_originals
             || self.show_paste_modal
-            || self.show_bulk_edit
             || self.import_report.is_some();
 
         // Draw a full-viewport dim scrim behind any active modal so background
@@ -2552,86 +2555,6 @@ impl eframe::App for CaptionStudioApp {
                 });
             if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.show_paste_modal = false;
-            }
-        }
-
-        // --- Bulk edit modal (JSON tab, Phase 4 item 14) ---
-        if self.show_bulk_edit {
-            let mut open = true;
-            let t = crate::theme::Tokens::get(&ctx);
-            egui::Window::new("Bulk edit all JSON")
-                .collapsible(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .resizable(true)
-                .default_size([860.0, 580.0])
-                .max_size([860.0, 680.0])
-                .order(egui::Order::Foreground)
-                .frame(modal_frame(&t))
-                .open(&mut open)
-                .show(&ctx, |ui| {
-                    ui.label("Full translation map across all scanned images. Edits or imported .json files apply immediately to the live preview.");
-                    ui.add_space(8.0);
-                    egui::Frame::new()
-                        .fill(t.field)
-                        .stroke(egui::Stroke::new(1.0, t.field_border))
-                        .corner_radius(t.r_sm())
-                        .inner_margin(egui::Margin::same(8))
-                        .show(ui, |ui| {
-                            egui::ScrollArea::vertical()
-                                .max_height(440.0)
-                                .show(ui, |ui| {
-                                    let mut layouter = |ui: &egui::Ui,
-                                                        buf: &dyn egui::TextBuffer,
-                                                        wrap_width: f32| {
-                                        let mut job = json_highlight_job(buf.as_str(), &t);
-                                        job.wrap.max_width = wrap_width;
-                                        ui.fonts_mut(|f| f.layout_job(job))
-                                    };
-                                    let resp = ui.add(
-                                        egui::TextEdit::multiline(&mut self.editor_text)
-                                            .font(egui::TextStyle::Monospace)
-                                            .desired_width(f32::INFINITY)
-                                            .desired_rows(22)
-                                            .frame(egui::Frame::NONE)
-                                            .layouter(&mut layouter)
-                                            .hint_text("Click 'Scan images' to extract captions, or click 'Import .json file…' below."),
-                                    )
-                                    .accessible_name("Translation JSON");
-                                    focus_ring(ui, &resp);
-                                    if resp.changed() {
-                                        self.preview_key.clear();
-                                        self.resolve_preview_data();
-                                    }
-                                });
-                        });
-                    ui.add_space(12.0);
-                    ui.horizontal(|ui| {
-                        if secondary_modal_button(ui, "Import .json file…").clicked() {
-                            self.load_translated_file();
-                        }
-                        if secondary_modal_button(ui, "Export .json file…").clicked() {
-                            self.save_translated_file();
-                        }
-                        if secondary_modal_button(ui, "Paste from clipboard").clicked() {
-                            if let Ok(clip) = arboard::Clipboard::new().and_then(|mut cb| cb.get_text()) {
-                                self.editor_text = clip;
-                                self.clear_render_state();
-                                self.preview_key.clear();
-                            }
-                        }
-                        if secondary_modal_button(ui, "Copy all").clicked() {
-                            self.copy_compact_for_ai();
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let done = primary_modal_button(ui, "Done");
-                            if done.clicked() {
-                                self.show_bulk_edit = false;
-                            }
-                        });
-                    });
-                });
-            if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.show_bulk_edit = false;
             }
         }
 
@@ -2969,18 +2892,20 @@ impl eframe::App for CaptionStudioApp {
                         egui::vec2(316.0, 60.0),
                         egui::Layout::left_to_right(egui::Align::Center),
                         |ui| {
+                            ui.add_space(6.0);
                             ui.add(crate::icons::image_sized(
                                 "vmax-mark",
                                 egui::vec2(32.0, 24.0),
                                 t.text,
                             ));
+                            ui.add_space(6.0);
                             ui.vertical(|ui| {
                                 ui.label(crate::theme::heading(
-                                    "Caption Studio",
+                                    "VMAX Imprint",
                                     crate::theme::SECTION,
                                 ));
                                 ui.label(crate::theme::label_text(
-                                    "Batch image translator",
+                                    "Batch image text translator",
                                     crate::theme::CAPTION,
                                 ));
                             });
@@ -3128,10 +3053,6 @@ impl eframe::App for CaptionStudioApp {
                                                     .color(t.text_dim),
                                                 );
                                             });
-                                            ui.add_space(12.0);
-                                            ui.separator();
-                                            ui.add_space(12.0);
-                                            self.show_ocr_thresholds_section(ui);
                                         }
                                         WorkflowStep::Translate => {
                                             sidebar_section(ui, "TRANSLATION DATA", |ui| {
@@ -5432,7 +5353,6 @@ enum ShotKind {
     InspectorBlocks,
     InspectorFiltered,
     ModalPaste,
-    ModalBulkEdit,
     ModalImportReport,
     ModalNothingTranslated,
     SizingPopup,
@@ -5443,10 +5363,9 @@ enum ShotKind {
 }
 
 impl ShotKind {
-    /// The shots in capture order. 19, not 20: the re-scan modal shot
-    /// went with "Scan again" (its modal was removed as a duplicate of
-    /// the header primary), so the shots after it renumbered down by one.
-    const ALL: [ShotKind; 19] = [
+    /// The shots in capture order. 18, not 19: the bulk edit modal shot
+    /// was removed as a duplicate of the full JSON editor.
+    const ALL: [ShotKind; 18] = [
         ShotKind::Idle,
         ShotKind::Scanning,
         ShotKind::PreviewRenderedFit,
@@ -5458,7 +5377,6 @@ impl ShotKind {
         ShotKind::InspectorBlocks,
         ShotKind::InspectorFiltered,
         ShotKind::ModalPaste,
-        ShotKind::ModalBulkEdit,
         ShotKind::ModalImportReport,
         ShotKind::ModalNothingTranslated,
         ShotKind::SizingPopup,
@@ -5481,7 +5399,6 @@ impl ShotKind {
             ShotKind::InspectorBlocks => "09-inspector-blocks.png",
             ShotKind::InspectorFiltered => "10-inspector-filtered.png",
             ShotKind::ModalPaste => "11-modal-paste.png",
-            ShotKind::ModalBulkEdit => "12-modal-bulk-edit.png",
             ShotKind::ModalImportReport => "13-modal-import-report.png",
             ShotKind::ModalNothingTranslated => "14-modal-nothing-translated.png",
             ShotKind::SizingPopup => "15-sizing-popup.png",
@@ -5712,7 +5629,6 @@ impl CaptionStudioApp {
         // shown, the preview at Fit.
         self.confirm_copy_originals = false;
         self.show_paste_modal = false;
-        self.show_bulk_edit = false;
         self.import_report = None;
         self.show_log = true;
         self.preview_zoom_fit = true;
@@ -5806,10 +5722,6 @@ impl CaptionStudioApp {
                     .to_string();
                 self.show_paste_modal = true;
             }
-            ShotKind::ModalBulkEdit => {
-                self.stage = WorkflowStep::Translate;
-                self.show_bulk_edit = true;
-            }
             ShotKind::ModalImportReport => {
                 self.stage = WorkflowStep::Translate;
                 let report = if st.import_warnings.is_empty() {
@@ -5892,7 +5804,15 @@ impl CaptionStudioApp {
             "Complete — rendered {rendered}, copied {empty} unchanged, failed {failed_count}"
         );
         self.log(summary.clone());
-        self.status = format!("{summary}. Saved to {}.", self.output_dir);
+        let leaf = Path::new(&self.output_dir)
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.output_dir.clone());
+        self.status = if failed_count > 0 {
+            format!("Saved to {leaf} ({failed_count} failed — see log).")
+        } else {
+            format!("Saved {} images to {leaf}.", rendered + empty)
+        };
         if failed_count > 0 {
             if let Some(f) = self.failed_files.iter().next().cloned() {
                 self.log_file(
@@ -6028,7 +5948,7 @@ impl CaptionStudioApp {
         self.shot_cleanup_synthetic(&mut st);
         self.input_dir = st.orig_input.clone();
         self.output_dir = st.orig_output.clone();
-        let mut record = String::from("Caption Studio shot-test\n");
+        let mut record = String::from("VMAX Imprint shot-test\n");
         record.push_str(&format!("input: {}\n", st.input.display()));
         record.push_str(&format!("output: {}\n", st.out_dir.display()));
         record.push('\n');
@@ -6054,11 +5974,11 @@ pub fn run_app() -> eframe::Result<()> {
             .with_inner_size([1280.0, 760.0])
             .with_min_inner_size([1024.0, 640.0])
             .with_icon(icon)
-            .with_title("Caption Studio — Batch Image Translator & OCR Verifier"),
+            .with_title("VMAX Imprint — Batch Image Text Translator"),
         ..Default::default()
     };
     eframe::run_native(
-        "Caption Studio — Batch Image Translator & OCR Verifier",
+        "VMAX Imprint — Batch Image Text Translator",
         options,
         Box::new(|cc| Ok(Box::new(CaptionStudioApp::new(cc)))),
     )
@@ -6092,13 +6012,13 @@ pub fn run_shot_test(
             .with_inner_size([1920.0, 1080.0])
             .with_min_inner_size([1280.0, 720.0])
             .with_icon(icon)
-            .with_title("Caption Studio — Shot Test"),
+            .with_title("VMAX Imprint — Shot Test"),
         ..Default::default()
     };
     let input_clone = input.clone();
     let output_clone = output.clone();
     eframe::run_native(
-        "Caption Studio — Shot Test",
+        "VMAX Imprint — Shot Test",
         options,
         Box::new(move |cc| {
             let mut app = CaptionStudioApp::new(cc);
@@ -6267,16 +6187,16 @@ mod tests {
     }
 
     #[test]
-    fn shot_test_covers_nineteen_named_shots_in_order() {
-        assert_eq!(ShotKind::ALL.len(), 19);
+    fn shot_test_covers_eighteen_named_shots_in_order() {
+        assert_eq!(ShotKind::ALL.len(), 18);
         assert_eq!(ShotKind::ALL[0].file_name(), "01-idle.png");
         assert_eq!(ShotKind::ALL[1].file_name(), "02-scanning.png");
-        assert_eq!(ShotKind::ALL[18].file_name(), "19-empty-image.png");
+        assert_eq!(ShotKind::ALL[17].file_name(), "19-empty-image.png");
         // The file names are unique (no shot overwrites another).
         let mut names: Vec<&str> = ShotKind::ALL.iter().map(|s| s.file_name()).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 19);
+        assert_eq!(names.len(), 18);
         // Only the inspector shots need blocks; the rest stage without them.
         assert!(ShotKind::InspectorBlocks.needs_blocks());
         assert!(ShotKind::InspectorFiltered.needs_blocks());
