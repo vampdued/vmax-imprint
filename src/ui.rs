@@ -18,6 +18,7 @@ use std::time::SystemTime;
 
 use anyhow::Result;
 use crossbeam_channel::{unbounded, Receiver, Sender};
+use egui::text::{LayoutJob, TextFormat};
 use egui::{ColorImage, TextureHandle};
 
 use crate::image_io::{is_image_file, load_image, save_image};
@@ -29,11 +30,7 @@ use crate::parser::{
 };
 use crate::render::{render_entry, render_ocr_diagnostic};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Tab {
-    Json,
-    Preview,
-}
+
 
 /// The four workflow steps (SPEC §2): Scan → Translate → Review → Render.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,7 +234,8 @@ pub struct CaptionStudioApp {
     pending_extract: bool,
 
     // UI state
-    tab: Tab,
+    stage: WorkflowStep,
+    sizing_menu_open: bool,
     preview_file: String,
     preview_mode: PreviewMode,
     preview_key: String,
@@ -365,9 +363,10 @@ impl CaptionStudioApp {
             ocr_ready: false,
             ocr_error: None,
             pending_extract: false,
-            tab: Tab::Json,
+            stage: WorkflowStep::Scan,
+            sizing_menu_open: false,
             preview_file: String::new(),
-            preview_mode: PreviewMode::Rendered,
+            preview_mode: PreviewMode::Original,
             preview_key: String::new(),
             fit_cache: std::collections::HashMap::new(),
             preview_texture: None,
@@ -536,37 +535,56 @@ impl CaptionStudioApp {
     /// the primary is the action, not the status.
     fn header_primary(&self) -> (&'static str, String) {
         let wf = self.workflow_state();
-        if wf.states.iter().all(|s| matches!(s, StepState::Done)) {
-            return ("folder-open", "Open output folder".to_string());
-        }
-        match wf.current {
-            WorkflowStep::Scan => ("scan", "Scan images".to_string()),
-            WorkflowStep::Translate | WorkflowStep::Review | WorkflowStep::Render => {
-                let noun = if wf.images == 1 { "image" } else { "images" };
-                ("play", format!("Render {} {noun}", wf.images))
+        let total_files = if wf.images > 0 {
+            wf.images
+        } else {
+            self.file_names().len()
+        };
+        let noun = if total_files == 1 { "image" } else { "images" };
+        match self.stage {
+            WorkflowStep::Scan => {
+                if self.extracted.is_some() {
+                    ("scan", format!("Re-scan {total_files} {noun}"))
+                } else if total_files > 0 {
+                    ("scan", format!("Scan {total_files} {noun}"))
+                } else {
+                    ("scan", "Scan images".to_string())
+                }
+            }
+            WorkflowStep::Translate => ("eye", "Review in preview".to_string()),
+            WorkflowStep::Review => ("play", format!("Render {total_files} {noun}")),
+            WorkflowStep::Render => {
+                if wf.states.iter().all(|s| matches!(s, StepState::Done)) {
+                    ("folder-open", "Open output folder".to_string())
+                } else {
+                    ("play", format!("Render {total_files} {noun}"))
+                }
             }
         }
     }
 
-    /// Run the header primary's action for the current step. Once there
-    /// is scanned data the action is Render (see header_primary) — the
-    /// old Translate branch jumped to the Preview tab and the first
-    /// untranslated file, which the "Live Preview & OCR Check" tab and
-    /// the file list's "Needs Text" chips now cover.
+    /// Run the header primary's action for the active stage.
     fn run_header_primary(&mut self) {
-        if self
-            .workflow_state()
-            .states
-            .iter()
-            .all(|s| matches!(s, StepState::Done))
-        {
-            self.open_output_folder();
-            return;
-        }
-        match self.workflow_state().current {
+        let wf = self.workflow_state();
+        match self.stage {
             WorkflowStep::Scan => self.start_extract(),
-            WorkflowStep::Translate | WorkflowStep::Review | WorkflowStep::Render => {
-                self.start_render()
+            WorkflowStep::Translate => {
+                self.stage = WorkflowStep::Review;
+                self.preview_mode = PreviewMode::Rendered;
+                self.preview_key.clear();
+            }
+            WorkflowStep::Review => {
+                self.stage = WorkflowStep::Render;
+                self.preview_mode = PreviewMode::Rendered;
+                self.preview_key.clear();
+                self.start_render();
+            }
+            WorkflowStep::Render => {
+                if wf.states.iter().all(|s| matches!(s, StepState::Done)) {
+                    self.open_output_folder();
+                } else {
+                    self.start_render();
+                }
             }
         }
     }
@@ -1170,23 +1188,34 @@ impl CaptionStudioApp {
             crate::theme::medium(crate::theme::LABEL),
             t.text,
         );
-        let block_word = if blocks == 1 { "block" } else { "blocks" };
+        let (meta_line, chip_pair) = match (entry, status) {
+            (Some(_), Some(st_val)) => {
+                let color = match st_val {
+                    FileStatus::Rendered => t.ok,
+                    FileStatus::NoText => t.warning,
+                    FileStatus::Failed => t.danger,
+                    FileStatus::Untranslated => t.text_dim,
+                    FileStatus::Ready => t.accent_ink,
+                };
+                let block_word = if blocks == 1 { "block" } else { "blocks" };
+                (
+                    format!("{blocks} {block_word}"),
+                    Some((file_status_label(st_val), color)),
+                )
+            }
+            _ => (
+                "Not scanned".to_string(),
+                Some(("Ready to scan", t.text_dim)),
+            ),
+        };
         ui.painter().text(
             egui::pos2(text_left, rect.min.y + 45.0),
             egui::Align2::LEFT_CENTER,
-            format!("{blocks} {block_word}"),
+            meta_line,
             egui::FontId::proportional(crate::theme::CAPTION),
             t.text_dim,
         );
-        if let Some(st_val) = status {
-            let color = match st_val {
-                FileStatus::Rendered => t.ok,
-                FileStatus::NoText => t.warning,
-                FileStatus::Failed => t.danger,
-                FileStatus::Untranslated => t.text_dim,
-                FileStatus::Ready => t.accent_ink,
-            };
-            let label = file_status_label(st_val);
+        if let Some((label, color)) = chip_pair {
             let chip_font = crate::theme::medium(crate::theme::CAPTION);
             let text_galley_w = ui.ctx().fonts_mut(|f| {
                 f.layout_no_wrap(label.to_string(), chip_font.clone(), color)
@@ -1226,12 +1255,48 @@ impl CaptionStudioApp {
         }
         let Some(data) = data else {
             self.preview_entry = None;
-            self.verify_text = match &self.preview_json_error {
-                Some(e) => {
-                    format!("Couldn't preview the JSON — {e}. Fix the marked spot and try again.")
+            let folder_files = self.file_names();
+            self.preview_file_count = folder_files.len();
+            if let Some(e) = &self.preview_json_error {
+                self.verify_text =
+                    format!("Couldn't preview the JSON — {e}. Fix the marked spot and try again.");
+                return;
+            }
+            if folder_files.is_empty() {
+                self.verify_text =
+                    "No supported images (.jpg, .png, .webp) found in the selected input folder."
+                        .into();
+                return;
+            }
+            if !folder_files.iter().any(|f| f == &self.preview_file) {
+                if let Some(first) = folder_files.first() {
+                    self.set_preview_file(first.clone());
                 }
-                None => "Click 'Scan images' or 'Paste translated JSON…' to preview.".into(),
-            };
+            }
+            self.verify_text = format!(
+                "{} images ready in input folder. Click 'Scan {} images' in the top right to extract captions.",
+                folder_files.len(),
+                folder_files.len()
+            );
+            let img_path = PathBuf::from(&in_dir).join(&self.preview_file);
+            let mtime = img_path
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let key = format!("prescan|{}|{mtime}", img_path.display());
+            if key != self.preview_key || self.preview_texture.is_none() {
+                if let Ok(img) = load_image(&img_path) {
+                    let (w, h) = (img.width(), img.height());
+                    let color = ColorImage::from_rgb([w as usize, h as usize], img.as_raw());
+                    self.preview_texture =
+                        Some(ctx.load_texture("preview", color, egui::TextureOptions::LINEAR));
+                    self.preview_size = [w as f32, h as f32];
+                    self.preview_key = key;
+                }
+            }
             return;
         };
         if data.images.is_empty() {
@@ -1309,6 +1374,20 @@ impl CaptionStudioApp {
             names = data.images.iter().map(|e| e.file.clone()).collect();
         } else if let Ok((data, _, _)) = self.resolve_editor() {
             names = data.images.iter().map(|e| e.file.clone()).collect();
+        } else {
+            let in_dir = self.input_dir.trim();
+            if !in_dir.is_empty() {
+                if let Ok(rd) = std::fs::read_dir(in_dir) {
+                    for ent in rd.flatten() {
+                        let p = ent.path();
+                        if p.is_file() && is_image_file(&p) {
+                            if let Some(name) = p.file_name() {
+                                names.push(name.to_string_lossy().into_owned());
+                            }
+                        }
+                    }
+                }
+            }
         }
         names.sort_by(|a, b| natural_cmp(a, b));
         names
@@ -1322,8 +1401,7 @@ impl CaptionStudioApp {
     /// fit indicator. Clicking a card's title selects the block (the stage
     /// highlights it); focusing the textarea selects it too.
     fn show_block_cards(&mut self, ui: &mut egui::Ui, entry: &crate::model::ImageEntry) {
-        use egui::text::{LayoutJob, TextFormat};
-        let t = crate::theme::Tokens::get(ui.ctx());
+            let t = crate::theme::Tokens::get(ui.ctx());
         let mono = egui::FontId::monospace(crate::theme::CODE);
         let file = entry.file.clone();
         // Snapshot the entry so the cards can mutate `extracted` (a toggle,
@@ -1343,57 +1421,61 @@ impl CaptionStudioApp {
                 .inner_margin(egui::Margin::same(12));
             frame.show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.horizontal_centered(|ui| {
-                    let title_resp = ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(format!("Block #{}", blk.id))
-                                .font(crate::theme::semibold(crate::theme::BODY))
-                                .color(if selected { t.accent_ink } else { t.text }),
-                        )
-                        .selectable(false)
-                        .sense(egui::Sense::click()),
-                    );
-                    focus_ring(ui, &title_resp);
-                    if selected && self.blocks_scroll_to_selected {
-                        title_resp.scroll_to_me(Some(egui::Align::Center));
-                        self.blocks_scroll_to_selected = false;
-                    }
-                    if title_resp.clicked() {
-                        self.selected_block = Some(blk.id);
-                        self.preview_key.clear();
-                    }
-                    let conf_col = if blk.confidence >= self.safe_conf() {
-                        t.ok
-                    } else {
-                        t.warning
-                    };
-                    ui.label(
-                        egui::RichText::new(format!("{:.2}", blk.confidence))
-                            .font(mono.clone())
-                            .color(conf_col),
-                    );
-                    let (chip, col) = if blk.kept() {
-                        ("Kept", t.ok)
-                    } else {
-                        ("Filtered", t.warning)
-                    };
-                    status_chip(ui, chip, col);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if blk.kept() {
-                            let resp = small_action_button(ui, "Filter out")
-                                .on_hover_text("Exclude this block from the render — the original text stays in the image. Reversible.");
-                            if resp.clicked() {
-                                self.set_block_override(&file, blk.id, false);
-                            }
-                        } else {
-                            let resp = small_action_button(ui, "Keep")
-                                .on_hover_text("Render this block again with its translation.");
-                            if resp.clicked() {
-                                self.set_block_override(&file, blk.id, true);
-                            }
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), 26.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        let title_resp = ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("Block #{}", blk.id))
+                                    .font(crate::theme::semibold(crate::theme::BODY))
+                                    .color(if selected { t.accent_ink } else { t.text }),
+                            )
+                            .selectable(false)
+                            .sense(egui::Sense::click()),
+                        );
+                        focus_ring(ui, &title_resp);
+                        if selected && self.blocks_scroll_to_selected {
+                            title_resp.scroll_to_me(Some(egui::Align::Center));
+                            self.blocks_scroll_to_selected = false;
                         }
-                    });
-                });
+                        if title_resp.clicked() {
+                            self.selected_block = Some(blk.id);
+                            self.preview_key.clear();
+                        }
+                        let conf_col = if blk.confidence >= self.safe_conf() {
+                            t.ok
+                        } else {
+                            t.warning
+                        };
+                        ui.label(
+                            egui::RichText::new(format!("{:.2}", blk.confidence))
+                                .font(mono.clone())
+                                .color(conf_col),
+                        );
+                        let (chip, col) = if blk.kept() {
+                            ("Kept", t.ok)
+                        } else {
+                            ("Filtered", t.warning)
+                        };
+                        status_chip(ui, chip, col);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if blk.kept() {
+                                let resp = small_action_button(ui, "Filter out")
+                                    .on_hover_text("Exclude this block from the render — the original text stays in the image. Reversible.");
+                                if resp.clicked() {
+                                    self.set_block_override(&file, blk.id, false);
+                                }
+                            } else {
+                                let resp = small_action_button(ui, "Keep")
+                                    .on_hover_text("Render this block again with its translation.");
+                                if resp.clicked() {
+                                    self.set_block_override(&file, blk.id, true);
+                                }
+                            }
+                        });
+                    },
+                );
                 ui.add_space(4.0);
                 // The OCR text, read-only.
                 ui.label(
@@ -1464,30 +1546,32 @@ impl CaptionStudioApp {
                 .inner_margin(egui::Margin::same(12));
             frame.show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.horizontal_centered(|ui| {
-                    ui.label(
-                        egui::RichText::new(format!("Filtered #{}", drop_idx + 1))
-                            .font(crate::theme::semibold(crate::theme::BODY))
-                            .color(t.text_dim),
-                    );
-                    status_chip(ui, "Filtered", t.warning);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // Keep needs the raw lines to rebuild the block; an
-                        // old captions.json without them disables it.
-                        let promotable = !entry.raw_lines.is_empty();
-                        let resp = ui
-                            .add_enabled_ui(promotable, |ui| small_action_button(ui, "Keep"))
-                            .inner
-                            .on_hover_text(if promotable {
-                                "Keep this text — it becomes a block you can translate."
-                            } else {
-                                "Re-scan to keep filtered text (this captions.json has no raw OCR lines)."
-                            });
-                        if resp.clicked() {
-                            self.promote_dropped_item(&file, drop);
-                        }
-                    });
-                });
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), 26.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("Filtered #{}", drop_idx + 1))
+                                .font(crate::theme::semibold(crate::theme::BODY))
+                                .color(t.text_dim),
+                        );
+                        status_chip(ui, "Filtered", t.warning);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let promotable = !entry.raw_lines.is_empty();
+                            let resp = ui
+                                .add_enabled_ui(promotable, |ui| small_action_button(ui, "Keep"))
+                                .inner
+                                .on_hover_text(if promotable {
+                                    "Keep this text — it becomes a block you can translate."
+                                } else {
+                                    "Re-scan to keep filtered text (this captions.json has no raw OCR lines)."
+                                });
+                            if resp.clicked() {
+                                self.promote_dropped_item(&file, drop);
+                            }
+                        });
+                    },
+                );
                 ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new(format!("\"{}\"", drop.text))
@@ -1688,10 +1772,10 @@ impl CaptionStudioApp {
                     if let Some(v) = first_verify {
                         self.verify_text = v;
                     }
-                    self.tab = Tab::Json;
+                    self.stage = WorkflowStep::Translate;
                     let prefix = if cancelled { "Stopped. " } else { "" };
                     self.status = format!(
-                        "{prefix}Scanned {n} images. Switch to 'Live Preview & OCR Check' or click 'Copy all JSON for AI'."
+                        "{prefix}Scanned {n} images. Copy JSON for AI or paste translated captions, then click 'Review in preview'."
                     );
                 }
                 WorkerMsg::FileRendered { file, outcome } => match outcome {
@@ -2012,6 +2096,11 @@ impl eframe::App for CaptionStudioApp {
                 .frame(modal_frame(&t))
                 .open(&mut open)
                 .show(&ctx, |ui| {
+                    ui.painter().rect_filled(
+                        ui.max_rect().expand(24.0),
+                        egui::CornerRadius::same(8),
+                        egui::Color32::from_rgb(0x17, 0x18, 0x1b),
+                    );
                     ui.set_max_width(440.0);
                     ui.label("Every caption still matches the original OCR text, so rendering now will write the original captions back onto your images.");
                     ui.add_space(16.0);
@@ -2051,6 +2140,11 @@ impl eframe::App for CaptionStudioApp {
                 .frame(modal_frame(&t))
                 .open(&mut open)
                 .show(&ctx, |ui| {
+                    ui.painter().rect_filled(
+                        ui.max_rect().expand(24.0),
+                        egui::CornerRadius::same(8),
+                        egui::Color32::from_rgb(0x17, 0x18, 0x1b),
+                    );
                     ui.label("Paste the translated JSON map from your AI translator below, then click Apply.");
                     ui.add_space(8.0);
                     egui::Frame::new()
@@ -2130,6 +2224,11 @@ impl eframe::App for CaptionStudioApp {
                 .frame(modal_frame(&t))
                 .open(&mut open)
                 .show(&ctx, |ui| {
+                    ui.painter().rect_filled(
+                        ui.max_rect().expand(24.0),
+                        egui::CornerRadius::same(8),
+                        egui::Color32::from_rgb(0x17, 0x18, 0x1b),
+                    );
                     ui.label("Full translation map across all scanned images. Edits apply immediately to the per-image view and live preview.");
                     ui.add_space(8.0);
                     egui::Frame::new()
@@ -2193,6 +2292,11 @@ impl eframe::App for CaptionStudioApp {
                 .frame(modal_frame(&t))
                 .open(&mut open)
                 .show(&ctx, |ui| {
+                    ui.painter().rect_filled(
+                        ui.max_rect().expand(24.0),
+                        egui::CornerRadius::same(8),
+                        egui::Color32::from_rgb(0x17, 0x18, 0x1b),
+                    );
                     ui.label("All matching translations were imported. These entries did not match the current scan:");
                     ui.add_space(8.0);
                     egui::Frame::new()
@@ -2541,14 +2645,34 @@ impl eframe::App for CaptionStudioApp {
                     // action lives in the header primary.
                     let steps_w = (ui.available_width() - 210.0 - 40.0).max(0.0);
                     for (i, step) in WorkflowStep::ALL.iter().enumerate() {
-                        step_button(
+                        if step_button(
                             ui,
                             (steps_w / 4.0 - 8.0).max(0.0),
                             i + 1,
                             step.label(),
                             &wf.subtitles[i],
                             wf.states[i],
-                        );
+                            self.stage == *step,
+                        )
+                        .clicked()
+                        {
+                            self.stage = *step;
+                            match *step {
+                                WorkflowStep::Scan => {
+                                    self.preview_mode = if self.extracted.is_some() {
+                                        PreviewMode::Ocr
+                                    } else {
+                                        PreviewMode::Original
+                                    };
+                                    self.preview_key.clear();
+                                }
+                                WorkflowStep::Review | WorkflowStep::Render => {
+                                    self.preview_mode = PreviewMode::Rendered;
+                                    self.preview_key.clear();
+                                }
+                                WorkflowStep::Translate => {}
+                            }
+                        }
                         ui.add_space(8.0);
                     }
                     ui.add_enabled_ui(!self.busy, |ui| {
@@ -2687,105 +2811,102 @@ impl eframe::App for CaptionStudioApp {
                                     );
                                     let sizing_btn = sizing_btn.on_hover_cursor(egui::CursorIcon::PointingHand);
                                     focus_ring(ui, &sizing_btn);
-                                    let mut picked: Option<crate::model::SizingMode> = None;
-                                    let popup_id = egui::Popup::default_response_id(&sizing_btn);
-                                    // Shot-test: open the popup only during SizingPopup, and
-                                    // explicitly close it on all other shots or while busy/modal.
-                                    if let Some(st) = self.shot_test.as_ref() {
-                                        if st.is_current(ShotKind::SizingPopup) {
-                                            egui::Popup::open_id(ui.ctx(), popup_id);
-                                        } else {
-                                            egui::Popup::close_id(ui.ctx(), popup_id);
-                                        }
-                                    } else if self.busy || modal_open {
-                                        egui::Popup::close_id(ui.ctx(), popup_id);
+                                    if sizing_btn.clicked() {
+                                        self.sizing_menu_open = !self.sizing_menu_open;
                                     }
-                                    let menu_w = sizing_btn.rect.width().max(268.0);
-                                    egui::Popup::menu(&sizing_btn)
-                                        .close_behavior(
-                                            egui::PopupCloseBehavior::CloseOnClickOutside,
-                                        )
-                                        // Strictly downward opening (`RectAlign::BOTTOM_START`)
-                                        // with upward fallback removed so it never covers the
-                                        // Output folder field above.
-                                        .align(egui::RectAlign::BOTTOM_START)
-                                        .align_alternatives(&[])
-                                        .width(menu_w)
-                                        .frame(
-                                            egui::Frame::new()
-                                                .fill(egui::Color32::from_rgb(0x17, 0x18, 0x1b))
-                                                .stroke(egui::Stroke::new(
-                                                    1.0,
-                                                    egui::Color32::from_rgb(0x2b, 0x2e, 0x35),
-                                                ))
-                                                .corner_radius(egui::CornerRadius::same(6))
-                                                .inner_margin(egui::Margin::same(4))
-                                                .shadow(egui::epaint::Shadow {
-                                                    offset: [0, 8],
-                                                    blur: 16,
-                                                    spread: 4,
-                                                    color: egui::Color32::from_black_alpha(180),
-                                                }),
-                                        )
-                                        .show(|ui| {
-                                            let row_w = (menu_w - 8.0).max(200.0);
-                                            ui.set_min_width(row_w);
-                                            ui.set_max_width(row_w);
-                                            // Paint an extra solid backing rect over the menu interior
-                                            // to guarantee 100% opacity even on the first open frame.
-                                            ui.painter().rect_filled(
-                                                ui.max_rect().expand(2.0),
-                                                egui::CornerRadius::same(6),
-                                                egui::Color32::from_rgb(0x17, 0x18, 0x1b),
-                                            );
-                                            ui.spacing_mut().item_spacing.y = 2.0;
-                                            for mode in crate::model::SizingMode::all() {
-                                                let selected = self.sizing == mode;
-                                                let (row_rect, row_resp) = ui.allocate_exact_size(
-                                                    egui::vec2(row_w, 30.0),
-                                                    egui::Sense::click(),
+                                    if let Some(st) = self.shot_test.as_ref() {
+                                        self.sizing_menu_open = st.is_current(ShotKind::SizingPopup);
+                                    } else if self.busy || modal_open {
+                                        self.sizing_menu_open = false;
+                                    }
+                                    if self.sizing_menu_open {
+                                        let mut picked: Option<crate::model::SizingMode> = None;
+                                        let menu_w = sizing_btn.rect.width().max(268.0);
+                                        let menu_pos = sizing_btn.rect.left_bottom() + egui::vec2(0.0, 4.0);
+                                        let area_resp = egui::Area::new(egui::Id::new("sizing_dropdown_area"))
+                                            .order(egui::Order::Foreground)
+                                            .fixed_pos(menu_pos)
+                                            .show(ui.ctx(), |ui| {
+                                                let total_h = 30.0 * 3.0 + 4.0 + 8.0;
+                                                let (box_rect, _) = ui.allocate_exact_size(
+                                                    egui::vec2(menu_w, total_h),
+                                                    egui::Sense::hover(),
                                                 );
-                                                if selected {
-                                                    ui.painter().rect_filled(
-                                                        row_rect,
-                                                        egui::CornerRadius::same(4),
-                                                        t.accent,
-                                                    );
-                                                } else if row_resp.hovered() {
-                                                    ui.painter().rect_filled(
-                                                        row_rect,
-                                                        egui::CornerRadius::same(4),
-                                                        egui::Color32::from_white_alpha(25),
-                                                    );
-                                                }
-                                                let text_col = if selected {
-                                                    egui::Color32::WHITE
-                                                } else if row_resp.hovered() {
-                                                    t.text
-                                                } else {
-                                                    t.text_dim
-                                                };
-                                                ui.painter().text(
-                                                    egui::pos2(
-                                                        row_rect.min.x + 10.0,
-                                                        row_rect.center().y,
+                                                // Drop shadow + 100% opaque #17181B surface + 1px #2B2E35 border
+                                                ui.painter().rect_filled(
+                                                    box_rect.translate(egui::vec2(0.0, 6.0)).expand(2.0),
+                                                    egui::CornerRadius::same(8),
+                                                    egui::Color32::from_black_alpha(180),
+                                                );
+                                                ui.painter().rect(
+                                                    box_rect,
+                                                    egui::CornerRadius::same(6),
+                                                    egui::Color32::from_rgb(0x17, 0x18, 0x1b),
+                                                    egui::Stroke::new(
+                                                        1.0,
+                                                        egui::Color32::from_rgb(0x2b, 0x2e, 0x35),
                                                     ),
-                                                    egui::Align2::LEFT_CENTER,
-                                                    mode.label(),
-                                                    crate::theme::medium(crate::theme::LABEL),
-                                                    text_col,
+                                                    egui::StrokeKind::Inside,
                                                 );
-                                                focus_ring(ui, &row_resp);
-                                                if row_resp.clicked() {
-                                                    picked = Some(mode);
-                                                    egui::Popup::close_id(ui.ctx(), popup_id);
+                                                let row_w = menu_w - 8.0;
+                                                for (idx, mode) in crate::model::SizingMode::all().iter().enumerate() {
+                                                    let selected = self.sizing == *mode;
+                                                    let y_top = box_rect.min.y + 4.0 + idx as f32 * 32.0;
+                                                    let row_rect = egui::Rect::from_min_size(
+                                                        egui::pos2(box_rect.min.x + 4.0, y_top),
+                                                        egui::vec2(row_w, 30.0),
+                                                    );
+                                                    let row_resp = ui.interact(
+                                                        row_rect,
+                                                        egui::Id::new(("sizing_opt", idx)),
+                                                        egui::Sense::click(),
+                                                    );
+                                                    if selected {
+                                                        ui.painter().rect_filled(
+                                                            row_rect,
+                                                            egui::CornerRadius::same(4),
+                                                            t.accent,
+                                                        );
+                                                    } else if row_resp.hovered() {
+                                                        ui.painter().rect_filled(
+                                                            row_rect,
+                                                            egui::CornerRadius::same(4),
+                                                            egui::Color32::from_white_alpha(25),
+                                                        );
+                                                    }
+                                                    let text_col = if selected {
+                                                        egui::Color32::WHITE
+                                                    } else if row_resp.hovered() {
+                                                        t.text
+                                                    } else {
+                                                        t.text_dim
+                                                    };
+                                                    ui.painter().text(
+                                                        egui::pos2(
+                                                            row_rect.min.x + 10.0,
+                                                            row_rect.center().y,
+                                                        ),
+                                                        egui::Align2::LEFT_CENTER,
+                                                        mode.label(),
+                                                        crate::theme::medium(crate::theme::LABEL),
+                                                        text_col,
+                                                    );
+                                                    if row_resp.clicked() {
+                                                        picked = Some(*mode);
+                                                    }
                                                 }
-                                            }
-                                        });
-                                    if let Some(mode) = picked {
-                                        self.sizing = mode;
-                                        self.save_settings();
-                                        self.preview_key.clear();
+                                            });
+                                        if let Some(mode) = picked {
+                                            self.sizing = mode;
+                                            self.sizing_menu_open = false;
+                                            self.save_settings();
+                                            self.preview_key.clear();
+                                        } else if ui.ctx().input(|i| i.pointer.any_pressed())
+                                            && !sizing_btn.hovered()
+                                            && !area_resp.response.hovered()
+                                        {
+                                            self.sizing_menu_open = false;
+                                        }
                                     }
                                 });
                                 ui.add_space(12.0);
@@ -2966,13 +3087,19 @@ impl eframe::App for CaptionStudioApp {
                     // box. When there is no entry yet (no scan, no JSON), the
                     // guidance text stays.
                     let entry = self.preview_entry.clone();
-                    egui::ScrollArea::vertical().show(ui, |ui| match &entry {
+                    match &entry {
                         Some(entry) if !entry.blocks.is_empty() || !entry.dropped.is_empty() => {
-                            self.show_block_cards(ui, entry);
+                            egui::ScrollArea::vertical()
+                                .scroll_bar_visibility(
+                                    egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded,
+                                )
+                                .show(ui, |ui| {
+                                    self.show_block_cards(ui, entry);
+                                });
                         }
                         _ => {
-                            // Non-selectable plain label so egui never paints a text caret
-                            // at the end of the empty-state sentence.
+                            // Render empty-state guidance directly without a ScrollArea so
+                            // no dormant scrollbar thumb appears beside a 1-line sentence.
                             ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(&self.verify_text)
@@ -2983,7 +3110,7 @@ impl eframe::App for CaptionStudioApp {
                                 .wrap(),
                             );
                         }
-                    });
+                    }
                 });
             });
 
@@ -2994,145 +3121,82 @@ impl eframe::App for CaptionStudioApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(ui.style()).fill(canvas))
             .show(ui, |ui| {
-            ui.add_enabled_ui(!modal_open, |ui| {
-            ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), 32.0),
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| {
-                    ui.spacing_mut().item_spacing.x = 20.0;
-                    if underline_tab(ui, self.tab == Tab::Json, "Translation JSON").clicked() {
-                        self.tab = Tab::Json;
-                    }
-                    if underline_tab(ui, self.tab == Tab::Preview, "Live Preview & OCR Check").clicked() {
-                        self.tab = Tab::Preview;
-                    }
-                },
-            );
-            ui.separator();
-            match self.tab {
-                Tab::Json => {
-                    // Per-image read-only JSON (Phase 4 item 14): the preview
-                    // file's blocks only. Copy still copies the full compact
-                    // map for the AI; Paste opens a modal; Bulk edit opens
-                    // the full-document editor as a modal.
-                    ui.horizontal(|ui| {
-                        if icon_text_button(ui, "copy", "Copy all JSON for AI")
-                            .on_hover_text("Copy the compact translation map for all scanned images")
-                            .clicked()
-                        {
-                            self.copy_compact_for_ai();
-                        }
-                        if icon_text_button(ui, "clipboard-paste", "Paste translated JSON…")
-                            .on_hover_text("Paste translated JSON from clipboard or import a .json file")
-                            .clicked()
-                        {
-                            self.show_paste_modal = true;
-                            self.paste_text.clear();
-                        }
-                        if icon_text_button(ui, "file-json", "Bulk edit all JSON…")
-                            .on_hover_text("View and edit the combined translation JSON for every image")
-                            .clicked()
-                        {
-                            if let Some(data) = self.resolve_preview_data() {
-                                self.editor_text =
-                                    serde_json::to_string_pretty(&compact_map_from_data(&data))
-                                        .unwrap_or_default();
-                            }
-                            self.show_bulk_edit = true;
-                        }
-                        if !self.preview_file.is_empty() {
-                            let t = crate::theme::Tokens::get(ui.ctx());
-                            ui.separator();
-                            ui.label(
-                                egui::RichText::new(format!("Showing: {}", self.preview_file))
-                                    .size(crate::theme::CAPTION)
-                                    .color(t.text_dim),
-                            );
-                        }
-                    });
-                    let data = self.resolve_preview_data();
-                    let text = per_image_json(data.as_ref(), &self.preview_file);
-                    // The editor fills the rest of the central panel: a
-                    // fixed 30-row height left a dead gap below it when
-                    // the log was closed (shot 01: "the border isn't
-                    // responsive"). The multiline TextEdit scrolls
-                    // internally, so no outer ScrollArea is needed.
-                    let t = crate::theme::Tokens::get(ui.ctx());
-                    let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
-                        let mut job = json_highlight_job(buf.as_str(), &t);
-                        job.wrap.max_width = wrap_width;
-                        ui.fonts_mut(|f| f.layout_job(job))
-                    };
-                    let mut text = text;
-                    let resp = ui.add_sized(
-                        ui.available_size(),
-                        egui::TextEdit::multiline(&mut text)
-                            .font(egui::TextStyle::Monospace)
-                            .desired_width(f32::INFINITY)
-                            .layouter(&mut layouter)
-                            .interactive(false)
-                            .hint_text("Click 'Scan images' to extract captions, or 'Paste translated JSON…' above to load translations."),
-                    )
-                    .accessible_name("Translation JSON for this image");
-                    focus_ring(ui, &resp);
-                }
-                Tab::Preview => {
-                    // The dataset is resolved once per frame: the file list
-                    // and the stage both read it, and refresh_preview no
-                    // longer resolves it itself.
+                ui.add_enabled_ui(!modal_open, |ui| {
                     let t = crate::theme::Tokens::get(ui.ctx());
                     let data = self.resolve_preview_data();
                     self.refresh_preview(&ctx, data.as_ref());
                     let names = self.file_names();
-                    let cur_idx = names.iter().position(|n| n == &self.preview_file).unwrap_or(0);
-                    // --- Docked stage header bar (SPEC §3.1): a dedicated
-                    // 40px bar above the stage, t.card with a 1px bottom
-                    // stroke, so the view/zoom controls no longer float
-                    // over the canvas. Left: prev / "N of M" / next + the
-                    // active file name. Right: mode + zoom groups.
+                    let cur_idx = names
+                        .iter()
+                        .position(|n| n == &self.preview_file)
+                        .unwrap_or(0);
+
+                    // --- Unified Docked Stage Header Bar (40px) across all 4 stages ---
+                    // Left: prev / "N of M" / next + active filename.
+                    // Right: stage-specific controls (Translation JSON actions in Step 2,
+                    // or Mode + Zoom capsules in Steps 1, 3, and 4).
                     let bar = egui::Frame::new()
                         .fill(t.card)
                         .inner_margin(egui::Margin::symmetric(8, 4));
                     let bar_resp = bar.show(ui, |ui| {
                         ui.set_min_height(32.0);
                         ui.horizontal(|ui| {
-                            if crate::icons::button(ui, "chevron-left", crate::theme::ControlSize::Medium, false, "Previous file").clicked() {
+                            if crate::icons::button(
+                                ui,
+                                "chevron-left",
+                                crate::theme::ControlSize::Medium,
+                                false,
+                                "Previous file",
+                            )
+                            .clicked()
+                            {
                                 step_preview(&mut self.preview_file, &names, -1);
                                 self.selected_block = None;
                                 self.preview_key.clear();
                             }
                             ui.label(crate::theme::label_text(
-                                &format!("{} of {}", if names.is_empty() { 0 } else { cur_idx + 1 }, names.len()),
+                                &format!(
+                                    "{} of {}",
+                                    if names.is_empty() { 0 } else { cur_idx + 1 },
+                                    names.len()
+                                ),
                                 crate::theme::LABEL,
                             ));
-                            if crate::icons::button(ui, "chevron-right", crate::theme::ControlSize::Medium, false, "Next file").clicked() {
+                            if crate::icons::button(
+                                ui,
+                                "chevron-right",
+                                crate::theme::ControlSize::Medium,
+                                false,
+                                "Next file",
+                            )
+                            .clicked()
+                            {
                                 step_preview(&mut self.preview_file, &names, 1);
                                 self.selected_block = None;
                                 self.preview_key.clear();
                             }
-                            // The active file name, truncated, with the full
-                            // name on hover. Its width is bounded by the
-                            // right-hand groups' reserved width, so a long
-                            // name truncates instead of pushing the mode /
-                            // zoom groups off the bar.
+
                             let zoom_pct = format!(
                                 "{}%",
                                 (self.preview_zoom * 100.0).round() as i32
                             );
-                            let mode_btn_w = segmented_button_width(
-                                ui,
-                                &["Original", "Detected boxes", "Rendered"],
-                            );
-                            let mode_w = mode_btn_w * 3.0 + 10.0;
-                            let zoom_seg_w = segmented_button_width(
-                                ui,
-                                &["Fit view", zoom_pct.as_str()],
-                            ) * 2.0
-                                + 4.0;
-                            let zoom_cluster_w = 28.0 + 2.0 + zoom_seg_w + 2.0 + 28.0 + 6.0;
-                            let right_reserve = mode_w + 17.0 + zoom_cluster_w + 20.0;
+                            let right_reserve = if self.stage == WorkflowStep::Translate {
+                                470.0
+                            } else {
+                                let mode_w = segmented_total_width(
+                                    ui,
+                                    &["Original", "Detected boxes", "Rendered"],
+                                );
+                                let zoom_seg_w = segmented_total_width(
+                                    ui,
+                                    &["Fit view", zoom_pct.as_str()],
+                                );
+                                let zoom_cluster_w = 28.0 + 2.0 + zoom_seg_w + 2.0 + 28.0;
+                                mode_w + 16.0 + zoom_cluster_w + 20.0
+                            };
+
                             if !self.preview_file.is_empty() {
-                                let name_w = (ui.available_width() - right_reserve).max(40.0);
+                                let name_w = (ui.available_width() - right_reserve).max(48.0);
                                 let shown_name = middle_ellipsis(ui, &self.preview_file, name_w);
                                 ui.add_sized(
                                     egui::vec2(name_w, 32.0),
@@ -3146,89 +3210,130 @@ impl eframe::App for CaptionStudioApp {
                                 )
                                 .on_hover_text(&self.preview_file);
                             }
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.add_space(8.0);
-                                ui.add_enabled_ui(!names.is_empty(), |ui| {
-                                    // Unified zoom capsule: [ − | Fit view | 100% | + ]
-                                    match zoom_capsule(
-                                        ui,
-                                        self.preview_zoom_fit,
-                                        zoom_pct.as_str(),
-                                    ) {
-                                        Some(ZoomAction::Out) => {
-                                            self.preview_zoom_fit = false;
-                                            self.preview_zoom =
-                                                (self.preview_zoom / 1.25).clamp(0.25, 4.0);
+
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.add_space(8.0);
+                                    if self.stage == WorkflowStep::Translate {
+                                        if icon_text_button(ui, "file-json", "Bulk edit all JSON…")
+                                            .on_hover_text(
+                                                "View and edit the combined translation JSON for every image",
+                                            )
+                                            .clicked()
+                                        {
+                                            if let Some(d) = self.resolve_preview_data() {
+                                                self.editor_text = serde_json::to_string_pretty(
+                                                    &compact_map_from_data(&d),
+                                                )
+                                                .unwrap_or_default();
+                                            }
+                                            self.show_bulk_edit = true;
                                         }
-                                        Some(ZoomAction::Fit) => {
-                                            self.preview_zoom_fit = true;
-                                            self.preview_zoom = 1.0;
-                                            self.preview_pan = egui::Vec2::ZERO;
+                                        if icon_text_button(
+                                            ui,
+                                            "clipboard-paste",
+                                            "Paste translated JSON…",
+                                        )
+                                        .on_hover_text(
+                                            "Paste translated JSON from clipboard or import a .json file",
+                                        )
+                                        .clicked()
+                                        {
+                                            self.show_paste_modal = true;
+                                            self.paste_text.clear();
                                         }
-                                        Some(ZoomAction::Reset100) => {
-                                            self.preview_zoom_fit = false;
-                                            self.preview_zoom = 1.0;
-                                            self.preview_pan = egui::Vec2::ZERO;
+                                        if icon_text_button(ui, "copy", "Copy all JSON for AI")
+                                            .on_hover_text(
+                                                "Copy the compact translation map for all scanned images",
+                                            )
+                                            .clicked()
+                                        {
+                                            self.copy_compact_for_ai();
                                         }
-                                        Some(ZoomAction::In) => {
-                                            self.preview_zoom_fit = false;
-                                            self.preview_zoom =
-                                                (self.preview_zoom * 1.25).clamp(0.25, 4.0);
-                                        }
-                                        None => {}
+                                    } else {
+                                        ui.add_enabled_ui(!names.is_empty(), |ui| {
+                                            match zoom_capsule(
+                                                ui,
+                                                self.preview_zoom_fit,
+                                                zoom_pct.as_str(),
+                                            ) {
+                                                Some(ZoomAction::Out) => {
+                                                    self.preview_zoom_fit = false;
+                                                    self.preview_zoom =
+                                                        (self.preview_zoom / 1.25).clamp(0.25, 4.0);
+                                                }
+                                                Some(ZoomAction::Fit) => {
+                                                    self.preview_zoom_fit = true;
+                                                    self.preview_zoom = 1.0;
+                                                    self.preview_pan = egui::Vec2::ZERO;
+                                                }
+                                                Some(ZoomAction::Reset100) => {
+                                                    self.preview_zoom_fit = false;
+                                                    self.preview_zoom = 1.0;
+                                                    self.preview_pan = egui::Vec2::ZERO;
+                                                }
+                                                Some(ZoomAction::In) => {
+                                                    self.preview_zoom_fit = false;
+                                                    self.preview_zoom =
+                                                        (self.preview_zoom * 1.25).clamp(0.25, 4.0);
+                                                }
+                                                None => {}
+                                            }
+                                            ui.add_space(4.0);
+                                            let (div, _) = ui.allocate_exact_size(
+                                                egui::vec2(1.0, 18.0),
+                                                egui::Sense::hover(),
+                                            );
+                                            ui.painter().rect_filled(div, 0.0, t.card_border);
+                                            ui.add_space(4.0);
+                                            if let Some(mode) = segmented(
+                                                ui,
+                                                self.preview_mode,
+                                                &[
+                                                    (PreviewMode::Original, "Original"),
+                                                    (PreviewMode::Ocr, "Detected boxes"),
+                                                    (PreviewMode::Rendered, "Rendered"),
+                                                ],
+                                            ) {
+                                                self.preview_mode = mode;
+                                                self.preview_key.clear();
+                                            }
+                                        });
                                     }
-                                    ui.add_space(4.0);
-                                    let (div, _) = ui.allocate_exact_size(
-                                        egui::vec2(1.0, 18.0),
-                                        egui::Sense::hover(),
-                                    );
-                                    ui.painter().rect_filled(div, 0.0, t.card_border);
-                                    ui.add_space(4.0);
-                                    if let Some(mode) = segmented(
-                                        ui,
-                                        self.preview_mode,
-                                        &[
-                                            (PreviewMode::Original, "Original"),
-                                            (PreviewMode::Ocr, "Detected boxes"),
-                                            (PreviewMode::Rendered, "Rendered"),
-                                        ],
-                                    ) {
-                                        self.preview_mode = mode;
-                                        self.preview_key.clear();
-                                    }
-                                });
-                            });
+                                },
+                            );
                         });
                     });
-                    // The bar's bottom stroke: 1px card_border along its
-                    // bottom edge (a Frame stroke would box all four sides).
                     let bar_rect = bar_resp.response.rect;
                     ui.painter().hline(
                         bar_rect.x_range(),
                         bar_rect.bottom(),
                         egui::Stroke::new(1.0, t.card_border),
                     );
-                    // --- Workspace: file list (230px) | stage. ---
+
+                    // --- Persistent 2-Column Workspace: File List (250px) | Stage / JSON ---
                     let rest = ui.available_size();
                     let (filter_id, stage_resp) = ui
                         .horizontal_top(|ui| {
-                            // File list.
                             let filter_resp = ui
                                 .allocate_ui_with_layout(
                                     egui::vec2(250.0, rest.y),
                                     egui::Layout::top_down(egui::Align::LEFT),
                                     |ui| {
-                                        // Filter + a clear (×) button when
-                                        // there is text to clear.
                                         let filter_resp = ui
                                             .horizontal(|ui| {
-                                                let clear_reserve: f32 = if self.preview_filter.is_empty() {
-                                                    10.0
-                                                } else {
-                                                    38.0
-                                                };
+                                                let clear_reserve: f32 =
+                                                    if self.preview_filter.is_empty() {
+                                                        10.0
+                                                    } else {
+                                                        38.0
+                                                    };
                                                 let filter_resp = ui.add_sized(
-                                                    egui::vec2((250.0f32 - clear_reserve).max(80.0f32), 32.0),
+                                                    egui::vec2(
+                                                        (250.0f32 - clear_reserve).max(80.0f32),
+                                                        32.0,
+                                                    ),
                                                     egui::TextEdit::singleline(
                                                         &mut self.preview_filter,
                                                     )
@@ -3249,46 +3354,43 @@ impl eframe::App for CaptionStudioApp {
                                             })
                                             .inner;
                                         ui.add_space(6.0);
-                                        let filtered = filter_file_names(&names, &self.preview_filter);
+                                        let filtered =
+                                            filter_file_names(&names, &self.preview_filter);
                                         let mut budget = 4;
                                         let mut picked: Option<String> = None;
-                                        // The list scrolls with the wheel
-                                        // and the Up/Down keys, and the
-                                        // scrollbar shows when the content
-                                        // overflows — the hidden scrollbar
-                                        // left the overflow undiscoverable
-                                        // (the bottom row sat half-clipped
-                                        // with no sign the list scrolled and
-                                        // no way to drag to the bottom rows).
-                                        // The ScrollArea fills the column
-                                        // height instead of shrinking to its
-                                        // content, so as many whole rows as
-                                        // possible are visible.
                                         egui::ScrollArea::vertical()
                                             .auto_shrink([false, false])
                                             .scroll_bar_visibility(
                                                 egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded,
                                             )
                                             .show(ui, |ui| {
-                                            if filtered.is_empty() {
-                                                // While a scan runs the list
-                                                // is empty because nothing has
-                                                // been found yet, not because
-                                                // the filter excluded it.
-                                                let msg = if self.busy {
-                                                    "Scanning…"
-                                                } else {
-                                                    "No files match."
-                                                };
-                                                ui.label(crate::theme::label_text(msg, crate::theme::CAPTION));
-                                            }
-                                            ui.set_min_width((ui.available_width() - 6.0).max(0.0));
-                                            for n in filtered {
-                                                if self.file_list_row(ui, n, data.as_ref(), &mut budget) {
-                                                    picked = Some(n.clone());
+                                                if filtered.is_empty() {
+                                                    let msg = if self.busy {
+                                                        "Scanning…"
+                                                    } else if names.is_empty() {
+                                                        "No images in folder."
+                                                    } else {
+                                                        "No files match."
+                                                    };
+                                                    ui.label(crate::theme::label_text(
+                                                        msg,
+                                                        crate::theme::CAPTION,
+                                                    ));
                                                 }
-                                            }
-                                        });
+                                                ui.set_min_width(
+                                                    (ui.available_width() - 6.0).max(0.0),
+                                                );
+                                                for n in filtered {
+                                                    if self.file_list_row(
+                                                        ui,
+                                                        n,
+                                                        data.as_ref(),
+                                                        &mut budget,
+                                                    ) {
+                                                        picked = Some(n.clone());
+                                                    }
+                                                }
+                                            });
                                         if let Some(name) = picked {
                                             self.set_preview_file(name);
                                         }
@@ -3297,210 +3399,288 @@ impl eframe::App for CaptionStudioApp {
                                 )
                                 .inner;
                             ui.separator();
-                            // Stage.
+
                             let stage_w = ui.available_width();
                             let stage_resp = ui
                                 .allocate_ui_with_layout(
                                     egui::vec2(stage_w, rest.y),
                                     egui::Layout::top_down(egui::Align::LEFT),
                                     |ui| {
-                                        if matches!(self.preview_mode, PreviewMode::Ocr) {
-                                            egui::Frame::new()
-                                                .fill(t.card)
-                                                .stroke(egui::Stroke::new(1.0, t.card_border))
-                                                .inner_margin(egui::Margin::symmetric(12, 6))
-                                                .show(ui, |ui| {
-                                                    ui.set_width(ui.available_width());
-                                                    ui.horizontal(|ui| {
-                                                        ui.colored_label(
-                                                            t.ok,
-                                                            egui::RichText::new("■ Solid green = Kept").size(crate::theme::CAPTION),
-                                                        );
-                                                        ui.separator();
-                                                        ui.colored_label(
-                                                            t.warning,
-                                                            egui::RichText::new("▨ Dashed orange = Filtered out").size(crate::theme::CAPTION),
-                                                        );
-                                                        ui.separator();
-                                                        ui.colored_label(
-                                                            t.accent_ink,
-                                                            egui::RichText::new("Click a box to inspect").size(crate::theme::CAPTION),
-                                                        );
+                                        if self.stage == WorkflowStep::Translate {
+                                            let text =
+                                                per_image_json(data.as_ref(), &self.preview_file);
+                                            let mut layouter =
+                                                |ui: &egui::Ui,
+                                                 buf: &dyn egui::TextBuffer,
+                                                 wrap_width: f32| {
+                                                    let mut job =
+                                                        json_highlight_job(buf.as_str(), &t);
+                                                    job.wrap.max_width = wrap_width;
+                                                    ui.fonts_mut(|f| f.layout_job(job))
+                                                };
+                                            let mut text = text;
+                                            let resp = ui
+                                                .add_sized(
+                                                    ui.available_size(),
+                                                    egui::TextEdit::multiline(&mut text)
+                                                        .font(egui::TextStyle::Monospace)
+                                                        .desired_width(f32::INFINITY)
+                                                        .layouter(&mut layouter)
+                                                        .interactive(false)
+                                                        .hint_text(
+                                                            "Click 'Scan images' to extract captions, or 'Paste translated JSON…' above to load translations.",
+                                                        ),
+                                                )
+                                                .accessible_name("Translation JSON for this image");
+                                            focus_ring(ui, &resp);
+                                            resp
+                                        } else {
+                                            if matches!(self.preview_mode, PreviewMode::Ocr) {
+                                                egui::Frame::new()
+                                                    .fill(t.card)
+                                                    .stroke(egui::Stroke::new(1.0, t.card_border))
+                                                    .inner_margin(egui::Margin::symmetric(12, 6))
+                                                    .show(ui, |ui| {
+                                                        ui.set_width(ui.available_width());
+                                                        ui.horizontal(|ui| {
+                                                            ui.colored_label(
+                                                                t.ok,
+                                                                egui::RichText::new(
+                                                                    "■ Solid green = Kept",
+                                                                )
+                                                                .size(crate::theme::CAPTION),
+                                                            );
+                                                            ui.separator();
+                                                            ui.colored_label(
+                                                                t.warning,
+                                                                egui::RichText::new(
+                                                                    "▨ Dashed orange = Filtered out",
+                                                                )
+                                                                .size(crate::theme::CAPTION),
+                                                            );
+                                                            ui.separator();
+                                                            ui.colored_label(
+                                                                t.accent_ink,
+                                                                egui::RichText::new(
+                                                                    "Click a box to inspect",
+                                                                )
+                                                                .size(crate::theme::CAPTION),
+                                                            );
+                                                        });
                                                     });
-                                                });
-                                        }
-                                        let stage_size = ui.available_size();
-                                        let (stage_rect, stage_resp) = ui.allocate_exact_size(stage_size, egui::Sense::click_and_drag());
-                                        // Checkerboard stage background (SPEC §5).
-                                        let painter = ui.painter();
-                                        painter.rect_filled(stage_rect, 0.0, t.canvas);
-                                        let cell = 16.0;
-                                        let mut y = stage_rect.min.y;
-                                        let mut row = 0usize;
-                                        while y < stage_rect.max.y {
-                                            let mut x = stage_rect.min.x;
-                                            let mut col = 0usize;
-                                            while x < stage_rect.max.x {
-                                                if (row + col) % 2 == 1 {
-                                                    let cell_rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(cell, cell)).intersect(stage_rect);
-                                                    painter.rect_filled(cell_rect, 0.0, t.card);
-                                                }
-                                                x += cell;
-                                                col += 1;
                                             }
-                                            y += cell;
-                                            row += 1;
-                                        }
-                                        if let Some(tex) = &self.preview_texture {
-                                            let (iw, ih) = (self.preview_size[0], self.preview_size[1]);
-                                            let fit_scale = (stage_rect.width() / iw).min(stage_rect.height() / ih).min(1.5).max(0.05);
-                                            // Wheel zoom (around the cursor)
-                                            // and drag pan both exit Fit into
-                                            // a manual zoom — Fit is a preset,
-                                            // not a mode. `0` resets to Fit.
-                                            // Zoom/pan only change the display,
-                                            // never the texture, so the
-                                            // preview key is left alone.
-                                            if stage_resp.hovered() {
-                                                let scroll = ui.ctx().input(|i| i.smooth_scroll_delta);
-                                                if scroll.y != 0.0 {
+                                            let stage_size = ui.available_size();
+                                            let (stage_rect, stage_resp) = ui.allocate_exact_size(
+                                                stage_size,
+                                                egui::Sense::click_and_drag(),
+                                            );
+                                            let painter = ui.painter();
+                                            painter.rect_filled(stage_rect, 0.0, t.canvas);
+                                            let cell = 16.0;
+                                            let mut y = stage_rect.min.y;
+                                            let mut row = 0usize;
+                                            while y < stage_rect.max.y {
+                                                let mut x = stage_rect.min.x;
+                                                let mut col = 0usize;
+                                                while x < stage_rect.max.x {
+                                                    if (row + col) % 2 == 1 {
+                                                        let cell_rect = egui::Rect::from_min_size(
+                                                            egui::pos2(x, y),
+                                                            egui::vec2(cell, cell),
+                                                        )
+                                                        .intersect(stage_rect);
+                                                        painter.rect_filled(cell_rect, 0.0, t.card);
+                                                    }
+                                                    x += cell;
+                                                    col += 1;
+                                                }
+                                                y += cell;
+                                                row += 1;
+                                            }
+                                            if let Some(tex) = &self.preview_texture {
+                                                let (iw, ih) =
+                                                    (self.preview_size[0], self.preview_size[1]);
+                                                let fit_scale = (stage_rect.width() / iw)
+                                                    .min(stage_rect.height() / ih)
+                                                    .min(1.5)
+                                                    .max(0.05);
+                                                if stage_resp.hovered() {
+                                                    let scroll = ui
+                                                        .ctx()
+                                                        .input(|i| i.smooth_scroll_delta);
+                                                    if scroll.y != 0.0 {
+                                                        if self.preview_zoom_fit {
+                                                            self.preview_zoom = fit_scale;
+                                                            self.preview_zoom_fit = false;
+                                                        }
+                                                        let old_scale = self.preview_zoom;
+                                                        let new_scale = (old_scale
+                                                            * (-scroll.y * 0.002).exp())
+                                                        .clamp(0.05, 4.0);
+                                                        if let (Some(cursor), true) = (
+                                                            stage_resp.hover_pos(),
+                                                            self.preview_image_rect.is_positive(),
+                                                        ) {
+                                                            let img_pt = (cursor
+                                                                - self.preview_image_rect.min)
+                                                                / old_scale;
+                                                            let new_size = egui::vec2(
+                                                                iw * new_scale,
+                                                                ih * new_scale,
+                                                            );
+                                                            let new_min =
+                                                                cursor - img_pt * new_scale;
+                                                            self.preview_pan = new_min
+                                                                + new_size / 2.0
+                                                                - stage_rect.center();
+                                                            self.preview_pan = clamp_pan(
+                                                                self.preview_pan,
+                                                                new_size,
+                                                                stage_rect.size(),
+                                                            );
+                                                        }
+                                                        self.preview_zoom = new_scale;
+                                                    }
+                                                    if ui
+                                                        .ctx()
+                                                        .input(|i| i.key_pressed(egui::Key::Num0))
+                                                    {
+                                                        self.preview_zoom_fit = true;
+                                                        self.preview_pan = egui::Vec2::ZERO;
+                                                    }
+                                                }
+                                                if stage_resp.dragged() {
                                                     if self.preview_zoom_fit {
                                                         self.preview_zoom = fit_scale;
                                                         self.preview_zoom_fit = false;
                                                     }
-                                                    let old_scale = self.preview_zoom;
-                                                    let new_scale = (old_scale * (-scroll.y * 0.002).exp()).clamp(0.05, 4.0);
-                                                    if let (Some(cursor), true) = (stage_resp.hover_pos(), self.preview_image_rect.is_positive()) {
-                                                        let img_pt = (cursor - self.preview_image_rect.min) / old_scale;
-                                                        let new_size = egui::vec2(iw * new_scale, ih * new_scale);
-                                                        let new_min = cursor - img_pt * new_scale;
-                                                        self.preview_pan = new_min + new_size / 2.0 - stage_rect.center();
-                                                        self.preview_pan = clamp_pan(self.preview_pan, new_size, stage_rect.size());
-                                                    }
-                                                    self.preview_zoom = new_scale;
+                                                    self.preview_pan += stage_resp.drag_delta();
+                                                    let size = egui::vec2(
+                                                        iw * self.preview_zoom,
+                                                        ih * self.preview_zoom,
+                                                    );
+                                                    self.preview_pan = clamp_pan(
+                                                        self.preview_pan,
+                                                        size,
+                                                        stage_rect.size(),
+                                                    );
                                                 }
-                                                if ui.ctx().input(|i| i.key_pressed(egui::Key::Num0)) {
-                                                    self.preview_zoom_fit = true;
-                                                    self.preview_pan = egui::Vec2::ZERO;
-                                                }
-                                            }
-                                            if stage_resp.dragged() {
-                                                if self.preview_zoom_fit {
-                                                    self.preview_zoom = fit_scale;
-                                                    self.preview_zoom_fit = false;
-                                                }
-                                                self.preview_pan += stage_resp.drag_delta();
-                                                let size = egui::vec2(iw * self.preview_zoom, ih * self.preview_zoom);
-                                                self.preview_pan = clamp_pan(self.preview_pan, size, stage_rect.size());
-                                            }
-                                            let scale = if self.preview_zoom_fit { fit_scale } else { self.preview_zoom };
-                                            let size = egui::vec2(iw * scale, ih * scale);
-                                            // Keep the pan in bounds every
-                                            // frame, not only while dragging
-                                            // or zooming, so a stale or
-                                            // programmatically set pan can
-                                            // never leave the image off-stage.
-                                            self.preview_pan =
-                                                clamp_pan(self.preview_pan, size, stage_rect.size());
-                                            let image_rect = egui::Rect::from_center_size(stage_rect.center() + self.preview_pan, size);
-                                            self.preview_image_rect = image_rect;
-                                            self.preview_image_scale = scale;
-                                            // The image is clipped to the
-                                            // stage rect, so even at max
-                                            // zoom it can never draw over the
-                                            // file list or the toolbar.
-                                            ui.painter().with_clip_rect(stage_rect).image(
-                                                tex.id(),
-                                                image_rect,
-                                                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
-                                                egui::Color32::WHITE,
-                                            );
-                                            // Position cue: at a manual zoom
-                                            // the image is cropped with no
-                                            // scrollbar, so the user can't
-                                            // tell which part they're seeing.
-                                            // A small "Drag to pan" hint at
-                                            // the stage's bottom-right while
-                                            // the image overflows the stage.
-                                            if !self.preview_zoom_fit
-                                                && (size.x > stage_rect.width()
-                                                    || size.y > stage_rect.height())
-                                            {
-                                                let hint = "Drag to pan";
-                                                let font =
-                                                    egui::FontId::proportional(crate::theme::CAPTION);
-                                                let text_w = ui
-                                                    .ctx()
-                                                    .fonts_mut(|f| {
-                                                        f.layout_no_wrap(hint.to_string(), font.clone(), t.text)
-                                                            .size()
-                                                            .x
-                                                    });
-                                                let pad = egui::vec2(8.0, 4.0);
-                                                let bg_rect = egui::Rect::from_min_size(
-                                                    egui::pos2(
-                                                        stage_rect.max.x - text_w - pad.x * 2.0 - 8.0,
-                                                        stage_rect.max.y
-                                                            - crate::theme::CAPTION
-                                                            - pad.y * 2.0
-                                                            - 8.0,
+                                                let scale = if self.preview_zoom_fit {
+                                                    fit_scale
+                                                } else {
+                                                    self.preview_zoom
+                                                };
+                                                let size = egui::vec2(iw * scale, ih * scale);
+                                                self.preview_pan = clamp_pan(
+                                                    self.preview_pan,
+                                                    size,
+                                                    stage_rect.size(),
+                                                );
+                                                let image_rect = egui::Rect::from_center_size(
+                                                    stage_rect.center() + self.preview_pan,
+                                                    size,
+                                                );
+                                                self.preview_image_rect = image_rect;
+                                                self.preview_image_scale = scale;
+                                                ui.painter().with_clip_rect(stage_rect).image(
+                                                    tex.id(),
+                                                    image_rect,
+                                                    egui::Rect::from_min_max(
+                                                        egui::Pos2::ZERO,
+                                                        egui::Pos2::new(1.0, 1.0),
                                                     ),
-                                                    egui::vec2(text_w + pad.x * 2.0, crate::theme::CAPTION + pad.y * 2.0),
+                                                    egui::Color32::WHITE,
                                                 );
-                                                let painter =
-                                                    ui.painter().with_clip_rect(stage_rect);
-                                                painter.rect_filled(
-                                                    bg_rect,
-                                                    egui::CornerRadius::same(6),
-                                                    egui::Color32::from_black_alpha(220),
-                                                );
-                                                painter.rect_stroke(
-                                                    bg_rect,
-                                                    egui::CornerRadius::same(6),
-                                                    egui::Stroke::new(1.0, t.card_border),
-                                                    egui::StrokeKind::Inside,
-                                                );
-                                                painter.text(
-                                                    bg_rect.center(),
-                                                    egui::Align2::CENTER_CENTER,
-                                                    hint,
-                                                    font,
-                                                    t.text,
-                                                );
-                                            }
-                                            // Click (not drag) in OCR Boxes
-                                            // mode selects the block under the
-                                            // pointer — the list scrolls to
-                                            // its row and the box turns Max
-                                            // Blue (and vice versa).
-                                            if stage_resp.clicked() && matches!(self.preview_mode, PreviewMode::Ocr) {
-                                                if let (Some(pos), Some(entry)) = (stage_resp.interact_pointer_pos(), &self.preview_entry) {
-                                                    let x = (pos.x - image_rect.min.x) / scale;
-                                                    let y = (pos.y - image_rect.min.y) / scale;
-                                                    self.selected_block = block_at(entry, x, y);
-                                                    self.blocks_scroll_to_selected = true;
-                                                    self.preview_key.clear();
+                                                if !self.preview_zoom_fit
+                                                    && (size.x > stage_rect.width()
+                                                        || size.y > stage_rect.height())
+                                                {
+                                                    let hint = "Drag to pan";
+                                                    let font = egui::FontId::proportional(
+                                                        crate::theme::CAPTION,
+                                                    );
+                                                    let text_w = ui.ctx().fonts_mut(|f| {
+                                                        f.layout_no_wrap(
+                                                            hint.to_string(),
+                                                            font.clone(),
+                                                            t.text,
+                                                        )
+                                                        .size()
+                                                        .x
+                                                    });
+                                                    let pad = egui::vec2(8.0, 4.0);
+                                                    let bg_rect = egui::Rect::from_min_size(
+                                                        egui::pos2(
+                                                            stage_rect.max.x
+                                                                - text_w
+                                                                - pad.x * 2.0
+                                                                - 8.0,
+                                                            stage_rect.max.y
+                                                                - crate::theme::CAPTION
+                                                                - pad.y * 2.0
+                                                                - 8.0,
+                                                        ),
+                                                        egui::vec2(
+                                                            text_w + pad.x * 2.0,
+                                                            crate::theme::CAPTION + pad.y * 2.0,
+                                                        ),
+                                                    );
+                                                    let painter =
+                                                        ui.painter().with_clip_rect(stage_rect);
+                                                    painter.rect_filled(
+                                                        bg_rect,
+                                                        egui::CornerRadius::same(6),
+                                                        egui::Color32::from_black_alpha(220),
+                                                    );
+                                                    painter.rect_stroke(
+                                                        bg_rect,
+                                                        egui::CornerRadius::same(6),
+                                                        egui::Stroke::new(1.0, t.card_border),
+                                                        egui::StrokeKind::Inside,
+                                                    );
+                                                    painter.text(
+                                                        bg_rect.center(),
+                                                        egui::Align2::CENTER_CENTER,
+                                                        hint,
+                                                        font,
+                                                        t.text,
+                                                    );
                                                 }
+                                                if stage_resp.clicked()
+                                                    && matches!(self.preview_mode, PreviewMode::Ocr)
+                                                {
+                                                    if let (Some(pos), Some(entry)) = (
+                                                        stage_resp.interact_pointer_pos(),
+                                                        &self.preview_entry,
+                                                    ) {
+                                                        let x =
+                                                            (pos.x - image_rect.min.x) / scale;
+                                                        let y =
+                                                            (pos.y - image_rect.min.y) / scale;
+                                                        self.selected_block =
+                                                            block_at(entry, x, y);
+                                                        self.blocks_scroll_to_selected = true;
+                                                        self.preview_key.clear();
+                                                    }
+                                                }
+                                            } else {
+                                                ui.painter().text(
+                                                    stage_rect.center(),
+                                                    egui::Align2::CENTER_CENTER,
+                                                    "Select an input folder on the left, then click 'Scan images' to begin.",
+                                                    egui::FontId::proportional(crate::theme::BODY),
+                                                    t.text_dim,
+                                                );
                                             }
-                                        } else {
-                                            ui.painter().text(
-                                                stage_rect.center(),
-                                                egui::Align2::CENTER_CENTER,
-                                                "Click 'Scan images' or 'Paste translated JSON…' to preview.",
-                                                egui::FontId::proportional(crate::theme::BODY),
-                                                t.text_dim,
-                                            );
+                                            stage_resp
                                         }
-                                        stage_resp
                                     },
                                 )
                                 .inner;
                             (filter_resp.id, stage_resp)
                         })
                         .inner;
-                    // Keyboard nav (Up/Down move, Enter focuses the stage):
-                    // active while nothing has focus, or while the filter
-                    // has it — the filter is the only text field in this tab.
+
                     let focused = ui.ctx().memory(|m| m.focused());
                     let list_nav = focused.is_none() || focused == Some(filter_id);
                     if list_nav {
@@ -3519,10 +3699,8 @@ impl eframe::App for CaptionStudioApp {
                             stage_resp.request_focus();
                         }
                     }
-                }
-            }
+                });
             });
-        });
     }
 }
 
@@ -3572,20 +3750,28 @@ fn step_preview(current: &mut String, names: &[String], delta: i32) {
 /// uses it to reserve the right-hand groups' width before laying out the
 /// (flexible, truncating) file name, so a long name can never push the
 /// mode/zoom groups off the bar.
-fn segmented_button_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
+fn segment_label_width(ui: &egui::Ui, label: &str) -> f32 {
     let t = crate::theme::Tokens::get(ui.ctx());
-    let font_id = egui::TextStyle::Button.resolve(ui.style());
-    let max_text_w = labels
+    let font_id = crate::theme::medium(crate::theme::LABEL);
+    let text_w = ui.ctx().fonts_mut(|f| {
+        f.layout_no_wrap(label.to_string(), font_id, t.text)
+            .size()
+            .x
+    });
+    (text_w + 22.0).ceil()
+}
+
+fn segmented_total_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
+    let sum: f32 = labels.iter().map(|l| segment_label_width(ui, l)).sum();
+    let gaps = 2.0 * (labels.len().saturating_sub(1) as f32);
+    sum + gaps + 6.0
+}
+
+fn segmented_button_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
+    labels
         .iter()
-        .map(|label| {
-            ui.ctx().fonts_mut(|f| {
-                f.layout_no_wrap((*label).to_string(), font_id.clone(), t.text)
-                    .size()
-                    .x
-            })
-        })
-        .fold(0.0, f32::max);
-    max_text_w + ui.spacing().button_padding.x * 2.0
+        .map(|l| segment_label_width(ui, l))
+        .fold(0.0, f32::max)
 }
 
 #[derive(Clone, Copy)]
@@ -3663,47 +3849,6 @@ fn zoom_capsule(ui: &mut egui::Ui, fit: bool, pct_label: &str) -> Option<ZoomAct
 
 /// Clean underline tab for top-level workspace navigation (`Translation JSON`,
 /// `Live Preview & OCR Check`), visually distinct from `segmented` capsules.
-fn underline_tab(ui: &mut egui::Ui, active: bool, label: &str) -> egui::Response {
-    let t = crate::theme::Tokens::get(ui.ctx());
-    let font = if active {
-        crate::theme::semibold(crate::theme::LABEL)
-    } else {
-        crate::theme::medium(crate::theme::LABEL)
-    };
-    let text_w = ui.ctx().fonts_mut(|f| {
-        f.layout_no_wrap(label.to_string(), font.clone(), t.text)
-            .size()
-            .x
-    });
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(text_w + 12.0, 32.0),
-        egui::Sense::click(),
-    );
-    let col = if active || resp.hovered() {
-        t.text
-    } else {
-        t.text_dim
-    };
-    ui.painter().text(
-        egui::pos2(rect.center().x, rect.center().y - 1.0),
-        egui::Align2::CENTER_CENTER,
-        label,
-        font,
-        col,
-    );
-    if active {
-        ui.painter().rect_filled(
-            egui::Rect::from_min_max(
-                egui::pos2(rect.min.x, rect.max.y - 2.0),
-                egui::pos2(rect.max.x, rect.max.y),
-            ),
-            0.0,
-            t.accent,
-        );
-    }
-    focus_ring(ui, &resp);
-    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
-}
 
 /// Unified 24px small action button (`Filter out`, `Keep`, `Show log`, `×`)
 /// with consistent `6px` corner radius, `t.field` fill, `t.field_border`
@@ -3766,10 +3911,12 @@ fn segmented<T: PartialEq + Copy>(
 ) -> Option<T> {
     let t = crate::theme::Tokens::get(ui.ctx());
     let mut picked = None;
-    let labels: Vec<&str> = options.iter().map(|(_, label)| *label).collect();
-    let btn_w = segmented_button_width(ui, &labels);
+    let widths: Vec<f32> = options
+        .iter()
+        .map(|(_, label)| segment_label_width(ui, label))
+        .collect();
     let n = options.len() as f32;
-    let inner_w = btn_w * n + 2.0 * (n - 1.0).max(0.0);
+    let inner_w = widths.iter().sum::<f32>() + 2.0 * (n - 1.0).max(0.0);
     egui::Frame::new()
         .fill(t.field)
         .stroke(egui::Stroke::new(1.0, t.card_border))
@@ -3781,10 +3928,10 @@ fn segmented<T: PartialEq + Copy>(
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
-                    for (value, label) in options.iter() {
+                    for ((value, label), &w) in options.iter().zip(widths.iter()) {
                         let selected = *value == current;
                         let (rect, resp) = ui.allocate_exact_size(
-                            egui::vec2(btn_w, 28.0),
+                            egui::vec2(w, 28.0),
                             egui::Sense::click(),
                         );
                         if selected {
@@ -4137,16 +4284,27 @@ fn step_button(
     label: &str,
     subtitle: &str,
     state: StepState,
+    active_stage: bool,
 ) -> egui::Response {
     let t = crate::theme::Tokens::get(ui.ctx());
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 40.0), egui::Sense::hover());
-    let resp = resp.accessible_name(format!("Step {number}: {label}, {subtitle}"));
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 40.0), egui::Sense::click());
+    let resp = resp
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .accessible_name(format!("Step {number}: {label}, {subtitle}"));
     let painter = ui.painter_at(rect);
-    let bg = t.card;
-    let border = match state {
-        StepState::Current => t.accent,
-        StepState::Failed => t.danger,
-        _ => t.card_border,
+    let bg = if active_stage || resp.hovered() {
+        t.raised
+    } else {
+        t.card
+    };
+    let border = if active_stage {
+        t.accent
+    } else {
+        match state {
+            StepState::Current => t.accent_ink,
+            StepState::Failed => t.danger,
+            _ => t.card_border,
+        }
     };
     painter.rect(
         rect,
@@ -4530,7 +4688,6 @@ fn focus_ring(ui: &egui::Ui, resp: &egui::Response) {
 /// mistake a multi-byte character for one, and spans only ever start and end
 /// on character boundaries.
 fn json_highlight_job(text: &str, t: &crate::theme::Tokens) -> egui::text::LayoutJob {
-    use egui::text::{LayoutJob, TextFormat};
     let font = egui::FontId::monospace(crate::theme::CODE);
     let mut job = LayoutJob::default();
     let push = |job: &mut LayoutJob, s: &str, color: egui::Color32| {
@@ -4969,34 +5126,36 @@ impl CaptionStudioApp {
             .store(false, std::sync::atomic::Ordering::SeqCst);
         match kind {
             ShotKind::Idle => {
-                self.tab = Tab::Json;
+                self.stage = WorkflowStep::Scan;
+                self.preview_mode = PreviewMode::Original;
             }
             ShotKind::Scanning => {
                 self.input_dir = st.input.to_string_lossy().to_string();
                 self.output_dir = st.out_dir.to_string_lossy().to_string();
-                self.tab = Tab::Preview;
+                self.stage = WorkflowStep::Scan;
+                self.preview_mode = PreviewMode::Original;
                 self.start_extract();
             }
             ShotKind::PreviewRenderedFit => {
-                self.tab = Tab::Preview;
+                self.stage = WorkflowStep::Review;
                 self.preview_mode = PreviewMode::Rendered;
                 self.preview_file = self.file_names().first().cloned().unwrap_or_default();
                 self.preview_key.clear();
             }
             ShotKind::PreviewOcrBoxes => {
-                self.tab = Tab::Preview;
+                self.stage = WorkflowStep::Review;
                 self.preview_mode = PreviewMode::Ocr;
                 self.preview_file = self.file_names().first().cloned().unwrap_or_default();
                 self.preview_key.clear();
             }
             ShotKind::PreviewOriginal => {
-                self.tab = Tab::Preview;
+                self.stage = WorkflowStep::Review;
                 self.preview_mode = PreviewMode::Original;
                 self.preview_file = self.file_names().first().cloned().unwrap_or_default();
                 self.preview_key.clear();
             }
             ShotKind::Preview100Pct => {
-                self.tab = Tab::Preview;
+                self.stage = WorkflowStep::Review;
                 self.preview_mode = PreviewMode::Rendered;
                 self.preview_zoom_fit = false;
                 self.preview_zoom = 1.0;
@@ -5004,21 +5163,19 @@ impl CaptionStudioApp {
                 self.preview_key.clear();
             }
             ShotKind::PreviewZoomedPan => {
-                self.tab = Tab::Preview;
+                self.stage = WorkflowStep::Review;
                 self.preview_mode = PreviewMode::Rendered;
                 self.preview_zoom_fit = false;
                 self.preview_zoom = 2.0;
-                // Deliberately far off-stage; the per-frame clamp pulls it
-                // back to the stage edge, which is what this shot verifies.
                 self.preview_pan = egui::vec2(5000.0, 5000.0);
                 self.preview_file = self.file_names().first().cloned().unwrap_or_default();
                 self.preview_key.clear();
             }
             ShotKind::JsonTab => {
-                self.tab = Tab::Json;
+                self.stage = WorkflowStep::Translate;
             }
             ShotKind::InspectorBlocks => {
-                self.tab = Tab::Preview;
+                self.stage = WorkflowStep::Review;
                 self.preview_mode = PreviewMode::Rendered;
                 if let Some((file, id)) = self.first_block() {
                     self.preview_file = file;
@@ -5027,11 +5184,9 @@ impl CaptionStudioApp {
                 }
             }
             ShotKind::InspectorFiltered => {
-                self.tab = Tab::Preview;
+                self.stage = WorkflowStep::Review;
                 self.preview_mode = PreviewMode::Rendered;
                 if let Some((file, id)) = self.first_block() {
-                    // Filter out the first block so its card (and the dashed
-                    // orange diagnostic) show; restored in cleanup.
                     if let Some(data) = self.extracted.as_mut() {
                         if let Some(entry) = data.images.iter_mut().find(|e| e.file == file) {
                             if let Some(blk) = entry.blocks.iter_mut().find(|b| b.id == id) {
@@ -5046,17 +5201,17 @@ impl CaptionStudioApp {
                 }
             }
             ShotKind::ModalPaste => {
-                self.tab = Tab::Json;
+                self.stage = WorkflowStep::Translate;
                 self.paste_text = "{\n  \"example.jpg\": {\n    \"1\": \"Translated caption here\",\n    \"2\": \"\"\n  }\n}"
                     .to_string();
                 self.show_paste_modal = true;
             }
             ShotKind::ModalBulkEdit => {
-                self.tab = Tab::Json;
+                self.stage = WorkflowStep::Translate;
                 self.show_bulk_edit = true;
             }
             ShotKind::ModalImportReport => {
-                self.tab = Tab::Json;
+                self.stage = WorkflowStep::Translate;
                 let report = if st.import_warnings.is_empty() {
                     vec![
                         "meme_1.jpg: skipped block #4 (not in scan).".to_string(),
@@ -5068,31 +5223,28 @@ impl CaptionStudioApp {
                 self.import_report = Some(report);
             }
             ShotKind::ModalNothingTranslated => {
-                self.tab = Tab::Preview;
+                self.stage = WorkflowStep::Review;
                 self.confirm_copy_originals = true;
             }
             ShotKind::SizingPopup => {
-                // The popup is opened by the sidebar hook (it needs the
-                // sizing button's response id, which only exists while the
-                // sidebar is drawn).
-                self.tab = Tab::Preview;
+                self.stage = WorkflowStep::Review;
             }
             ShotKind::RenderDone => {
-                self.tab = Tab::Preview;
+                self.stage = WorkflowStep::Render;
                 self.preview_mode = PreviewMode::Rendered;
                 self.stage_render_summary(false);
             }
             ShotKind::RenderFailed => {
-                self.tab = Tab::Preview;
+                self.stage = WorkflowStep::Render;
                 self.preview_mode = PreviewMode::Rendered;
                 self.stage_render_summary(true);
             }
             ShotKind::LogClosed => {
-                self.tab = Tab::Preview;
+                self.stage = WorkflowStep::Review;
                 self.show_log = false;
             }
             ShotKind::EmptyImage => {
-                self.tab = Tab::Preview;
+                self.stage = WorkflowStep::Review;
                 self.preview_mode = PreviewMode::Rendered;
                 self.stage_empty_image(st);
             }
