@@ -543,7 +543,7 @@ pub fn render_entry(
         if !blk.kept() {
             continue;
         }
-        let [x1, y1, _x2, y2] = blk.bbox;
+        let [x1, y1, x2, y2] = blk.bbox;
         let line_bboxes = if blk.line_bboxes.is_empty() {
             vec![blk.bbox]
         } else {
@@ -998,7 +998,7 @@ pub fn render_ocr_diagnostic(
     // the highlight is drawn last so its tag sits on top. The tag is only
     // collected here; all tags are placed (de-collided) and drawn together
     // after every box, so a tag never covers another tag or its own box.
-    let draw_block =
+    let mut draw_block =
         |pixmap: &mut Pixmap,
          blk: &crate::model::Block,
          stroke: [u8; 4],

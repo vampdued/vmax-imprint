@@ -1,4 +1,4 @@
-﻿//! Redesign layout (SPEC §3) — header (brand + 4-step stepper + the one
+//! Redesign layout (SPEC §3) — header (brand + 4-step stepper + the one
 //! primary) / sidebar 316px (folders & font, OCR threshold tuning,
 //! Project) / workspace (tabbed: Translation JSON editor and Live Preview
 //! & OCR Check — Rendered / OCR Boxes / Original) / inspector 380px
@@ -1132,85 +1132,83 @@ impl CaptionStudioApp {
         };
         ui.painter()
             .rect_stroke(rect, t.radius_sm, stroke, egui::StrokeKind::Inside);
-        // Exact vertical centering for the 44px thumbnail inside the 68px row:
-        // (68 - 44) / 2 = 12px top and bottom margin, 10px left margin, and
-        // 14px right margin so status chips never collide with the selection stroke.
-        let inner_rect = egui::Rect::from_min_max(
+        // Paint the 44×44 thumbnail at exact 12px top/bottom margins inside the
+        // 68px row ((68 - 44) / 2 = 12px) and 10px left margin so alignment
+        // never shifts from nested layout padding.
+        let thumb_cell = egui::Rect::from_min_size(
             egui::pos2(rect.min.x + 10.0, rect.min.y + 12.0),
-            egui::pos2(rect.max.x - 14.0, rect.max.y - 12.0),
+            egui::vec2(44.0, 44.0),
         );
-        let mut child = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(inner_rect)
-                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        ui.painter().rect(
+            thumb_cell,
+            4.0,
+            t.field,
+            egui::Stroke::new(1.0, t.card_border),
+            egui::StrokeKind::Inside,
         );
-        child.horizontal(|ui| {
-            // Thumbnail: 44x44 cell vertically centered at y = rect.min.y + 12..56.
-            let (cell, _) = ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::hover());
-            if let Some(tex) = self.thumb_texture(ui.ctx(), name, budget) {
-                let (tw, th) = (tex.size()[0] as f32, tex.size()[1] as f32);
-                let img_rect = egui::Rect::from_center_size(cell.center(), egui::vec2(tw, th));
-                ui.painter().image(
-                    tex.id(),
-                    img_rect,
-                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
-                    egui::Color32::WHITE,
-                );
-            } else {
-                ui.painter().rect_filled(cell, 4.0, t.raised);
-            }
-            ui.add_space(6.0);
-            let text_col_w = ui.available_width().max(24.0);
-            ui.allocate_ui_with_layout(
-                egui::vec2(text_col_w, 44.0),
-                egui::Layout::top_down(egui::Align::LEFT),
-                |ui| {
-                    // Single-pass middle truncation (`middle_ellipsis`) with
-                    // `.wrap_mode(TextWrapMode::Extend)` so egui never applies a
-                    // second `.truncate()` pass that produces double ellipses.
-                    let shown = middle_ellipsis(ui, name, text_col_w);
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(shown)
-                                .size(crate::theme::LABEL)
-                                .color(t.text),
-                        )
-                        .wrap_mode(egui::TextWrapMode::Extend)
-                        .selectable(false)
-                        .sense(egui::Sense::hover()),
-                    );
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(format!("{blocks} blocks"))
-                                    .size(crate::theme::CAPTION)
-                                    .color(t.text_dim),
-                            )
-                            .selectable(false)
-                            .sense(egui::Sense::hover()),
-                        );
-                        if let Some(s) = status {
-                            let color = match s {
-                                FileStatus::Rendered => t.ok,
-                                FileStatus::NoText => t.warning,
-                                FileStatus::Failed => t.danger,
-                                FileStatus::Untranslated => t.text_dim,
-                                FileStatus::Ready => t.accent_ink,
-                            };
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    status_chip(ui, file_status_label(s), color);
-                                },
-                            );
-                        }
-                    });
-                },
+        if let Some(tex) = self.thumb_texture(ui.ctx(), name, budget) {
+            let (tw, th) = (tex.size()[0] as f32, tex.size()[1] as f32);
+            let img_rect = egui::Rect::from_center_size(thumb_cell.center(), egui::vec2(tw, th));
+            ui.painter().image(
+                tex.id(),
+                img_rect,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+                egui::Color32::WHITE,
             );
-        });
-        let resp = resp.on_hover_text(name);
-        let _ = resp;
+        }
+
+        // Text column spans the exact same 44px vertical band with 14px right
+        // margin so the status chip never touches the selection stroke.
+        let text_left = thumb_cell.max.x + 10.0;
+        let text_right = (rect.max.x - 14.0).max(text_left + 24.0);
+        let text_w = text_right - text_left;
+        let shown = middle_ellipsis(ui, name, text_w);
+        ui.painter().text(
+            egui::pos2(text_left, rect.min.y + 21.0),
+            egui::Align2::LEFT_CENTER,
+            shown,
+            crate::theme::medium(crate::theme::LABEL),
+            t.text,
+        );
+        let block_word = if blocks == 1 { "block" } else { "blocks" };
+        ui.painter().text(
+            egui::pos2(text_left, rect.min.y + 45.0),
+            egui::Align2::LEFT_CENTER,
+            format!("{blocks} {block_word}"),
+            egui::FontId::proportional(crate::theme::CAPTION),
+            t.text_dim,
+        );
+        if let Some(st_val) = status {
+            let color = match st_val {
+                FileStatus::Rendered => t.ok,
+                FileStatus::NoText => t.warning,
+                FileStatus::Failed => t.danger,
+                FileStatus::Untranslated => t.text_dim,
+                FileStatus::Ready => t.accent_ink,
+            };
+            let label = file_status_label(st_val);
+            let chip_font = crate::theme::medium(crate::theme::CAPTION);
+            let text_galley_w = ui.ctx().fonts_mut(|f| {
+                f.layout_no_wrap(label.to_string(), chip_font.clone(), color)
+                    .size()
+                    .x
+            });
+            let chip_w = (text_galley_w + 14.0).ceil();
+            let chip_rect = egui::Rect::from_min_size(
+                egui::pos2(text_right - chip_w, rect.min.y + 35.0),
+                egui::vec2(chip_w, 20.0),
+            );
+            ui.painter()
+                .rect_filled(chip_rect, egui::CornerRadius::same(4), color.linear_multiply(0.16));
+            ui.painter().text(
+                chip_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                label,
+                chip_font,
+                color,
+            );
+        }
+        let _ = resp.on_hover_text(name);
         clicked
     }
 
@@ -1345,30 +1343,16 @@ impl CaptionStudioApp {
                 .inner_margin(egui::Margin::same(12));
             frame.show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    // Title: "Block #n" + conf. Green at/above the conf
-                    // threshold (it passes); amber below it.
-                    let mut job = LayoutJob::default();
-                    job.append(
-                        &format!("Block #{} ", blk.id),
-                        0.0,
-                        TextFormat {
-                            font_id: egui::FontId::proportional(crate::theme::CARD),
-                            color: t.text,
-                            ..Default::default()
-                        },
+                ui.horizontal_centered(|ui| {
+                    let title_resp = ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(format!("Block #{}", blk.id))
+                                .font(crate::theme::semibold(crate::theme::BODY))
+                                .color(if selected { t.accent_ink } else { t.text }),
+                        )
+                        .selectable(false)
+                        .sense(egui::Sense::click()),
                     );
-                    let conf_col = if blk.confidence >= self.safe_conf() {
-                        t.ok
-                    } else {
-                        t.warning
-                    };
-                    job.append(
-                        &format!("{:.2}", blk.confidence),
-                        0.0,
-                        TextFormat { font_id: mono.clone(), color: conf_col, ..Default::default() },
-                    );
-                    let title_resp = ui.selectable_label(selected, job);
                     focus_ring(ui, &title_resp);
                     if selected && self.blocks_scroll_to_selected {
                         title_resp.scroll_to_me(Some(egui::Align::Center));
@@ -1378,6 +1362,16 @@ impl CaptionStudioApp {
                         self.selected_block = Some(blk.id);
                         self.preview_key.clear();
                     }
+                    let conf_col = if blk.confidence >= self.safe_conf() {
+                        t.ok
+                    } else {
+                        t.warning
+                    };
+                    ui.label(
+                        egui::RichText::new(format!("{:.2}", blk.confidence))
+                            .font(mono.clone())
+                            .color(conf_col),
+                    );
                     let (chip, col) = if blk.kept() {
                         ("Kept", t.ok)
                     } else {
@@ -1386,15 +1380,13 @@ impl CaptionStudioApp {
                     status_chip(ui, chip, col);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if blk.kept() {
-                            let resp = ui
-                                .small_button("Filter out")
+                            let resp = small_action_button(ui, "Filter out")
                                 .on_hover_text("Exclude this block from the render — the original text stays in the image. Reversible.");
                             if resp.clicked() {
                                 self.set_block_override(&file, blk.id, false);
                             }
                         } else {
-                            let resp = ui
-                                .small_button("Keep")
+                            let resp = small_action_button(ui, "Keep")
                                 .on_hover_text("Render this block again with its translation.");
                             if resp.clicked() {
                                 self.set_block_override(&file, blk.id, true);
@@ -1410,10 +1402,14 @@ impl CaptionStudioApp {
                         .color(t.text_dim),
                 );
                 ui.add_space(4.0);
-                // The translation, editable — disabled while the block is
-                // filtered out (it won't render, so there is nothing to
-                // translate); the Keep button re-enables it.
-                let mut text = blk.new_text.clone();
+                // Show an empty field with "Translation…" placeholder whenever
+                // new_text is empty or still equals the original OCR text, so
+                // untranslated blocks are immediately obvious.
+                let mut text = if blk.new_text.trim() == blk.original_text.trim() {
+                    String::new()
+                } else {
+                    blk.new_text.clone()
+                };
                 ui.add_enabled_ui(blk.kept(), |ui| {
                     let resp = egui::TextEdit::multiline(&mut text)
                         .hint_text("Translation…")
@@ -1468,10 +1464,10 @@ impl CaptionStudioApp {
                 .inner_margin(egui::Margin::same(12));
             frame.show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
+                ui.horizontal_centered(|ui| {
                     ui.label(
                         egui::RichText::new(format!("Filtered #{}", drop_idx + 1))
-                            .font(egui::FontId::proportional(crate::theme::CARD))
+                            .font(crate::theme::semibold(crate::theme::BODY))
                             .color(t.text_dim),
                     );
                     status_chip(ui, "Filtered", t.warning);
@@ -1480,10 +1476,8 @@ impl CaptionStudioApp {
                         // old captions.json without them disables it.
                         let promotable = !entry.raw_lines.is_empty();
                         let resp = ui
-                            .add_enabled(
-                                promotable,
-                                egui::Button::new("Keep").small(),
-                            )
+                            .add_enabled_ui(promotable, |ui| small_action_button(ui, "Keep"))
+                            .inner
                             .on_hover_text(if promotable {
                                 "Keep this text — it becomes a block you can translate."
                             } else {
@@ -2250,7 +2244,7 @@ impl eframe::App for CaptionStudioApp {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             // When the log panel is hidden, the bar offers it
                             // back (the X in the log header hides it).
-                            if !self.show_log && ui.small_button("Show log").clicked() {
+                            if !self.show_log && small_action_button(ui, "Show log").clicked() {
                                 self.show_log = true;
                                 self.save_settings();
                             }
@@ -2385,56 +2379,53 @@ impl eframe::App for CaptionStudioApp {
                         if handle.drag_stopped() {
                             self.save_settings();
                         }
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new("ACTIVITY")
-                                    .font(crate::theme::display(13.0))
-                                    .color(t.accent_ink),
-                            );
-                            // Filters with counts (warnings = warn + error lines).
-                            let total = self.log_lines.len();
-                            let warnings = self
-                                .log_lines
-                                .iter()
-                                .filter(|l| l.level != LogLevel::Info)
-                                .count();
-                            let all_label = format!("All ({total})");
-                            // The count covers warnings AND errors, so the
-                            // label says so instead of "Warnings".
-                            let warn_label = format!("Warnings & errors ({warnings})");
-                            if let Some(f) = segmented(
-                                ui,
-                                self.log_filter,
-                                &[
-                                    (LogFilter::All, all_label.as_str()),
-                                    (LogFilter::Warnings, warn_label.as_str()),
-                                ],
-                            ) {
-                                self.log_filter = f;
-                            }
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    // Close hides the panel (the status bar brings
-                                    // it back); first in a right-to-left row, so it
-                                    // sits at the far right.
-                                    if icon_text_button(ui, "x", "Close").clicked() {
-                                        self.show_log = false;
-                                        self.save_settings();
-                                    }
-                                    // Stop is only meaningful while a job runs — it stays
-                                    // disabled at idle so its state tells the truth.
-                                    ui.add_enabled_ui(self.busy, |ui| {
-                                        if icon_text_button(ui, "octagon-x", "Stop").clicked() {
-                                            self.cancel.store(true, Ordering::SeqCst);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), 32.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.label(
+                                    egui::RichText::new("ACTIVITY")
+                                        .font(crate::theme::display(13.0))
+                                        .color(t.accent_ink),
+                                );
+                                ui.add_space(4.0);
+                                let total = self.log_lines.len();
+                                let warnings = self
+                                    .log_lines
+                                    .iter()
+                                    .filter(|l| l.level != LogLevel::Info)
+                                    .count();
+                                let all_label = format!("All ({total})");
+                                let warn_label = format!("Warnings & errors ({warnings})");
+                                if let Some(f) = segmented(
+                                    ui,
+                                    self.log_filter,
+                                    &[
+                                        (LogFilter::All, all_label.as_str()),
+                                        (LogFilter::Warnings, warn_label.as_str()),
+                                    ],
+                                ) {
+                                    self.log_filter = f;
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if icon_text_button(ui, "x", "Close").clicked() {
+                                            self.show_log = false;
+                                            self.save_settings();
                                         }
-                                    });
-                                    if icon_text_button(ui, "copy", "Copy log").clicked() {
-                                        self.copy_log();
-                                    }
-                                },
-                            );
-                        });
+                                        ui.add_enabled_ui(self.busy, |ui| {
+                                            if icon_text_button(ui, "octagon-x", "Stop").clicked() {
+                                                self.cancel.store(true, Ordering::SeqCst);
+                                            }
+                                        });
+                                        if icon_text_button(ui, "copy", "Copy log").clicked() {
+                                            self.copy_log();
+                                        }
+                                    },
+                                );
+                            },
+                        );
                         ui.separator();
                         let visible = log_visible(&self.log_lines, self.log_filter);
                         let new_lines = self.log_lines.len() != self.log_len_seen;
@@ -2667,10 +2658,34 @@ impl eframe::App for CaptionStudioApp {
                                         "Font sizing",
                                         crate::theme::LABEL,
                                     ));
-                                    let sizing_btn = ui.add_sized(
-                                        egui::vec2(ui.available_width(), 36.0),
-                                        egui::Button::new(format!("{} ▾", self.sizing.label())),
+                                    let btn_w = ui.available_width();
+                                    let (btn_rect, sizing_btn) = ui.allocate_exact_size(
+                                        egui::vec2(btn_w, 36.0),
+                                        egui::Sense::click(),
                                     );
+                                    let btn_fill = if sizing_btn.hovered() { t.hover } else { t.field };
+                                    ui.painter().rect(
+                                        btn_rect,
+                                        t.r_sm(),
+                                        btn_fill,
+                                        egui::Stroke::new(1.0, t.field_border),
+                                        egui::StrokeKind::Inside,
+                                    );
+                                    ui.painter().text(
+                                        egui::pos2(btn_rect.min.x + 10.0, btn_rect.center().y),
+                                        egui::Align2::LEFT_CENTER,
+                                        self.sizing.label(),
+                                        egui::FontId::proportional(crate::theme::BODY),
+                                        t.text,
+                                    );
+                                    ui.painter().text(
+                                        egui::pos2(btn_rect.max.x - 10.0, btn_rect.center().y),
+                                        egui::Align2::RIGHT_CENTER,
+                                        "▾",
+                                        egui::FontId::proportional(crate::theme::SMALL),
+                                        t.text_dim,
+                                    );
+                                    let sizing_btn = sizing_btn.on_hover_cursor(egui::CursorIcon::PointingHand);
                                     focus_ring(ui, &sizing_btn);
                                     let mut picked: Option<crate::model::SizingMode> = None;
                                     let popup_id = egui::Popup::default_response_id(&sizing_btn);
@@ -2918,15 +2933,18 @@ impl eframe::App for CaptionStudioApp {
             .show(ui, |ui| {
                 ui.add_enabled_ui(!modal_open, |ui| {
                     let t = crate::theme::Tokens::get(ui.ctx());
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("DETECTED BLOCKS")
-                                .font(crate::theme::display(13.0))
-                                .color(t.accent_ink),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let copy_resp = icon_text_button(ui, "copy", "Copy block list");
+                    ui.add_space(2.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), 32.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.label(
+                                egui::RichText::new("DETECTED BLOCKS")
+                                    .font(crate::theme::display(13.0))
+                                    .color(t.accent_ink),
+                            );
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let copy_resp = icon_text_button(ui, "copy", "Copy block list");
                             if copy_resp.clicked() {
                                 match arboard::Clipboard::new()
                                     .and_then(|mut cb| cb.set_text(self.verify_text.clone()))
@@ -2937,9 +2955,10 @@ impl eframe::App for CaptionStudioApp {
                                     }
                                 }
                             }
-                        });
-                    });
-                    ui.add_space(4.0);
+                            });
+                        },
+                    );
+                    ui.add_space(2.0);
                     ui.separator();
                     ui.add_space(4.0);
                     // Block cards (editable translations, Keep/Filter toggles,
@@ -2976,12 +2995,19 @@ impl eframe::App for CaptionStudioApp {
             .frame(egui::Frame::central_panel(ui.style()).fill(canvas))
             .show(ui, |ui| {
             ui.add_enabled_ui(!modal_open, |ui| {
-            ui.horizontal(|ui| {
-                let json_tab = ui.selectable_value(&mut self.tab, Tab::Json, "Translation JSON");
-                focus_ring(ui, &json_tab);
-                let preview_tab = ui.selectable_value(&mut self.tab, Tab::Preview, "Live Preview & OCR Check");
-                focus_ring(ui, &preview_tab);
-            });
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), 32.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 20.0;
+                    if underline_tab(ui, self.tab == Tab::Json, "Translation JSON").clicked() {
+                        self.tab = Tab::Json;
+                    }
+                    if underline_tab(ui, self.tab == Tab::Preview, "Live Preview & OCR Check").clicked() {
+                        self.tab = Tab::Preview;
+                    }
+                },
+            );
             ui.separator();
             match self.tab {
                 Tab::Json => {
@@ -3093,21 +3119,20 @@ impl eframe::App for CaptionStudioApp {
                                 "{}%",
                                 (self.preview_zoom * 100.0).round() as i32
                             );
-                            let mode_w = segmented_button_width(
+                            let mode_btn_w = segmented_button_width(
                                 ui,
                                 &["Original", "Detected boxes", "Rendered"],
-                            ) * 3.0
-                                + 14.0;
+                            );
+                            let mode_w = mode_btn_w * 3.0 + 10.0;
                             let zoom_seg_w = segmented_button_width(
                                 ui,
                                 &["Fit view", zoom_pct.as_str()],
                             ) * 2.0
-                                + 10.0;
-                            let zoom_cluster_w = 32.0 + 4.0 + zoom_seg_w + 4.0 + 32.0;
-                            let right_reserve =
-                                mode_w + 16.0 + zoom_cluster_w + 16.0 + ui.spacing().item_spacing.x * 3.0;
+                                + 4.0;
+                            let zoom_cluster_w = 28.0 + 2.0 + zoom_seg_w + 2.0 + 28.0 + 6.0;
+                            let right_reserve = mode_w + 17.0 + zoom_cluster_w + 20.0;
                             if !self.preview_file.is_empty() {
-                                let name_w = (ui.available_width() - right_reserve).max(0.0);
+                                let name_w = (ui.available_width() - right_reserve).max(40.0);
                                 let shown_name = middle_ellipsis(ui, &self.preview_file, name_w);
                                 ui.add_sized(
                                     egui::vec2(name_w, 32.0),
@@ -3121,31 +3146,36 @@ impl eframe::App for CaptionStudioApp {
                                 )
                                 .on_hover_text(&self.preview_file);
                             }
-                            // Mode + zoom controls in a clean left-to-right sub-layout
-                            // anchored at the right end of the bar so segmented pills
-                            // and zoom buttons never suffer right-to-left order inversion.
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.add_space(12.0);
+                                ui.add_space(8.0);
                                 ui.add_enabled_ui(!names.is_empty(), |ui| {
-                                    // Zoom cluster: [ − ] [ Fit view | 100% ] [ + ]
-                                    if zoom_step_button(ui, "+", "Zoom in").clicked() {
-                                        self.preview_zoom_fit = false;
-                                        self.preview_zoom =
-                                            (self.preview_zoom * 1.25).clamp(0.25, 4.0);
-                                    }
-                                    if let Some(fit) = segmented(
+                                    // Unified zoom capsule: [ − | Fit view | 100% | + ]
+                                    match zoom_capsule(
                                         ui,
                                         self.preview_zoom_fit,
-                                        &[(true, "Fit view"), (false, zoom_pct.as_str())],
+                                        zoom_pct.as_str(),
                                     ) {
-                                        self.preview_zoom_fit = fit;
-                                        self.preview_zoom = 1.0;
-                                        self.preview_pan = egui::Vec2::ZERO;
-                                    }
-                                    if zoom_step_button(ui, "−", "Zoom out").clicked() {
-                                        self.preview_zoom_fit = false;
-                                        self.preview_zoom =
-                                            (self.preview_zoom / 1.25).clamp(0.25, 4.0);
+                                        Some(ZoomAction::Out) => {
+                                            self.preview_zoom_fit = false;
+                                            self.preview_zoom =
+                                                (self.preview_zoom / 1.25).clamp(0.25, 4.0);
+                                        }
+                                        Some(ZoomAction::Fit) => {
+                                            self.preview_zoom_fit = true;
+                                            self.preview_zoom = 1.0;
+                                            self.preview_pan = egui::Vec2::ZERO;
+                                        }
+                                        Some(ZoomAction::Reset100) => {
+                                            self.preview_zoom_fit = false;
+                                            self.preview_zoom = 1.0;
+                                            self.preview_pan = egui::Vec2::ZERO;
+                                        }
+                                        Some(ZoomAction::In) => {
+                                            self.preview_zoom_fit = false;
+                                            self.preview_zoom =
+                                                (self.preview_zoom * 1.25).clamp(0.25, 4.0);
+                                        }
+                                        None => {}
                                     }
                                     ui.add_space(4.0);
                                     let (div, _) = ui.allocate_exact_size(
@@ -3192,20 +3222,24 @@ impl eframe::App for CaptionStudioApp {
                                         // there is text to clear.
                                         let filter_resp = ui
                                             .horizontal(|ui| {
-                                                let filter_resp = ui.add(
+                                                let clear_reserve: f32 = if self.preview_filter.is_empty() {
+                                                    10.0
+                                                } else {
+                                                    38.0
+                                                };
+                                                let filter_resp = ui.add_sized(
+                                                    egui::vec2((250.0f32 - clear_reserve).max(80.0f32), 32.0),
                                                     egui::TextEdit::singleline(
                                                         &mut self.preview_filter,
                                                     )
                                                     .hint_text(format!(
                                                         "Filter {} images…",
                                                         names.len()
-                                                    ))
-                                                    .desired_width(250.0 - 32.0),
+                                                    )),
                                                 );
                                                 focus_ring(ui, &filter_resp);
                                                 if !self.preview_filter.is_empty()
-                                                    && ui
-                                                        .small_button("×")
+                                                    && small_action_button(ui, "×")
                                                         .on_hover_text("Clear filter")
                                                         .clicked()
                                                 {
@@ -3214,6 +3248,7 @@ impl eframe::App for CaptionStudioApp {
                                                 filter_resp
                                             })
                                             .inner;
+                                        ui.add_space(6.0);
                                         let filtered = filter_file_names(&names, &self.preview_filter);
                                         let mut budget = 4;
                                         let mut picked: Option<String> = None;
@@ -3553,20 +3588,166 @@ fn segmented_button_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
     max_text_w + ui.spacing().button_padding.x * 2.0
 }
 
-/// A 32×32 zoom step button (`−` or `+`) styled to match the 32px segmented
-/// capsule track height (`Tokens::field` fill, 1px `Tokens::card_border`, 6px radius).
-fn zoom_step_button(ui: &mut egui::Ui, symbol: &str, tooltip: &str) -> egui::Response {
+#[derive(Clone, Copy)]
+enum ZoomAction {
+    Out,
+    Fit,
+    Reset100,
+    In,
+}
+
+/// Unified `[ − | Fit view | 100% | + ]` zoom capsule inside a single 32px
+/// `Tokens::field` track (`1px` `card_border`, `6px` radius, `2px` padding).
+fn zoom_capsule(ui: &mut egui::Ui, fit: bool, pct_label: &str) -> Option<ZoomAction> {
     let t = crate::theme::Tokens::get(ui.ctx());
-    let btn = egui::Button::new(
-        egui::RichText::new(symbol)
-            .font(crate::theme::semibold(crate::theme::BODY))
-            .color(t.text),
-    )
-    .min_size(egui::vec2(32.0, 32.0))
-    .fill(t.field)
-    .stroke(egui::Stroke::new(1.0, t.card_border))
-    .corner_radius(egui::CornerRadius::same(6));
-    let resp = ui.add(btn).on_hover_text(tooltip);
+    let mut action = None;
+    let seg_w = segmented_button_width(ui, &["Fit view", pct_label]);
+    let inner_w = 28.0 + 2.0 + seg_w + 2.0 + seg_w + 2.0 + 28.0;
+    egui::Frame::new()
+        .fill(t.field)
+        .stroke(egui::Stroke::new(1.0, t.card_border))
+        .corner_radius(egui::CornerRadius::same(6))
+        .inner_margin(egui::Margin::same(2))
+        .show(ui, |ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(inner_w, 28.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    let items: [(ZoomAction, &str, f32, bool, &str); 4] = [
+                        (ZoomAction::Out, "−", 28.0, false, "Zoom out"),
+                        (ZoomAction::Fit, "Fit view", seg_w, fit, "Fit image to stage"),
+                        (ZoomAction::Reset100, pct_label, seg_w, !fit, "Reset zoom to 100%"),
+                        (ZoomAction::In, "+", 28.0, false, "Zoom in"),
+                    ];
+                    for (act, label, w, active, tip) in items {
+                        let (rect, resp) =
+                            ui.allocate_exact_size(egui::vec2(w, 28.0), egui::Sense::click());
+                        if active {
+                            ui.painter().rect_filled(
+                                rect,
+                                egui::CornerRadius::same(4),
+                                t.accent,
+                            );
+                        } else if resp.hovered() {
+                            ui.painter().rect_filled(
+                                rect,
+                                egui::CornerRadius::same(4),
+                                egui::Color32::from_white_alpha(25),
+                            );
+                        }
+                        let col = if active {
+                            egui::Color32::WHITE
+                        } else if resp.hovered() {
+                            t.text
+                        } else {
+                            t.text_dim
+                        };
+                        ui.painter().text(
+                            rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            label,
+                            crate::theme::medium(crate::theme::LABEL),
+                            col,
+                        );
+                        focus_ring(ui, &resp);
+                        if resp.on_hover_text(tip).clicked() {
+                            action = Some(act);
+                        }
+                    }
+                },
+            );
+        });
+    action
+}
+
+/// Clean underline tab for top-level workspace navigation (`Translation JSON`,
+/// `Live Preview & OCR Check`), visually distinct from `segmented` capsules.
+fn underline_tab(ui: &mut egui::Ui, active: bool, label: &str) -> egui::Response {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let font = if active {
+        crate::theme::semibold(crate::theme::LABEL)
+    } else {
+        crate::theme::medium(crate::theme::LABEL)
+    };
+    let text_w = ui.ctx().fonts_mut(|f| {
+        f.layout_no_wrap(label.to_string(), font.clone(), t.text)
+            .size()
+            .x
+    });
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(text_w + 12.0, 32.0),
+        egui::Sense::click(),
+    );
+    let col = if active || resp.hovered() {
+        t.text
+    } else {
+        t.text_dim
+    };
+    ui.painter().text(
+        egui::pos2(rect.center().x, rect.center().y - 1.0),
+        egui::Align2::CENTER_CENTER,
+        label,
+        font,
+        col,
+    );
+    if active {
+        ui.painter().rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(rect.min.x, rect.max.y - 2.0),
+                egui::pos2(rect.max.x, rect.max.y),
+            ),
+            0.0,
+            t.accent,
+        );
+    }
+    focus_ring(ui, &resp);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Unified 24px small action button (`Filter out`, `Keep`, `Show log`, `×`)
+/// with consistent `6px` corner radius, `t.field` fill, `t.field_border`
+/// stroke, and centered `12px` medium text.
+fn small_action_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let font = crate::theme::medium(crate::theme::CAPTION);
+    let text_w = ui.ctx().fonts_mut(|f| {
+        f.layout_no_wrap(label.to_string(), font.clone(), t.text)
+            .size()
+            .x
+    });
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2((text_w + 18.0).max(24.0), 24.0),
+        egui::Sense::click(),
+    );
+    let fill = if !ui.is_enabled() {
+        t.card
+    } else if resp.hovered() {
+        t.hover
+    } else {
+        t.field
+    };
+    ui.painter().rect(
+        rect,
+        t.r(),
+        fill,
+        egui::Stroke::new(1.0, t.field_border),
+        egui::StrokeKind::Inside,
+    );
+    let col = if !ui.is_enabled() {
+        t.text_faint
+    } else if resp.hovered() {
+        t.text
+    } else {
+        t.text_dim
+    };
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        font,
+        col,
+    );
     focus_ring(ui, &resp);
     resp
 }
@@ -3644,27 +3825,24 @@ fn segmented<T: PartialEq + Copy>(
     picked
 }
 
-/// A small status chip (file-list rows): coloured text on a tint of the
-/// same colour.
+/// A small status chip (`20px` tall, `4px` radius, `Align2::CENTER_CENTER`
+/// painted text) so labels like `Kept`, `Filtered`, and `Ready` sit optically
+/// centered inside their tint pill.
 fn status_chip(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
-    let frame = egui::Frame::new()
-        .fill(color.linear_multiply(0.15))
-        .corner_radius(egui::CornerRadius::same(4))
-        .inner_margin(egui::Margin::symmetric(6, 2));
-    frame.show(ui, |ui| {
-        // Not selectable: a selectable label takes click-and-drag sense
-        // and would steal the file-list row's click (same reason as the
-        // row's filename/count labels).
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(text)
-                    .size(crate::theme::CAPTION)
-                    .color(color),
-            )
-            .selectable(false)
-            .sense(egui::Sense::hover()),
-        );
+    let font = crate::theme::medium(crate::theme::CAPTION);
+    let text_w = ui.ctx().fonts_mut(|f| {
+        f.layout_no_wrap(text.to_string(), font.clone(), color)
+            .size()
+            .x
     });
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2((text_w + 14.0).ceil(), 20.0),
+        egui::Sense::hover(),
+    );
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(4), color.linear_multiply(0.16));
+    ui.painter()
+        .text(rect.center(), egui::Align2::CENTER_CENTER, text, font, color);
 }
 
 /// The file-list status chip for one image. Failed wins (the last render
@@ -3692,11 +3870,10 @@ fn file_status(entry: &crate::model::ImageEntry, rendered: bool, failed: bool) -
     if entry.blocks.iter().all(|b| !b.kept()) {
         return FileStatus::NoText;
     }
-    if entry
-        .blocks
-        .iter()
-        .any(|b| b.kept() && b.new_text.trim().is_empty())
-    {
+    if entry.blocks.iter().any(|b| {
+        let nt = b.new_text.trim();
+        b.kept() && (nt.is_empty() || nt == b.original_text.trim())
+    }) {
         return FileStatus::Untranslated;
     }
     FileStatus::Ready
@@ -5290,11 +5467,11 @@ mod tests {
             file_status(&entry(vec![("one", "uno")]), false, false),
             FileStatus::Ready
         );
-        // A translation equal to the original still counts as translated
-        // for the chip (it is not empty); the render copies it unchanged.
+        // A translation equal to the original is still untranslated ("Needs text"),
+        // matching the workflow stepper count.
         assert_eq!(
             file_status(&entry(vec![("one", "one")]), false, false),
-            FileStatus::Ready
+            FileStatus::Untranslated
         );
         // A block the user filtered out needs no translation: the file
         // reads as "no text", not "untranslated".

@@ -473,14 +473,14 @@ pub fn scroll_style() -> egui::style::ScrollStyle {
         active_background_opacity: 0.0,
         interact_background_opacity: 0.0,
         dormant_handle_opacity: SCROLL_THUMB_AT_REST,
-        active_handle_opacity: 0.65,
-        interact_handle_opacity: 0.85,
+        active_handle_opacity: 0.45,
+        interact_handle_opacity: 0.65,
         ..egui::style::ScrollStyle::solid()
     }
 }
 
 /// How opaque a scroll bar's thumb is at rest (over the text colour).
-const SCROLL_THUMB_AT_REST: f32 = 0.5;
+const SCROLL_THUMB_AT_REST: f32 = 0.22;
 
 /// Apply a theme. `roomy` = bigger type, more air (not used here; the app runs compact).
 pub fn apply(ctx: &egui::Context, kind: ThemeKind, roomy: bool) {

@@ -1,8 +1,24 @@
 # Changelog
 
+## 1.2.0 — 2026-11-18 (Unified Component System, Pixel Centering & State Accuracy)
+
+Resolves the remaining alignment, centering, component-mixing, and state-accuracy inconsistencies against the VMAX v1.1 brand kit:
+
+- **Pixel-Exact File List Rows (`fn file_list_row`)**: Directly painted the `44×44` thumbnail at exact `12px` top/bottom margins (`(68 - 44)/2 = 12px`), optically centered `20px` `status_chip` pills via `Align2::CENTER_CENTER`, and enforced a `14px` right margin so chips never crowd the selection border or scrollbar.
+- **Unified Workspace Navigation & Zoom Capsule**: Replaced raw `ui.selectable_value` tabs with clean `underline_tab` navigation (`2px` `#2F5BFF` bottom indicator) and integrated `−` / `+` into one cohesive `[ − | Fit view | 100% | + ]` `32px` capsule track (`zoom_capsule`). Fixed stage toolbar `right_reserve` so filenames use all available space before truncating.
+- **Header & Card Vertical Centering**: Fixed vertical alignment of `ACTIVITY` and `DETECTED BLOCKS` headers inside `32px` centered rows, and aligned `Block #N`, confidence score, `Kept`/`Filtered` chip, and `Filter out`/`Keep` button on one optical center line.
+- **Unified Controls & Quiet Scrollbars**: Replaced all raw `ui.small_button` calls (`Filter out`, `Keep`, `Show log`, `×`) with a standardized `24px` `small_action_button`; left-aligned the `Font sizing` dropdown button with a right-aligned `▾` to match `Input folder`, `Output folder`, and `Custom font`; and softened scrollbar thumb opacity (`0.22` dormant / `0.45` active / `0.65` hover) in `src/theme.rs`.
+- **Accurate Untranslated State**: Updated `file_status()` and the inspector `TextEdit` so blocks whose text still equals the original OCR text accurately show `Needs text` (and an empty `"Translation…"` field) rather than falsely showing `Ready`.
+
 ## 1.1.0 — 2026-11-17 (Full UI, UX Copy, Accessibility, Design System & Pixel Audit Fixes)
 
 Resolves all 27 findings from the comprehensive UI/UX, accessibility, copy, design system, and pixel-level audit:
+
+### v1.3 Visual Deviations & Pixel-Peep Handoff Fixes (`src/ui.rs`)
+- **Defect 1 — Header Primary CTA & Window Control Spacing (`15-sizing-popup.png`, `10-inspector-filtered.png`)**: Upgraded `primary_icon_text_button` to `34px` height (`ControlSize::Medium`), `6px` corner radius, solid `#2F5BFF` fill, `13px` semibold crisp white (`#FFFFFF`) text, `16×16` white icon, and `40px` right margin clearance from native Windows window controls (`— □ ✕`).
+- **Defect 2 — Font Sizing Dropdown Popup (`15-sizing-popup.png`)**: Enforced strictly downward opening (`RectAlign::BOTTOM_START`, `.align_alternatives(&[])`), `100%` opaque `#17181B` (`Tokens::card`) surface with an explicit interior backing fill, `1px` `#2B2E35` border, `16px` soft shadow, and custom `30px`-tall pill-highlighted menu rows (`4px` corner radius, `10px` left padding, `#2F5BFF` active fill, `10%` white hover tint).
+- **Defect 3 — Segmented Controls & Cohesive Zoom Bar (`18-log-closed.png`, `03-preview-rendered-fit.png`)**: Rebuilt `fn segmented` inside a `32px`-tall outer capsule track (`Tokens::field` fill, `1px` `Tokens::card_border`, `6px` corner radius, `2px` inner padding) with `28px`-tall internal pill buttons rounded `4px` on all 4 corners in natural left-to-right order (eliminating right-to-left corner inversion and adjacent border doubling), paired with `32×32` `zoom_step_button` (`−` / `+`) controls.
+- **Defect 4 — File List Row Alignment & Single-Pass Truncation (`18-log-closed.png`)**: Vertically centered the `44×44` thumbnail with exact `12px` top/bottom margins (`(68 - 44)/2 = 12px`), replaced compounded `tail_ellipsis + .truncate()` with single-pass `middle_ellipsis` + `TextWrapMode::Extend` (eliminating double ellipses), and enforced a `14px` right margin for status chips.
 
 ### Critical Fixes
 - **Opaque Modal Surfaces & Full-Viewport Scrim (`11`–`14`)** — Added a full-viewport dim backdrop (`rgba(0,0,0,196)`) and an opaque elevated `modal_frame` (`Order::Foreground`, `t.card` fill, `t.field_border` stroke, deep shadow, inner bordered `t.field` code frames) on all four modals (`Paste translated JSON`, `Bulk edit all JSON`, `Import summary`, and `No translated captions yet`), completely eliminating background log/JSON text bleed-through and `×` close-button collisions with underlying inspector cards.
