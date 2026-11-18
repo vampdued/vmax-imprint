@@ -1,5 +1,5 @@
 @echo off
-REM Caption Studio shot-test: drives the app through every reviewable
+REM VMAX Imprint shot-test (requires: cargo build --release --offline --features shot-test): drives the app through every reviewable
 REM state and saves a PNG per state into the output folder.
 REM
 REM Usage: scripts\shot-test.bat [input-folder] [output-folder] [translated-json]
@@ -37,7 +37,7 @@ if "%JSON%"=="" (
 )
 
 echo ========================================================
-echo Caption Studio Shot Test
+echo VMAX Imprint Shot Test
 echo   EXE:    %EXE%
 echo   INPUT:  %INPUT%
 echo   OUTPUT: %OUTPUT%

@@ -180,6 +180,26 @@ fn log_height_after_drag(height: f32, delta_y: f32) -> Option<f32> {
     }
 }
 
+fn preview_entry_hash(entry: &crate::model::ImageEntry) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    entry.file.hash(&mut h);
+    entry.blocks.len().hash(&mut h);
+    for b in &entry.blocks {
+        b.id.hash(&mut h);
+        b.bbox.hash(&mut h);
+        b.original_text.hash(&mut h);
+        b.new_text.hash(&mut h);
+        b.kept_override.hash(&mut h);
+    }
+    entry.dropped.len().hash(&mut h);
+    for d in &entry.dropped {
+        d.bbox.hash(&mut h);
+        d.text.hash(&mut h);
+    }
+    h.finish()
+}
+
 /// One file's outcome in a render run (for the file-list status chips).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FileOutcome {
@@ -304,7 +324,12 @@ pub struct CaptionStudioApp {
     /// for the user. Clamped to 64–480 while open; dragging the handle
     /// down past 48 closes the panel instead.
     log_height: f32,
+    /// Per-frame / dirty-checked caches to avoid re-running read_dir and
+    /// serde_json multiple times on the same frame.
+    cache_files: std::cell::RefCell<(u64, Vec<String>)>,
+    cache_resolved: std::cell::RefCell<(u64, Option<ExtractedData>)>,
     /// The screenshot test mode (`--shot-test`), if this run is one.
+    #[cfg(feature = "shot-test")]
     shot_test: Option<ShotTest>,
     /// The last save destination (the output folder after a render, the
     /// file after Save captions), shown in the status bar.
@@ -398,6 +423,9 @@ impl CaptionStudioApp {
             log_len_seen: 0,
             show_log: settings.show_log,
             log_height: settings.log_height.clamp(140.0, 420.0),
+            cache_files: std::cell::RefCell::new((u64::MAX, Vec::new())),
+            cache_resolved: std::cell::RefCell::new((u64::MAX, None)),
+            #[cfg(feature = "shot-test")]
             shot_test: None,
             last_save_path: None,
             status: "Choose an input folder, then click 'Scan images'.".to_string(),
@@ -509,14 +537,40 @@ impl CaptionStudioApp {
     /// when it parses, else the scan itself. Shared by the stepper and the
     /// Scan-again edit check so both read the same source the preview does.
     fn resolved_data(&self) -> Option<ExtractedData> {
-        if self.extracted.is_some() {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.extracted.as_ref().map(|d| d.images.len()).hash(&mut h);
+        if let Some(d) = &self.extracted {
+            for img in &d.images {
+                img.file.hash(&mut h);
+                img.blocks.len().hash(&mut h);
+                for b in &img.blocks {
+                    b.id.hash(&mut h);
+                    b.new_text.hash(&mut h);
+                    b.kept_override.hash(&mut h);
+                }
+            }
+        }
+        self.editor_text.hash(&mut h);
+        self.input_dir.hash(&mut h);
+        let key = h.finish();
+        if let Ok(c) = self.cache_resolved.try_borrow() {
+            if c.0 == key {
+                return c.1.clone();
+            }
+        }
+        let val = if self.extracted.is_some() {
             match self.resolve_editor() {
                 Ok((d, _, _)) => Some(d),
                 Err(_) => self.extracted.clone(),
             }
         } else {
             None
+        };
+        if let Ok(mut c) = self.cache_resolved.try_borrow_mut() {
+            *c = (key, val.clone());
         }
+        val
     }
 
     fn workflow_state(&self) -> WorkflowState {
@@ -942,36 +996,6 @@ impl CaptionStudioApp {
                 self.status = "Copied all images' JSON to clipboard — paste it into your AI translator.".into()
             }
             Err(e) => self.status = format!("Couldn't copy to the clipboard ({e}) — try again."),
-        }
-    }
-
-    #[allow(dead_code)]
-    fn save_full_json(&mut self) {
-        let Some(data) = self.extracted.clone() else {
-            self.status = "No data — click 'Scan images' first.".into();
-            return;
-        };
-        if let Some(path) = rfd::FileDialog::new()
-            .set_title("Save captions.json")
-            .set_file_name("captions.json")
-            .add_filter("JSON files", &["json"])
-            .save_file()
-        {
-            match serde_json::to_string_pretty(&data)
-                .map_err(anyhow::Error::from)
-                .and_then(|s| std::fs::write(&path, s).map_err(anyhow::Error::from))
-            {
-                Ok(()) => {
-                    self.last_save_path = Some(path.to_string_lossy().into_owned());
-                    self.status = format!(
-                        "Saved metadata to {}",
-                        path.file_name().unwrap_or_default().to_string_lossy()
-                    );
-                }
-                Err(e) => {
-                    self.status = format!("Couldn't save ({e}) — check the folder and try again.")
-                }
-            }
         }
     }
 
@@ -1597,10 +1621,9 @@ impl CaptionStudioApp {
             .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let blocks_json = serde_json::to_string(&entry.blocks).unwrap_or_default();
-        let dropped_json = serde_json::to_string(&entry.dropped).unwrap_or_default();
+        let entry_hash = preview_entry_hash(&entry);
         let key = format!(
-            "{}|{mtime}|{:?}|{}|{blocks_json}|{dropped_json}|{:?}",
+            "{}|{mtime}|{:?}|{}|{entry_hash:016x}|{:?}",
             img_path.display(),
             self.preview_mode,
             self.font_path,
@@ -1640,6 +1663,31 @@ impl CaptionStudioApp {
     }
 
     fn file_names(&self) -> Vec<String> {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.input_dir.hash(&mut h);
+        self.only_picked_files.hash(&mut h);
+        self.extracted.as_ref().map(|d| d.images.len()).hash(&mut h);
+        if let Some(d) = &self.extracted {
+            for img in &d.images {
+                img.file.hash(&mut h);
+            }
+        }
+        self.editor_text.hash(&mut h);
+        self.extra_files.len().hash(&mut h);
+        for k in self.extra_files.keys() {
+            k.hash(&mut h);
+        }
+        self.excluded_files.len().hash(&mut h);
+        for k in &self.excluded_files {
+            k.hash(&mut h);
+        }
+        let key = h.finish();
+        if let Ok(c) = self.cache_files.try_borrow() {
+            if c.0 == key {
+                return c.1.clone();
+            }
+        }
         let mut names: Vec<String> = Vec::new();
         if let Some(data) = &self.extracted {
             names = data.images.iter().map(|e| e.file.clone()).collect();
@@ -1667,6 +1715,9 @@ impl CaptionStudioApp {
         }
         names.retain(|n| !self.excluded_files.contains(n));
         names.sort_by(|a, b| natural_cmp(a, b));
+        if let Ok(mut c) = self.cache_files.try_borrow_mut() {
+            *c = (key, names.clone());
+        }
         names
     }
 
@@ -2412,6 +2463,7 @@ impl eframe::App for CaptionStudioApp {
 
         // Shot-test mode: drive the state machine before the modals and
         // panels are drawn, so this frame renders the new state.
+        #[cfg(feature = "shot-test")]
         self.shot_test_step(&ctx);
 
         let modal_open = self.confirm_copy_originals
@@ -3281,10 +3333,15 @@ impl eframe::App for CaptionStudioApp {
                                                 if sizing_btn.clicked() {
                                                     self.sizing_menu_open = !self.sizing_menu_open;
                                                 }
+                                                #[cfg(feature = "shot-test")]
                                                 if let Some(st) = self.shot_test.as_ref() {
                                                     self.sizing_menu_open =
                                                         st.is_current(ShotKind::SizingPopup);
                                                 } else if self.busy || modal_open {
+                                                    self.sizing_menu_open = false;
+                                                }
+                                                #[cfg(not(feature = "shot-test"))]
+                                                if self.busy || modal_open {
                                                     self.sizing_menu_open = false;
                                                 }
                                                 if self.sizing_menu_open {
@@ -5325,7 +5382,7 @@ fn json_highlight_job(text: &str, t: &crate::theme::Tokens) -> egui::text::Layou
 /// The VMAX interlock mark as the window/taskbar icon (white on
 /// transparent; the title bar is dark). If the embedded PNG
 /// ever fails to decode, the app still starts, just without an icon.
-static VMAX_ICON_PNG: &[u8] = include_bytes!("../assets/icons/vmax-icon-1024.png");
+static VMAX_ICON_PNG: &[u8] = include_bytes!("../assets/icons/vmax-icon-192.png");
 
 // --- Shot-test mode ---
 // A CLI test mode (`caption-studio --shot-test <input> <output>
@@ -5340,6 +5397,7 @@ static VMAX_ICON_PNG: &[u8] = include_bytes!("../assets/icons/vmax-icon-1024.png
 // folders with the test folders.
 
 /// One screenshot the mode captures, in capture order.
+#[cfg(feature = "shot-test")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShotKind {
     Idle,
@@ -5362,9 +5420,11 @@ enum ShotKind {
     EmptyImage,
 }
 
+#[cfg(feature = "shot-test")]
 impl ShotKind {
-    /// The shots in capture order. 18, not 19: the bulk edit modal shot
-    /// was removed as a duplicate of the full JSON editor.
+    /// The shots in capture order. 19, not 20: the re-scan modal shot
+    /// went with "Scan again" (its modal was removed as a duplicate of
+    /// the header primary), so the shots after it renumbered down by one.
     const ALL: [ShotKind; 18] = [
         ShotKind::Idle,
         ShotKind::Scanning,
@@ -5418,6 +5478,7 @@ impl ShotKind {
     }
 }
 
+#[cfg(feature = "shot-test")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShotPhase {
     /// The shot's state is applied; waiting for textures/thumbnails to
@@ -5431,6 +5492,7 @@ enum ShotPhase {
     WaitingForScan,
 }
 
+#[cfg(feature = "shot-test")]
 struct ShotTest {
     input: std::path::PathBuf,
     out_dir: std::path::PathBuf,
@@ -5455,6 +5517,7 @@ struct ShotTest {
     synthetic_empty: bool,
 }
 
+#[cfg(feature = "shot-test")]
 impl ShotTest {
     fn new(
         input: std::path::PathBuf,
@@ -5490,6 +5553,7 @@ impl ShotTest {
     }
 }
 
+#[cfg(feature = "shot-test")]
 impl CaptionStudioApp {
     /// One step of the shot-test state machine. Called from `ui()` before
     /// the panels are drawn, so the frame renders the new state.
@@ -5988,6 +6052,7 @@ pub fn run_app() -> eframe::Result<()> {
 /// itself through every reviewable state and saving a PNG per state into
 /// `output`. Validates the folders first so a typo fails fast on the
 /// command line instead of opening a window that does nothing.
+#[cfg(feature = "shot-test")]
 pub fn run_shot_test(
     input: std::path::PathBuf,
     output: std::path::PathBuf,
@@ -6186,6 +6251,7 @@ mod tests {
         assert_eq!(pan.y, 200.0);
     }
 
+    #[cfg(feature = "shot-test")]
     #[test]
     fn shot_test_covers_eighteen_named_shots_in_order() {
         assert_eq!(ShotKind::ALL.len(), 18);

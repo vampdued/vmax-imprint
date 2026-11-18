@@ -1,6 +1,6 @@
 [package]
 name = "caption-studio"
-version = "1.8.0"
+version = "1.9.0"
 edition = "2021"
 description = "VMAX Imprint — batch image text extractor, translator & renderer"
 license = "MIT OR Apache-2.0"
@@ -8,6 +8,10 @@ license = "MIT OR Apache-2.0"
 [[bin]]
 name = "caption-studio"
 path = "src/main.rs"
+
+[features]
+default = []
+shot-test = []
 
 [dependencies]
 # GUI: eframe + egui (+ egui_extras for image textures)

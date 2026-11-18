@@ -67,6 +67,7 @@ fn main() -> anyhow::Result<()> {
             eprintln!("wrote {}", out.display());
             Ok(())
         }
+        #[cfg(feature = "shot-test")]
         Some("--shot-test") => {
             let input = args
                 .get(2)
@@ -93,6 +94,10 @@ fn main() -> anyhow::Result<()> {
                 anyhow::bail!("--shot-test: --json needs a file");
             }
             ui::run_shot_test(input, output, json)
+        }
+        #[cfg(not(feature = "shot-test"))]
+        Some("--shot-test") => {
+            anyhow::bail!("--shot-test requires building with `--features shot-test`")
         }
         Some(other) => {
             eprintln!("unknown argument: {other} (see --help)");

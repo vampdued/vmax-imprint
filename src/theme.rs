@@ -197,8 +197,6 @@ const PLEX_FACES: [(&str, f32); 3] = [
 /// title bar). OFL, see `assets/fonts/ChakraPetch-OFL.txt`.
 pub static CHAKRA_PETCH_SEMIBOLD: &[u8] =
     include_bytes!("../assets/fonts/ChakraPetch-SemiBold.ttf");
-pub static CHAKRA_PETCH_MEDIUM: &[u8] = include_bytes!("../assets/fonts/ChakraPetch-Medium.ttf");
-pub static CHAKRA_PETCH_BOLD: &[u8] = include_bytes!("../assets/fonts/ChakraPetch-Bold.ttf");
 
 /// IBM Plex Mono (code, log, JSON, values). OFL, see
 /// `assets/fonts/IBMPlexMono-OFL.txt`.
@@ -225,14 +223,6 @@ pub fn install_fonts(ctx: &egui::Context) {
     fonts.font_data.insert(
         "ChakraPetch".to_owned(),
         Arc::new(FontData::from_static(CHAKRA_PETCH_SEMIBOLD)),
-    );
-    fonts.font_data.insert(
-        "ChakraPetch-Medium".to_owned(),
-        Arc::new(FontData::from_static(CHAKRA_PETCH_MEDIUM)),
-    );
-    fonts.font_data.insert(
-        "ChakraPetch-Bold".to_owned(),
-        Arc::new(FontData::from_static(CHAKRA_PETCH_BOLD)),
     );
 
     fonts.font_data.insert(

@@ -17,23 +17,28 @@ use image::{Rgb, RgbImage};
 /// Dilate a binary mask once with a 5x5 kernel (Python:
 /// `cv2.dilate(mask, ones((5,5)), iterations=1)`).
 pub fn dilate_mask_5x5(mask: &[u8], w: usize, h: usize) -> Vec<u8> {
+    let mut horiz = vec![0u8; w * h];
+    for y in 0..h {
+        let row = y * w;
+        for x in 0..w {
+            let x0 = x.saturating_sub(2);
+            let x1 = (x + 2).min(w - 1);
+            if mask[row + x0..=row + x1].iter().any(|&m| m > 0) {
+                horiz[row + x] = 255;
+            }
+        }
+    }
     let mut out = vec![0u8; w * h];
     for y in 0..h {
+        let y0 = y.saturating_sub(2);
+        let y1 = (y + 2).min(h - 1);
         for x in 0..w {
-            let mut v = 0u8;
-            'scan: for dy in -2i32..=2 {
-                for dx in -2i32..=2 {
-                    let nx = x as i32 + dx;
-                    let ny = y as i32 + dy;
-                    if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
-                        if mask[ny as usize * w + nx as usize] > 0 {
-                            v = 255;
-                            break 'scan;
-                        }
-                    }
+            for ny in y0..=y1 {
+                if horiz[ny * w + x] > 0 {
+                    out[y * w + x] = 255;
+                    break;
                 }
             }
-            out[y * w + x] = v;
         }
     }
     out
