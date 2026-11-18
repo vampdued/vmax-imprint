@@ -272,6 +272,9 @@ pub struct CaptionStudioApp {
     preview_pan: egui::Vec2,
     /// Per-file render outcomes from the last run (file-list status chips).
     /// Cleared when a new run starts or the dataset changes.
+    excluded_files: std::collections::HashSet<String>,
+    extra_files: std::collections::BTreeMap<String, PathBuf>,
+    only_picked_files: bool,
     rendered_files: std::collections::HashSet<String>,
     failed_files: std::collections::HashSet<String>,
     /// 44px file-list thumbnails, decoded lazily as rows appear, capped at
@@ -349,8 +352,8 @@ impl CaptionStudioApp {
 
         let (tx, rx) = unbounded::<WorkerMsg>();
         let app = CaptionStudioApp {
-            input_dir: settings.input,
-            output_dir: settings.output,
+            input_dir: String::new(),
+            output_dir: String::new(),
             font_path: settings.font,
             conf: settings.conf,
             minchars: settings.minchars,
@@ -380,6 +383,9 @@ impl CaptionStudioApp {
             preview_zoom_fit: true,
             preview_zoom: 1.0,
             preview_pan: egui::Vec2::ZERO,
+            excluded_files: std::collections::HashSet::new(),
+            extra_files: std::collections::BTreeMap::new(),
+            only_picked_files: false,
             rendered_files: std::collections::HashSet::new(),
             failed_files: std::collections::HashSet::new(),
             thumbs: std::collections::HashMap::new(),
@@ -450,8 +456,8 @@ impl CaptionStudioApp {
 
     fn save_settings(&self) {
         Settings {
-            input: self.input_dir.clone(),
-            output: self.output_dir.clone(),
+            input: String::new(),
+            output: String::new(),
             font: self.font_path.clone(),
             conf: self.conf.clamp(0.0, 1.0),
             minchars: self.minchars.max(0),
@@ -599,11 +605,172 @@ impl CaptionStudioApp {
             self.output_dir = normalize_display_path(
                 &folder.join("translated_output").to_string_lossy(),
             );
+            self.only_picked_files = false;
+            self.excluded_files.clear();
+            self.extra_files.clear();
             self.extracted = None;
+            self.editor_text.clear();
             self.clear_render_state();
             self.preview_texture = None;
+            self.preview_file.clear();
             self.preview_key.clear();
-            self.save_settings();
+            let count = self.file_names().len();
+            self.status = format!("Loaded folder with {count} image(s). Click 'Scan {count} images' when ready.");
+        }
+    }
+
+    fn add_input_files(&mut self) {
+        if let Some(files) = rfd::FileDialog::new()
+            .set_title("Add Images to Batch")
+            .add_filter("Images", &["jpg", "jpeg", "png", "webp", "bmp"])
+            .pick_files()
+        {
+            self.ingest_paths(files);
+        }
+    }
+
+    fn ingest_paths(&mut self, paths: Vec<PathBuf>) {
+        let mut added = 0usize;
+        for p in paths {
+            if p.is_dir() {
+                self.input_dir = normalize_display_path(&p.to_string_lossy());
+                self.output_dir = normalize_display_path(
+                    &p.join("translated_output").to_string_lossy(),
+                );
+                self.only_picked_files = false;
+                self.excluded_files.clear();
+                self.extra_files.clear();
+                self.extracted = None;
+                self.editor_text.clear();
+                self.clear_render_state();
+                self.preview_texture = None;
+                self.preview_file.clear();
+                self.preview_key.clear();
+                let count = self.file_names().len();
+                self.status = format!("Loaded folder with {count} image(s).");
+                return;
+            } else if p.is_file() && is_image_file(&p) {
+                if self.input_dir.trim().is_empty() {
+                    if let Some(parent) = p.parent() {
+                        self.input_dir = normalize_display_path(&parent.to_string_lossy());
+                        self.output_dir = normalize_display_path(
+                            &parent.join("translated_output").to_string_lossy(),
+                        );
+                        self.only_picked_files = true;
+                    }
+                }
+                if let Some(fname) = p.file_name().map(|s| s.to_string_lossy().into_owned()) {
+                    self.excluded_files.remove(&fname);
+                    self.extra_files.insert(fname.clone(), p);
+                    if self.preview_file.is_empty() {
+                        self.preview_file = fname;
+                    }
+                    added += 1;
+                }
+            }
+        }
+        if added > 0 {
+            self.clear_render_state();
+            self.preview_key.clear();
+            let total = self.file_names().len();
+            self.status = format!("Added {added} image(s) — {total} in batch queue.");
+        }
+    }
+
+    fn remove_file_from_batch(&mut self, name: &str) {
+        if name.is_empty() {
+            return;
+        }
+        self.extra_files.remove(name);
+        self.excluded_files.insert(name.to_string());
+        self.rendered_files.remove(name);
+        self.failed_files.remove(name);
+        if let Some(data) = self.extracted.as_mut() {
+            data.images.retain(|e| e.file != name);
+        }
+        if self.extracted.is_some() {
+            self.sync_editor_from_extracted();
+        }
+        let remaining = self.file_names();
+        if self.preview_file == name {
+            if let Some(first) = remaining.first() {
+                self.set_preview_file(first.clone());
+            } else {
+                self.preview_file.clear();
+                self.preview_texture = None;
+                self.preview_entry = None;
+            }
+        }
+        self.preview_key.clear();
+        self.status = format!(
+            "Removed {name} from batch ({} remaining).",
+            remaining.len()
+        );
+    }
+
+    fn clear_batch_files(&mut self) {
+        self.input_dir.clear();
+        self.output_dir.clear();
+        self.only_picked_files = false;
+        self.excluded_files.clear();
+        self.extra_files.clear();
+        self.extracted = None;
+        self.editor_text.clear();
+        self.preview_file.clear();
+        self.preview_texture = None;
+        self.preview_entry = None;
+        self.preview_key.clear();
+        self.thumbs.clear();
+        self.thumb_order.clear();
+        self.clear_render_state();
+        self.status = "Cleared batch queue. Choose a folder or add images to start.".into();
+    }
+
+    fn resolve_image_path(&self, name: &str) -> PathBuf {
+        if let Some(p) = self.extra_files.get(name) {
+            p.clone()
+        } else {
+            PathBuf::from(self.input_dir.trim()).join(name)
+        }
+    }
+
+    fn active_image_paths(&self) -> Vec<PathBuf> {
+        self.file_names()
+            .into_iter()
+            .map(|n| self.resolve_image_path(&n))
+            .filter(|p| p.is_file())
+            .collect()
+    }
+
+    fn paste_from_clipboard_direct(&mut self) {
+        match arboard::Clipboard::new().and_then(|mut cb| cb.get_text()) {
+            Ok(clip) if !clip.trim().is_empty() => {
+                if let Ok(parsed) = parse_flexible_json_or_dict(clip.trim()) {
+                    if let Some(data) = self.extracted.clone() {
+                        let (merged, warnings, _) = merge_translations(&parsed, &data);
+                        self.extracted = Some(merged);
+                        if !warnings.is_empty() {
+                            self.import_report = Some(warnings);
+                        }
+                    }
+                    self.editor_text = clip;
+                    self.clear_render_state();
+                    self.preview_key.clear();
+                    self.status =
+                        "Applied translated JSON from clipboard. Click 'Review & render' to verify."
+                            .into();
+                } else {
+                    self.paste_text = clip;
+                    self.show_paste_modal = true;
+                    self.status =
+                        "Clipboard text isn't valid JSON yet — review or edit it in the dialog."
+                            .into();
+                }
+            }
+            _ => {
+                self.paste_text.clear();
+                self.show_paste_modal = true;
+            }
         }
     }
 
@@ -780,6 +947,7 @@ impl CaptionStudioApp {
         }
     }
 
+    #[allow(dead_code)]
     fn save_full_json(&mut self) {
         let Some(data) = self.extracted.clone() else {
             self.status = "No data — click 'Scan images' first.".into();
@@ -960,8 +1128,13 @@ impl CaptionStudioApp {
 
     fn start_extract(&mut self) {
         let in_dir = self.input_dir.trim().to_string();
-        if in_dir.is_empty() || !Path::new(&in_dir).is_dir() {
-            self.status = "Select an input folder first.".into();
+        let files = self.active_image_paths();
+        if (in_dir.is_empty() || !Path::new(&in_dir).is_dir()) && files.is_empty() {
+            self.status = "Select an input folder or add images first.".into();
+            return;
+        }
+        if files.is_empty() {
+            self.status = "No images in the batch queue — add images or choose another folder.".into();
             return;
         }
         if !self.ocr_ready {
@@ -982,6 +1155,7 @@ impl CaptionStudioApp {
         std::thread::spawn(move || {
             extract_worker(
                 PathBuf::from(in_dir),
+                files,
                 engine,
                 min_conf,
                 min_chars,
@@ -1117,7 +1291,7 @@ impl CaptionStudioApp {
             return None;
         }
         *budget -= 1;
-        let path = PathBuf::from(self.input_dir.trim()).join(name);
+        let path = self.resolve_image_path(name);
         let tex = crate::image_io::load_image(&path).ok().and_then(|img| {
             let thumb = image::imageops::thumbnail(&img, 44, 44);
             let (w, h) = (thumb.width() as usize, thumb.height() as usize);
@@ -1206,12 +1380,61 @@ impl CaptionStudioApp {
             );
         }
 
+        let show_remove = self.stage == WorkflowStep::Scan;
+        let remove_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.max.x - 30.0, rect.min.y + 10.0),
+            egui::vec2(20.0, 20.0),
+        );
+        let mut removed = false;
+        if show_remove {
+            let rem_resp = ui
+                .interact(
+                    remove_rect,
+                    egui::Id::new(("remove_file_row", name)),
+                    egui::Sense::click(),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text("Remove from batch queue (Delete)");
+            let rem_bg = if rem_resp.hovered() {
+                t.danger.linear_multiply(0.24)
+            } else {
+                t.field
+            };
+            let rem_fg = if rem_resp.hovered() {
+                t.danger
+            } else {
+                t.text_dim
+            };
+            ui.painter().rect(
+                remove_rect,
+                egui::CornerRadius::same(4),
+                rem_bg,
+                egui::Stroke::new(1.0, if rem_resp.hovered() { t.danger } else { t.card_border }),
+                egui::StrokeKind::Inside,
+            );
+            ui.painter().text(
+                remove_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "×",
+                crate::theme::medium(crate::theme::LABEL),
+                rem_fg,
+            );
+            if rem_resp.clicked() {
+                removed = true;
+            }
+        }
+
         // Text column spans the exact same 44px vertical band with 14px right
         // margin so the status chip never touches the selection stroke.
         let text_left = thumb_cell.max.x + 10.0;
         let text_right = (rect.max.x - 14.0).max(text_left + 24.0);
-        let text_w = text_right - text_left;
-        let shown = middle_ellipsis(ui, name, text_w);
+        let title_right = if show_remove {
+            (remove_rect.min.x - 6.0).max(text_left + 24.0)
+        } else {
+            text_right
+        };
+        let title_w = title_right - text_left;
+        let shown = middle_ellipsis(ui, name, title_w);
         ui.painter().text(
             egui::pos2(text_left, rect.min.y + 21.0),
             egui::Align2::LEFT_CENTER,
@@ -1269,7 +1492,12 @@ impl CaptionStudioApp {
             );
         }
         let _ = resp.on_hover_text(name);
-        clicked
+        if removed {
+            self.remove_file_from_batch(name);
+            false
+        } else {
+            clicked
+        }
     }
 
     fn refresh_preview(&mut self, ctx: &egui::Context, data: Option<&crate::model::ExtractedData>) {
@@ -1309,7 +1537,7 @@ impl CaptionStudioApp {
                 folder_files.len(),
                 folder_files.len()
             );
-            let img_path = PathBuf::from(&in_dir).join(&self.preview_file);
+            let img_path = self.resolve_image_path(&self.preview_file);
             let mtime = img_path
                 .metadata()
                 .and_then(|m| m.modified())
@@ -1349,7 +1577,7 @@ impl CaptionStudioApp {
         self.preview_entry = Some(entry.clone());
         self.verify_text = verify_text_for(&entry);
 
-        let img_path = PathBuf::from(&in_dir).join(&entry.file);
+        let img_path = self.resolve_image_path(&entry.file);
         let mtime = img_path
             .metadata()
             .and_then(|m| m.modified())
@@ -1407,7 +1635,7 @@ impl CaptionStudioApp {
             names = data.images.iter().map(|e| e.file.clone()).collect();
         } else {
             let in_dir = self.input_dir.trim();
-            if !in_dir.is_empty() {
+            if !self.only_picked_files && !in_dir.is_empty() {
                 if let Ok(rd) = std::fs::read_dir(in_dir) {
                     for ent in rd.flatten() {
                         let p = ent.path();
@@ -1420,6 +1648,12 @@ impl CaptionStudioApp {
                 }
             }
         }
+        for extra in self.extra_files.keys() {
+            if !names.contains(extra) {
+                names.push(extra.clone());
+            }
+        }
+        names.retain(|n| !self.excluded_files.contains(n));
         names.sort_by(|a, b| natural_cmp(a, b));
         names
     }
@@ -1431,6 +1665,64 @@ impl CaptionStudioApp {
     /// textarea (edits flow into the compact JSON + live preview), and a
     /// fit indicator. Clicking a card's title selects the block (the stage
     /// highlights it); focusing the textarea selects it too.
+    fn show_ocr_thresholds_section(&mut self, ui: &mut egui::Ui) {
+        sidebar_section(ui, "OCR THRESHOLDS", |ui| {
+            ui.label(crate::theme::label_text(
+                "Minimum confidence",
+                crate::theme::LABEL,
+            ));
+            ui.horizontal(|ui| {
+                let slider_w = (ui.available_width() - 52.0).max(60.0);
+                let conf_resp = ui.add_sized(
+                    egui::vec2(slider_w, 28.0),
+                    egui::Slider::new(&mut self.conf, 0.0..=1.0)
+                        .step_by(0.01)
+                        .show_value(false),
+                );
+                focus_ring(ui, &conf_resp);
+                ui.monospace(format!("{:.2}", self.conf));
+                if conf_resp.changed() && self.extracted.is_some() {
+                    self.thresholds_changed_at = Some(std::time::Instant::now());
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(60));
+                }
+            });
+            ui.add_space(4.0);
+            ui.label(crate::theme::label_text(
+                "Min. unboxed text length (chars)",
+                crate::theme::LABEL,
+            ))
+            .on_hover_text("Unboxed text shorter than this character count is filtered out as background noise; boxed captions are kept regardless of length.");
+            ui.horizontal(|ui| {
+                let slider_w = (ui.available_width() - 52.0).max(60.0);
+                let min_resp = ui.add_sized(
+                    egui::vec2(slider_w, 28.0),
+                    egui::Slider::new(&mut self.minchars, 1..=40).show_value(false),
+                );
+                focus_ring(ui, &min_resp);
+                ui.monospace(format!("{}", self.minchars));
+                if min_resp.changed() && self.extracted.is_some() {
+                    self.thresholds_changed_at = Some(std::time::Instant::now());
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(60));
+                }
+            });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if icon_text_button(ui, "rotate-ccw", "Reset defaults").clicked() {
+                    self.conf = crate::model::default_conf();
+                    self.minchars = crate::model::default_minchars();
+                    self.save_settings();
+                    if self.extracted.is_some() {
+                        self.thresholds_changed_at = Some(std::time::Instant::now());
+                        ui.ctx()
+                            .request_repaint_after(std::time::Duration::from_millis(60));
+                    }
+                }
+            });
+        });
+    }
+
     fn show_block_cards(&mut self, ui: &mut egui::Ui, entry: &crate::model::ImageEntry) {
             let t = crate::theme::Tokens::get(ui.ctx());
         let mono = egui::FontId::monospace(crate::theme::CODE);
@@ -1890,6 +2182,7 @@ fn verify_text_for(entry: &crate::model::ImageEntry) -> String {
 
 fn extract_worker(
     input_dir: PathBuf,
+    mut img_files: Vec<PathBuf>,
     engine: Arc<OcrEngine>,
     min_conf: f32,
     min_chars: usize,
@@ -1899,16 +2192,17 @@ fn extract_worker(
     let send = |m: WorkerMsg| {
         let _ = tx.send(m);
     };
-    let mut img_files: Vec<PathBuf> = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(&input_dir) {
-        for ent in rd.flatten() {
-            let p = ent.path();
-            if p.is_file() && is_image_file(&p) {
-                img_files.push(p);
+    if img_files.is_empty() {
+        if let Ok(rd) = std::fs::read_dir(&input_dir) {
+            for ent in rd.flatten() {
+                let p = ent.path();
+                if p.is_file() && is_image_file(&p) {
+                    img_files.push(p);
+                }
             }
         }
+        img_files.sort();
     }
-    img_files.sort();
     if img_files.is_empty() {
         send(WorkerMsg::Status(
             "No supported images found — add .jpg, .png, or .webp files.".into(),
@@ -2071,6 +2365,17 @@ impl eframe::App for CaptionStudioApp {
         let ctx = ui.ctx().clone();
         if ctx.input(|i| i.viewport().close_requested()) {
             self.save_settings();
+        }
+        let dropped: Vec<PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|df| df.path().to_path_buf())
+                .filter(|p| !p.as_os_str().is_empty())
+                .collect()
+        });
+        if !dropped.is_empty() && !self.busy {
+            self.ingest_paths(dropped);
         }
         self.drain_messages();
         if self.busy {
@@ -2459,576 +2764,6 @@ impl eframe::App for CaptionStudioApp {
                 });
             });
 
-        // --- Header (SPEC §3: 60px) ---
-        // Brand (316px, aligned with the sidebar) | the 4-step stepper |
-        // the one primary for the current step. The old title bar lived in
-        // the sidebar; the old Scan/Render primaries lived in Batch Workflow
-        // — both are here now, and there is exactly one primary.
-        egui::Panel::top("header").exact_size(60.0).show(ui, |ui| {
-            ui.add_enabled_ui(!modal_open, |ui| {
-                ui.horizontal_centered(|ui| {
-                    let t = crate::theme::Tokens::get(ui.ctx());
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(316.0, 60.0),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.add(crate::icons::image_sized(
-                                "vmax-mark",
-                                egui::vec2(32.0, 24.0),
-                                t.text,
-                            ));
-                            ui.vertical(|ui| {
-                                ui.label(crate::theme::heading(
-                                    "Caption Studio",
-                                    crate::theme::SECTION,
-                                ));
-                                ui.label(crate::theme::label_text(
-                                    "Batch image translator",
-                                    crate::theme::CAPTION,
-                                ));
-                            });
-                        },
-                    );
-                    ui.separator();
-                    let wf = self.workflow_state();
-                    // The primary reserves ~200px on the right, plus a
-                    // 32px clear of the OS window controls; the four
-                    // steps share the rest. The stepper is a status
-                    // display only — it used to run the step's action on
-                    // click, which duplicated the header primary (Scan /
-                    // Render) and the tabs (Translate / Review), so the
-                    // click handler was removed (round-2 duplicate-button
-                    // unification). Navigation lives in the tabs; the
-                    // action lives in the header primary.
-                    let has_open_out = self.render_summary.is_some();
-                    let right_cta_reserve = if has_open_out { 340.0 } else { 210.0 };
-                    let steps_w = (ui.available_width() - right_cta_reserve - 40.0).max(0.0);
-                    for (i, step) in WorkflowStep::ALL.iter().enumerate() {
-                        if step_button(
-                            ui,
-                            (steps_w / 3.0 - 8.0).max(0.0),
-                            i + 1,
-                            step.label(),
-                            &wf.subtitles[i],
-                            wf.states[i],
-                            self.stage == *step,
-                        )
-                        .clicked()
-                        {
-                            self.stage = *step;
-                            match *step {
-                                WorkflowStep::Scan => {
-                                    self.preview_mode = if self.extracted.is_some() {
-                                        PreviewMode::Ocr
-                                    } else {
-                                        PreviewMode::Original
-                                    };
-                                    self.preview_key.clear();
-                                }
-                                WorkflowStep::Review => {
-                                    self.preview_mode = PreviewMode::Rendered;
-                                    self.preview_key.clear();
-                                }
-                                WorkflowStep::Translate => {}
-                            }
-                        }
-                        ui.add_space(8.0);
-                    }
-                    ui.add_enabled_ui(!self.busy, |ui| {
-                        let (icon, label) = self.header_primary();
-                        if primary_icon_text_button(ui, icon, &label, false).clicked() {
-                            self.run_header_primary();
-                        }
-                        if has_open_out {
-                            ui.add_space(6.0);
-                            if icon_text_button_sized(ui, "folder-open", "Open output", 118.0)
-                                .on_hover_text("Open the rendered output folder")
-                                .clicked()
-                            {
-                                self.open_output_folder();
-                            }
-                        }
-                    });
-                    // 40px right margin clearance from the window's right boundary
-                    // and native OS window controls (— □ ✕).
-                    ui.add_space(40.0);
-                });
-            });
-        });
-
-        // --- Left column (sidebar, SPEC §3: fixed 316px) ---
-        // The title bar moved to the header; the old panel-width persistence
-        // retired with the fixed width (Q: no resizable sidebar in the
-        // redesign — the mockup's columns are fixed).
-        egui::Panel::left("sidebar")
-            .exact_size(316.0)
-            .resizable(false)
-            .show(ui, |ui| {
-                ui.add_enabled_ui(!modal_open, |ui| {
-                    // The three cards scroll: at 1080p (and at 125% scaling,
-                    // where the panel is only ~584 logical px tall) they
-                    // overflow the panel, and without this the Project card —
-                    // Save / Load / Open output — was unreachable.
-                    // The OCR error stays here (it needs the sidebar's room);
-                    // the warm-up line moved to the status bar — it pushed
-                    // the scroll area down ~28px and the PROJECT card off the
-                    // panel while warming up.
-                    if let Some(e) = &self.ocr_error {
-                        ui.colored_label(
-                            crate::theme::Tokens::get(ui.ctx()).danger,
-                            format!("OCR failed to start — restart the app to retry. ({e})"),
-                        );
-                    }
-                    ui.separator();
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        // One unified container for the whole sidebar: the
-                        // three sections share a single frame and one inner
-                        // width, separated by hairlines — the separate boxes
-                        // made the layout feel fragmented.
-                        let t = crate::theme::Tokens::get(ui.ctx());
-                        egui::Frame::new()
-                            .fill(t.card)
-                            .stroke(egui::Stroke::new(1.0, t.card_border))
-                            .corner_radius(egui::CornerRadius::same(t.radius_sm as u8))
-                            .inner_margin(egui::Margin::same(12))
-                            .show(ui, |ui| {
-                                // Source & Output section (SPEC §2): path rows with the tail
-                                // shown + full path on hover, 36px browse buttons; the font
-                                // field stays editable (short values, placeholder for the
-                                // accepted extensions); the sizing select's popup opens
-                                // UPWARD so it never covers the OCR section below (defect 1).
-                                sidebar_section(ui, "SOURCE & OUTPUT", |ui| {
-                                    if path_row(ui, "Input folder", &self.input_dir).clicked() {
-                                        self.browse_input();
-                                    }
-                                    ui.add_space(8.0);
-                                    if path_row(ui, "Output folder", &self.output_dir).clicked() {
-                                        self.browse_output();
-                                    }
-                                    ui.add_space(8.0);
-                                    let font_label = ui
-                                        .label(crate::theme::label_text(
-                                            "Custom font (optional)",
-                                            crate::theme::LABEL,
-                                        ))
-                                        .id;
-                                    ui.horizontal(|ui| {
-                                        let gap = ui.spacing().item_spacing.x;
-                                        let field_w = (ui.available_width() - 36.0 - gap).max(40.0);
-                                        egui::Frame::new()
-                                            .fill(t.field)
-                                            .stroke(egui::Stroke::new(1.0, t.field_border))
-                                            .corner_radius(egui::CornerRadius::same(t.radius_sm as u8))
-                                            .inner_margin(egui::Margin::symmetric(8, 0))
-                                            .show(ui, |ui| {
-                                                ui.allocate_ui_with_layout(
-                                                    egui::vec2(field_w - 16.0, 36.0),
-                                                    egui::Layout::left_to_right(egui::Align::Center),
-                                                    |ui| {
-                                                        let resp = ui
-                                                            .add(
-                                                                egui::TextEdit::singleline(
-                                                                    &mut self.font_path,
-                                                                )
-                                                                .frame(egui::Frame::NONE)
-                                                                .desired_width(field_w - 16.0)
-                                                                .hint_text(".ttf  .otf  .ttc"),
-                                                            )
-                                                            .labelled_by(font_label);
-                                                        focus_ring(ui, &resp);
-                                                        if resp.changed() {
-                                                            self.preview_key.clear();
-                                                            self.save_settings();
-                                                        }
-                                                        let path = self.font_path.clone();
-                                                        if !path.is_empty() {
-                                                            resp.on_hover_text(path);
-                                                        }
-                                                    },
-                                                );
-                                            });
-                                        let browse = crate::icons::button_box_bordered(
-                                            ui,
-                                            "folder",
-                                            36.0,
-                                            false,
-                                            "Browse for font file",
-                                        );
-                                        focus_ring(ui, &browse);
-                                        if browse.clicked() {
-                                            self.browse_font();
-                                        }
-                                    });
-                                    ui.add_space(8.0);
-                                    ui.label(crate::theme::label_text(
-                                        "Font sizing",
-                                        crate::theme::LABEL,
-                                    ));
-                                    let btn_w = ui.available_width();
-                                    let (btn_rect, sizing_btn) = ui.allocate_exact_size(
-                                        egui::vec2(btn_w, 36.0),
-                                        egui::Sense::click(),
-                                    );
-                                    let btn_fill = if sizing_btn.hovered() || self.sizing_menu_open {
-                                        t.hover
-                                    } else {
-                                        t.field
-                                    };
-                                    let btn_border = if self.sizing_menu_open {
-                                        t.accent
-                                    } else {
-                                        t.field_border
-                                    };
-                                    ui.painter().rect(
-                                        btn_rect,
-                                        t.r_sm(),
-                                        btn_fill,
-                                        egui::Stroke::new(1.0, btn_border),
-                                        egui::StrokeKind::Inside,
-                                    );
-                                    ui.painter().text(
-                                        egui::pos2(btn_rect.min.x + 10.0, btn_rect.center().y),
-                                        egui::Align2::LEFT_CENTER,
-                                        self.sizing.label(),
-                                        egui::FontId::proportional(crate::theme::BODY),
-                                        t.text,
-                                    );
-                                    ui.painter().text(
-                                        egui::pos2(btn_rect.max.x - 10.0, btn_rect.center().y),
-                                        egui::Align2::RIGHT_CENTER,
-                                        "▾",
-                                        egui::FontId::proportional(crate::theme::SMALL),
-                                        t.text_dim,
-                                    );
-                                    let sizing_btn = sizing_btn.on_hover_cursor(egui::CursorIcon::PointingHand);
-                                    focus_ring(ui, &sizing_btn);
-                                    if sizing_btn.clicked() {
-                                        self.sizing_menu_open = !self.sizing_menu_open;
-                                    }
-                                    if let Some(st) = self.shot_test.as_ref() {
-                                        self.sizing_menu_open = st.is_current(ShotKind::SizingPopup);
-                                    } else if self.busy || modal_open {
-                                        self.sizing_menu_open = false;
-                                    }
-                                    if self.sizing_menu_open {
-                                        let mut picked: Option<crate::model::SizingMode> = None;
-                                        let menu_w = sizing_btn.rect.width().max(268.0);
-                                        let menu_pos = sizing_btn.rect.left_bottom() + egui::vec2(0.0, 4.0);
-                                        let total_h = 30.0 * 3.0 + 4.0 + 8.0;
-                                        let popup_rect = egui::Rect::from_min_size(
-                                            menu_pos,
-                                            egui::vec2(menu_w, total_h),
-                                        );
-                                        egui::Area::new(egui::Id::new("sizing_dropdown_area"))
-                                            .order(egui::Order::Foreground)
-                                            .fixed_pos(menu_pos)
-                                            .show(ui.ctx(), |ui| {
-                                                let (box_rect, _) = ui.allocate_exact_size(
-                                                    egui::vec2(menu_w, total_h),
-                                                    egui::Sense::hover(),
-                                                );
-                                                ui.painter().rect_filled(
-                                                    box_rect.translate(egui::vec2(0.0, 6.0)).expand(2.0),
-                                                    egui::CornerRadius::same(8),
-                                                    egui::Color32::from_black_alpha(190),
-                                                );
-                                                ui.painter().rect(
-                                                    box_rect,
-                                                    egui::CornerRadius::same(6),
-                                                    egui::Color32::from_rgb(0x17, 0x18, 0x1b),
-                                                    egui::Stroke::new(
-                                                        1.0,
-                                                        egui::Color32::from_rgb(0x2b, 0x2e, 0x35),
-                                                    ),
-                                                    egui::StrokeKind::Inside,
-                                                );
-                                                let row_w = menu_w - 8.0;
-                                                for (idx, mode) in crate::model::SizingMode::all().iter().enumerate() {
-                                                    let selected = self.sizing == *mode;
-                                                    let y_top = box_rect.min.y + 4.0 + idx as f32 * 32.0;
-                                                    let row_rect = egui::Rect::from_min_size(
-                                                        egui::pos2(box_rect.min.x + 4.0, y_top),
-                                                        egui::vec2(row_w, 30.0),
-                                                    );
-                                                    let row_resp = ui
-                                                        .interact(
-                                                            row_rect,
-                                                            egui::Id::new(("sizing_opt", idx)),
-                                                            egui::Sense::click(),
-                                                        )
-                                                        .on_hover_cursor(egui::CursorIcon::PointingHand);
-                                                    if selected {
-                                                        ui.painter().rect_filled(
-                                                            row_rect,
-                                                            egui::CornerRadius::same(4),
-                                                            t.accent,
-                                                        );
-                                                    } else if row_resp.hovered() {
-                                                        ui.painter().rect_filled(
-                                                            row_rect,
-                                                            egui::CornerRadius::same(4),
-                                                            egui::Color32::from_white_alpha(25),
-                                                        );
-                                                    }
-                                                    let text_col = if selected {
-                                                        egui::Color32::WHITE
-                                                    } else if row_resp.hovered() {
-                                                        t.text
-                                                    } else {
-                                                        t.text_dim
-                                                    };
-                                                    ui.painter().text(
-                                                        egui::pos2(
-                                                            row_rect.min.x + 10.0,
-                                                            row_rect.center().y,
-                                                        ),
-                                                        egui::Align2::LEFT_CENTER,
-                                                        mode.label(),
-                                                        crate::theme::medium(crate::theme::LABEL),
-                                                        text_col,
-                                                    );
-                                                    if selected {
-                                                        ui.painter().text(
-                                                            egui::pos2(
-                                                                row_rect.max.x - 10.0,
-                                                                row_rect.center().y,
-                                                            ),
-                                                            egui::Align2::RIGHT_CENTER,
-                                                            "✓",
-                                                            crate::theme::medium(crate::theme::LABEL),
-                                                            egui::Color32::WHITE,
-                                                        );
-                                                    }
-                                                    if row_resp.clicked() {
-                                                        picked = Some(*mode);
-                                                    }
-                                                }
-                                            });
-                                        let press_outside = ui.ctx().input(|i| {
-                                            i.pointer.any_pressed()
-                                                && i.pointer
-                                                    .interact_pos()
-                                                    .map(|pos| {
-                                                        !popup_rect.contains(pos)
-                                                            && !sizing_btn.rect.contains(pos)
-                                                    })
-                                                    .unwrap_or(false)
-                                        });
-                                        if let Some(mode) = picked {
-                                            self.sizing = mode;
-                                            self.sizing_menu_open = false;
-                                            self.save_settings();
-                                            self.preview_key.clear();
-                                        } else if press_outside {
-                                            self.sizing_menu_open = false;
-                                        }
-                                    }
-                                });
-                                ui.add_space(12.0);
-                                ui.separator();
-                                ui.add_space(12.0);
-
-                                // OCR Thresholds section (SPEC §2): always visible; two
-                                // sliders with mono value outputs; dragging schedules a
-                                // debounced (50 ms) instant re-filter — no Apply button
-                                // anymore. Reset restores .60/12.
-                                sidebar_section(ui, "OCR THRESHOLDS", |ui| {
-                                    ui.label(crate::theme::label_text(
-                                        "Minimum confidence",
-                                        crate::theme::LABEL,
-                                    ));
-                                    ui.horizontal(|ui| {
-                                        let slider_w = (ui.available_width() - 52.0).max(60.0);
-                                        let conf_resp = ui.add_sized(
-                                            egui::vec2(slider_w, 28.0),
-                                            egui::Slider::new(&mut self.conf, 0.0..=1.0)
-                                                .step_by(0.01)
-                                                .show_value(false),
-                                        );
-                                        focus_ring(ui, &conf_resp);
-                                        ui.monospace(format!("{:.2}", self.conf));
-                                        if conf_resp.changed() && self.extracted.is_some() {
-                                            self.thresholds_changed_at =
-                                                Some(std::time::Instant::now());
-                                            ui.ctx().request_repaint_after(
-                                                std::time::Duration::from_millis(60),
-                                            );
-                                        }
-                                    });
-                                    ui.add_space(4.0);
-                                    ui.label(crate::theme::label_text(
-                                        "Min. unboxed text length (chars)",
-                                        crate::theme::LABEL,
-                                    ))
-                                    .on_hover_text("Unboxed text shorter than this character count is filtered out as background noise; boxed captions are kept regardless of length.");
-                                    ui.horizontal(|ui| {
-                                        let slider_w = (ui.available_width() - 52.0).max(60.0);
-                                        let min_resp = ui.add_sized(
-                                            egui::vec2(slider_w, 28.0),
-                                            egui::Slider::new(&mut self.minchars, 1..=40)
-                                                .show_value(false),
-                                        );
-                                        focus_ring(ui, &min_resp);
-                                        ui.monospace(format!("{}", self.minchars));
-                                        if min_resp.changed() && self.extracted.is_some() {
-                                            self.thresholds_changed_at =
-                                                Some(std::time::Instant::now());
-                                            ui.ctx().request_repaint_after(
-                                                std::time::Duration::from_millis(60),
-                                            );
-                                        }
-                                    });
-                                    ui.add_space(4.0);
-                                    ui.label(crate::theme::label_text(
-                                        "Changes apply instantly to the preview.",
-                                        crate::theme::CAPTION,
-                                    ));
-                                    ui.add_space(8.0);
-                                    ui.horizontal(|ui| {
-                                        if icon_text_button(ui, "rotate-ccw", "Reset").clicked() {
-                                            self.conf = crate::model::default_conf();
-                                            self.minchars = crate::model::default_minchars();
-                                            self.save_settings();
-                                            if self.extracted.is_some() {
-                                                self.thresholds_changed_at =
-                                                    Some(std::time::Instant::now());
-                                                ui.ctx().request_repaint_after(
-                                                    std::time::Duration::from_millis(60),
-                                                );
-                                            }
-                                        }
-                                        // No "Inspect boxes" here: it only
-                                        // switched the stage to OCR mode and
-                                        // jumped to the Preview tab — exactly
-                                        // what the toolbar's "OCR Boxes" mode
-                                        // already does, so the thresholds
-                                        // section keeps just Reset.
-                                    });
-                                });
-                                ui.add_space(12.0);
-                                ui.separator();
-                                ui.add_space(12.0);
-
-                                // Project section (SPEC §2): project file
-                                // operations only — Save / Load / Open output.
-                                // "Scan again" used to sit here, but it
-                                // duplicated the header primary "Scan images"
-                                // (both visible at once), so it was removed
-                                // outright; re-scanning is the header
-                                // primary's job.
-                                sidebar_section(ui, "PROJECT", |ui| {
-                                    // Save + Load share the first row, each
-                                    // exactly half the inner width — the grid
-                                    // sized buttons to their labels, so the
-                                    // columns drifted apart. Open output takes
-                                    // the second row full-width.
-                                    let gap = ui.spacing().item_spacing.x;
-                                    let half = ((ui.available_width() - gap) / 2.0).max(40.0);
-                                    ui.horizontal(|ui| {
-                                        if icon_text_button_sized(ui, "save", "Save captions", half)
-                                            .clicked()
-                                        {
-                                            self.save_full_json();
-                                        }
-                                        if icon_text_button_sized(
-                                            ui,
-                                            "folder-open",
-                                            "Load captions",
-                                            half,
-                                        )
-                                        .clicked()
-                                        {
-                                            self.load_full_json();
-                                        }
-                                    });
-                                    ui.add_space(8.0);
-                                    if icon_text_button_sized(
-                                        ui,
-                                        "folder-open",
-                                        "Open output",
-                                        ui.available_width(),
-                                    )
-                                    .clicked()
-                                    {
-                                        self.open_output_folder();
-                                    }
-                                });
-                            });
-                    });
-                });
-            });
-
-        // --- Inspector (right column, SPEC §3: fixed 380px) ---
-        // The Detected Blocks list moved out of the Preview tab: the stage
-        // keeps the image full-width and the inspector owns the blocks
-        // (cards, Phase 4 item 13). The JSON tab (item 14) lives in the
-        // central panel.
-        egui::Panel::right("inspector")
-            .exact_size(380.0)
-            .resizable(false)
-            .show(ui, |ui| {
-                ui.add_enabled_ui(!modal_open, |ui| {
-                    let t = crate::theme::Tokens::get(ui.ctx());
-                    ui.add_space(2.0);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(ui.available_width(), 32.0),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.label(
-                                egui::RichText::new("DETECTED BLOCKS")
-                                    .font(crate::theme::display(13.0))
-                                    .color(t.accent_ink),
-                            );
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let copy_resp = icon_text_button(ui, "copy", "Copy block list");
-                            if copy_resp.clicked() {
-                                match arboard::Clipboard::new()
-                                    .and_then(|mut cb| cb.set_text(self.verify_text.clone()))
-                                {
-                                    Ok(()) => self.status = "Block list copied to clipboard.".into(),
-                                    Err(_) => {
-                                        self.status = "Couldn't copy the block list — try again.".into()
-                                    }
-                                }
-                            }
-                            });
-                        },
-                    );
-                    ui.add_space(2.0);
-                    ui.separator();
-                    ui.add_space(4.0);
-                    // Block cards (editable translations, Keep/Filter toggles,
-                    // fit indicator), so a card can be clicked to highlight its
-                    // box. When there is no entry yet (no scan, no JSON), the
-                    // guidance text stays.
-                    let entry = self.preview_entry.clone();
-                    match &entry {
-                        Some(entry) if !entry.blocks.is_empty() || !entry.dropped.is_empty() => {
-                            egui::ScrollArea::vertical()
-                                .scroll_bar_visibility(
-                                    egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded,
-                                )
-                                .show(ui, |ui| {
-                                    self.show_block_cards(ui, entry);
-                                });
-                        }
-                        _ => {
-                            // Render empty-state guidance directly without a ScrollArea so
-                            // no dormant scrollbar thumb appears beside a 1-line sentence.
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&self.verify_text)
-                                        .size(crate::theme::BODY)
-                                        .color(t.text_dim),
-                                )
-                                .selectable(false)
-                                .wrap(),
-                            );
-                        }
-                    }
-                });
-            });
-
         // --- Activity log (bottom row, SPEC §3: 188px) ---
         // Structured table (Phase 5, item 15): newest first, zebra rows,
         // filters All / Warnings with counts, Copy log, Stop (disabled at
@@ -3204,6 +2939,660 @@ impl eframe::App for CaptionStudioApp {
                 });
         }
 
+        // --- Header (SPEC §3: 60px) ---
+        // Brand (316px, aligned with the sidebar) | the 4-step stepper |
+        // the one primary for the current step. The old title bar lived in
+        // the sidebar; the old Scan/Render primaries lived in Batch Workflow
+        // — both are here now, and there is exactly one primary.
+        egui::Panel::top("header").exact_size(60.0).show(ui, |ui| {
+            ui.add_enabled_ui(!modal_open, |ui| {
+                ui.horizontal_centered(|ui| {
+                    let t = crate::theme::Tokens::get(ui.ctx());
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(316.0, 60.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.add(crate::icons::image_sized(
+                                "vmax-mark",
+                                egui::vec2(32.0, 24.0),
+                                t.text,
+                            ));
+                            ui.vertical(|ui| {
+                                ui.label(crate::theme::heading(
+                                    "Caption Studio",
+                                    crate::theme::SECTION,
+                                ));
+                                ui.label(crate::theme::label_text(
+                                    "Batch image translator",
+                                    crate::theme::CAPTION,
+                                ));
+                            });
+                        },
+                    );
+                    ui.separator();
+                    let wf = self.workflow_state();
+                    // The primary reserves ~200px on the right, plus a
+                    // 32px clear of the OS window controls; the four
+                    // steps share the rest. The stepper is a status
+                    // display only — it used to run the step's action on
+                    // click, which duplicated the header primary (Scan /
+                    // Render) and the tabs (Translate / Review), so the
+                    // click handler was removed (round-2 duplicate-button
+                    // unification). Navigation lives in the tabs; the
+                    // action lives in the header primary.
+                    let has_open_out = self.render_summary.is_some();
+                    let right_cta_reserve = if has_open_out { 340.0 } else { 210.0 };
+                    let steps_w = (ui.available_width() - right_cta_reserve - 40.0).max(0.0);
+                    for (i, step) in WorkflowStep::ALL.iter().enumerate() {
+                        if step_button(
+                            ui,
+                            (steps_w / 3.0 - 8.0).max(0.0),
+                            i + 1,
+                            step.label(),
+                            &wf.subtitles[i],
+                            wf.states[i],
+                            self.stage == *step,
+                        )
+                        .clicked()
+                        {
+                            self.stage = *step;
+                            match *step {
+                                WorkflowStep::Scan => {
+                                    self.preview_mode = if self.extracted.is_some() {
+                                        PreviewMode::Ocr
+                                    } else {
+                                        PreviewMode::Original
+                                    };
+                                    self.preview_key.clear();
+                                }
+                                WorkflowStep::Review => {
+                                    self.preview_mode = PreviewMode::Rendered;
+                                    self.preview_key.clear();
+                                }
+                                WorkflowStep::Translate => {}
+                            }
+                        }
+                        ui.add_space(8.0);
+                    }
+                    ui.add_enabled_ui(!self.busy, |ui| {
+                        let (icon, label) = self.header_primary();
+                        if primary_icon_text_button(ui, icon, &label, false).clicked() {
+                            self.run_header_primary();
+                        }
+                        if has_open_out {
+                            ui.add_space(6.0);
+                            if icon_text_button_sized(ui, "folder-open", "Open output", 118.0)
+                                .on_hover_text("Open the rendered output folder")
+                                .clicked()
+                            {
+                                self.open_output_folder();
+                            }
+                        }
+                    });
+                    // 40px right margin clearance from the window's right boundary
+                    // and native OS window controls (— □ ✕).
+                    ui.add_space(40.0);
+                });
+            });
+        });
+
+        // --- Left column (sidebar, SPEC §3: fixed 316px, stage-contextual) ---
+        egui::Panel::left("sidebar")
+            .exact_size(316.0)
+            .resizable(false)
+            .show(ui, |ui| {
+                ui.add_enabled_ui(!modal_open, |ui| {
+                    if let Some(e) = &self.ocr_error {
+                        ui.colored_label(
+                            crate::theme::Tokens::get(ui.ctx()).danger,
+                            format!("OCR failed to start — restart the app to retry. ({e})"),
+                        );
+                    }
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .id_salt("sidebar_scroll")
+                        .scroll_bar_visibility(
+                            egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded,
+                        )
+                        .show(ui, |ui| {
+                            let t = crate::theme::Tokens::get(ui.ctx());
+                            egui::Frame::new()
+                                .fill(t.card)
+                                .stroke(egui::Stroke::new(1.0, t.card_border))
+                                .corner_radius(egui::CornerRadius::same(t.radius_sm as u8))
+                                .inner_margin(egui::Margin::same(12))
+                                .show(ui, |ui| {
+                                    match self.stage {
+                                        WorkflowStep::Scan => {
+                                            sidebar_section(ui, "BATCH FILES", |ui| {
+                                                if path_row(ui, "Input folder", &self.input_dir)
+                                                    .clicked()
+                                                {
+                                                    self.browse_input();
+                                                }
+                                                ui.add_space(8.0);
+                                                let gap = ui.spacing().item_spacing.x;
+                                                let half = ((ui.available_width() - gap) / 2.0)
+                                                    .max(40.0);
+                                                ui.horizontal(|ui| {
+                                                    if icon_text_button_sized(
+                                                        ui,
+                                                        "folder-open",
+                                                        "Add images…",
+                                                        half,
+                                                    )
+                                                    .on_hover_text(
+                                                        "Pick individual image files to add to the batch queue",
+                                                    )
+                                                    .clicked()
+                                                    {
+                                                        self.add_input_files();
+                                                    }
+                                                    if icon_text_button_sized(
+                                                        ui,
+                                                        "x",
+                                                        "Clear list",
+                                                        half,
+                                                    )
+                                                    .on_hover_text(
+                                                        "Clear the current folder and file queue",
+                                                    )
+                                                    .clicked()
+                                                    {
+                                                        self.clear_batch_files();
+                                                    }
+                                                });
+                                                ui.add_space(6.0);
+                                                ui.label(
+                                                    egui::RichText::new(
+                                                        "Click × on any file row (or press Delete) to exclude it from the batch.",
+                                                    )
+                                                    .size(crate::theme::CAPTION)
+                                                    .color(t.text_dim),
+                                                );
+                                            });
+                                            ui.add_space(12.0);
+                                            ui.separator();
+                                            ui.add_space(12.0);
+                                            self.show_ocr_thresholds_section(ui);
+                                        }
+                                        WorkflowStep::Translate => {
+                                            sidebar_section(ui, "TRANSLATION DATA", |ui| {
+                                                let wf = self.workflow_state();
+                                                ui.label(
+                                                    egui::RichText::new(&wf.subtitles[1])
+                                                        .font(crate::theme::semibold(
+                                                            crate::theme::BODY,
+                                                        ))
+                                                        .color(t.text),
+                                                );
+                                                ui.add_space(8.0);
+                                                let full_w = ui.available_width();
+                                                if icon_text_button_sized(
+                                                    ui,
+                                                    "copy",
+                                                    "Copy all JSON for AI",
+                                                    full_w,
+                                                )
+                                                .on_hover_text(
+                                                    "Copy the compact translation map for all scanned images",
+                                                )
+                                                .clicked()
+                                                {
+                                                    self.copy_compact_for_ai();
+                                                }
+                                                ui.add_space(8.0);
+                                                if icon_text_button_sized(
+                                                    ui,
+                                                    "clipboard-paste",
+                                                    "Paste from clipboard",
+                                                    full_w,
+                                                )
+                                                .on_hover_text(
+                                                    "Apply translated JSON directly from your clipboard",
+                                                )
+                                                .clicked()
+                                                {
+                                                    self.paste_from_clipboard_direct();
+                                                }
+                                                ui.add_space(8.0);
+                                                let gap = ui.spacing().item_spacing.x;
+                                                let half = ((ui.available_width() - gap) / 2.0)
+                                                    .max(40.0);
+                                                ui.horizontal(|ui| {
+                                                    if icon_text_button_sized(
+                                                        ui,
+                                                        "folder-open",
+                                                        "Import .json…",
+                                                        half,
+                                                    )
+                                                    .on_hover_text(
+                                                        "Import a translated .json map or captions.json file",
+                                                    )
+                                                    .clicked()
+                                                    {
+                                                        self.load_full_json();
+                                                    }
+                                                    if icon_text_button_sized(
+                                                        ui,
+                                                        "save",
+                                                        "Export .json…",
+                                                        half,
+                                                    )
+                                                    .on_hover_text(
+                                                        "Save the current translation JSON map to disk",
+                                                    )
+                                                    .clicked()
+                                                    {
+                                                        self.save_translated_file();
+                                                    }
+                                                });
+                                            });
+                                            ui.add_space(12.0);
+                                            ui.separator();
+                                            ui.add_space(12.0);
+                                            sidebar_section(ui, "EDITOR SCOPE", |ui| {
+                                                if let Some(all_mode) = segmented(
+                                                    ui,
+                                                    self.translate_all_mode,
+                                                    &[
+                                                        (false, "Selected image"),
+                                                        (true, "All images"),
+                                                    ],
+                                                ) {
+                                                    self.translate_all_mode = all_mode;
+                                                }
+                                                ui.add_space(6.0);
+                                                ui.label(
+                                                    egui::RichText::new(
+                                                        "Edit translations directly in the JSON editor. All changes sync automatically to Review & Render.",
+                                                    )
+                                                    .size(crate::theme::CAPTION)
+                                                    .color(t.text_dim),
+                                                );
+                                            });
+                                        }
+                                        WorkflowStep::Review => {
+                                            sidebar_section(ui, "OUTPUT & TYPOGRAPHY", |ui| {
+                                                if path_row(ui, "Output folder", &self.output_dir)
+                                                    .clicked()
+                                                {
+                                                    self.browse_output();
+                                                }
+                                                ui.add_space(8.0);
+                                                let font_label = ui
+                                                    .label(crate::theme::label_text(
+                                                        "Custom font (optional)",
+                                                        crate::theme::LABEL,
+                                                    ))
+                                                    .id;
+                                                ui.horizontal(|ui| {
+                                                    let gap = ui.spacing().item_spacing.x;
+                                                    let field_w =
+                                                        (ui.available_width() - 36.0 - gap)
+                                                            .max(40.0);
+                                                    egui::Frame::new()
+                                                        .fill(t.field)
+                                                        .stroke(egui::Stroke::new(
+                                                            1.0,
+                                                            t.field_border,
+                                                        ))
+                                                        .corner_radius(egui::CornerRadius::same(
+                                                            t.radius_sm as u8,
+                                                        ))
+                                                        .inner_margin(egui::Margin::symmetric(8, 0))
+                                                        .show(ui, |ui| {
+                                                            ui.allocate_ui_with_layout(
+                                                                egui::vec2(field_w - 16.0, 36.0),
+                                                                egui::Layout::left_to_right(
+                                                                    egui::Align::Center,
+                                                                ),
+                                                                |ui| {
+                                                                    let resp = ui
+                                                                        .add(
+                                                                            egui::TextEdit::singleline(
+                                                                                &mut self.font_path,
+                                                                            )
+                                                                            .frame(egui::Frame::NONE)
+                                                                            .desired_width(
+                                                                                field_w - 16.0,
+                                                                            )
+                                                                            .hint_text(
+                                                                                ".ttf  .otf  .ttc",
+                                                                            ),
+                                                                        )
+                                                                        .labelled_by(font_label);
+                                                                    focus_ring(ui, &resp);
+                                                                    if resp.changed() {
+                                                                        self.preview_key.clear();
+                                                                        self.save_settings();
+                                                                    }
+                                                                    let path =
+                                                                        self.font_path.clone();
+                                                                    if !path.is_empty() {
+                                                                        resp.on_hover_text(path);
+                                                                    }
+                                                                },
+                                                            );
+                                                        });
+                                                    let browse = crate::icons::button_box_bordered(
+                                                        ui,
+                                                        "folder",
+                                                        36.0,
+                                                        false,
+                                                        "Browse for font file",
+                                                    );
+                                                    focus_ring(ui, &browse);
+                                                    if browse.clicked() {
+                                                        self.browse_font();
+                                                    }
+                                                });
+                                                ui.add_space(8.0);
+                                                ui.label(crate::theme::label_text(
+                                                    "Font sizing",
+                                                    crate::theme::LABEL,
+                                                ));
+                                                let btn_w = ui.available_width();
+                                                let (btn_rect, sizing_btn) = ui
+                                                    .allocate_exact_size(
+                                                        egui::vec2(btn_w, 36.0),
+                                                        egui::Sense::click(),
+                                                    );
+                                                let btn_fill = if sizing_btn.hovered()
+                                                    || self.sizing_menu_open
+                                                {
+                                                    t.hover
+                                                } else {
+                                                    t.field
+                                                };
+                                                let btn_border = if self.sizing_menu_open {
+                                                    t.accent
+                                                } else {
+                                                    t.field_border
+                                                };
+                                                ui.painter().rect(
+                                                    btn_rect,
+                                                    t.r_sm(),
+                                                    btn_fill,
+                                                    egui::Stroke::new(1.0, btn_border),
+                                                    egui::StrokeKind::Inside,
+                                                );
+                                                ui.painter().text(
+                                                    egui::pos2(
+                                                        btn_rect.min.x + 10.0,
+                                                        btn_rect.center().y,
+                                                    ),
+                                                    egui::Align2::LEFT_CENTER,
+                                                    self.sizing.label(),
+                                                    egui::FontId::proportional(crate::theme::BODY),
+                                                    t.text,
+                                                );
+                                                ui.painter().text(
+                                                    egui::pos2(
+                                                        btn_rect.max.x - 10.0,
+                                                        btn_rect.center().y,
+                                                    ),
+                                                    egui::Align2::RIGHT_CENTER,
+                                                    "▾",
+                                                    egui::FontId::proportional(crate::theme::SMALL),
+                                                    t.text_dim,
+                                                );
+                                                let sizing_btn = sizing_btn
+                                                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                                                focus_ring(ui, &sizing_btn);
+                                                if sizing_btn.clicked() {
+                                                    self.sizing_menu_open = !self.sizing_menu_open;
+                                                }
+                                                if let Some(st) = self.shot_test.as_ref() {
+                                                    self.sizing_menu_open =
+                                                        st.is_current(ShotKind::SizingPopup);
+                                                } else if self.busy || modal_open {
+                                                    self.sizing_menu_open = false;
+                                                }
+                                                if self.sizing_menu_open {
+                                                    let mut picked: Option<
+                                                        crate::model::SizingMode,
+                                                    > = None;
+                                                    let menu_w = sizing_btn.rect.width().max(268.0);
+                                                    let menu_pos = sizing_btn.rect.left_bottom()
+                                                        + egui::vec2(0.0, 4.0);
+                                                    let total_h = 30.0 * 3.0 + 4.0 + 8.0;
+                                                    let popup_rect = egui::Rect::from_min_size(
+                                                        menu_pos,
+                                                        egui::vec2(menu_w, total_h),
+                                                    );
+                                                    egui::Area::new(egui::Id::new(
+                                                        "sizing_dropdown_area",
+                                                    ))
+                                                    .order(egui::Order::Foreground)
+                                                    .fixed_pos(menu_pos)
+                                                    .show(ui.ctx(), |ui| {
+                                                        let (box_rect, _) = ui.allocate_exact_size(
+                                                            egui::vec2(menu_w, total_h),
+                                                            egui::Sense::hover(),
+                                                        );
+                                                        ui.painter().rect_filled(
+                                                            box_rect
+                                                                .translate(egui::vec2(0.0, 6.0))
+                                                                .expand(2.0),
+                                                            egui::CornerRadius::same(8),
+                                                            egui::Color32::from_black_alpha(190),
+                                                        );
+                                                        ui.painter().rect(
+                                                            box_rect,
+                                                            egui::CornerRadius::same(6),
+                                                            egui::Color32::from_rgb(
+                                                                0x17, 0x18, 0x1b,
+                                                            ),
+                                                            egui::Stroke::new(
+                                                                1.0,
+                                                                egui::Color32::from_rgb(
+                                                                    0x2b, 0x2e, 0x35,
+                                                                ),
+                                                            ),
+                                                            egui::StrokeKind::Inside,
+                                                        );
+                                                        let row_w = menu_w - 8.0;
+                                                        for (idx, mode) in
+                                                            crate::model::SizingMode::all()
+                                                                .iter()
+                                                                .enumerate()
+                                                        {
+                                                            let selected = self.sizing == *mode;
+                                                            let y_top = box_rect.min.y
+                                                                + 4.0
+                                                                + idx as f32 * 32.0;
+                                                            let row_rect =
+                                                                egui::Rect::from_min_size(
+                                                                    egui::pos2(
+                                                                        box_rect.min.x + 4.0,
+                                                                        y_top,
+                                                                    ),
+                                                                    egui::vec2(row_w, 30.0),
+                                                                );
+                                                            let row_resp = ui
+                                                                .interact(
+                                                                    row_rect,
+                                                                    egui::Id::new((
+                                                                        "sizing_opt",
+                                                                        idx,
+                                                                    )),
+                                                                    egui::Sense::click(),
+                                                                )
+                                                                .on_hover_cursor(
+                                                                    egui::CursorIcon::PointingHand,
+                                                                );
+                                                            if selected {
+                                                                ui.painter().rect_filled(
+                                                                    row_rect,
+                                                                    egui::CornerRadius::same(4),
+                                                                    t.accent,
+                                                                );
+                                                            } else if row_resp.hovered() {
+                                                                ui.painter().rect_filled(
+                                                                    row_rect,
+                                                                    egui::CornerRadius::same(4),
+                                                                    egui::Color32::from_white_alpha(
+                                                                        25,
+                                                                    ),
+                                                                );
+                                                            }
+                                                            let text_col = if selected {
+                                                                egui::Color32::WHITE
+                                                            } else if row_resp.hovered() {
+                                                                t.text
+                                                            } else {
+                                                                t.text_dim
+                                                            };
+                                                            ui.painter().text(
+                                                                egui::pos2(
+                                                                    row_rect.min.x + 10.0,
+                                                                    row_rect.center().y,
+                                                                ),
+                                                                egui::Align2::LEFT_CENTER,
+                                                                mode.label(),
+                                                                crate::theme::medium(
+                                                                    crate::theme::LABEL,
+                                                                ),
+                                                                text_col,
+                                                            );
+                                                            if selected {
+                                                                ui.painter().text(
+                                                                    egui::pos2(
+                                                                        row_rect.max.x - 10.0,
+                                                                        row_rect.center().y,
+                                                                    ),
+                                                                    egui::Align2::RIGHT_CENTER,
+                                                                    "✓",
+                                                                    crate::theme::medium(
+                                                                        crate::theme::LABEL,
+                                                                    ),
+                                                                    egui::Color32::WHITE,
+                                                                );
+                                                            }
+                                                            if row_resp.clicked() {
+                                                                picked = Some(*mode);
+                                                            }
+                                                        }
+                                                    });
+                                                    let press_outside = ui.ctx().input(|i| {
+                                                        i.pointer.any_pressed()
+                                                            && i.pointer
+                                                                .interact_pos()
+                                                                .map(|pos| {
+                                                                    !popup_rect.contains(pos)
+                                                                        && !sizing_btn
+                                                                            .rect
+                                                                            .contains(pos)
+                                                                })
+                                                                .unwrap_or(false)
+                                                    });
+                                                    if let Some(mode) = picked {
+                                                        self.sizing = mode;
+                                                        self.sizing_menu_open = false;
+                                                        self.save_settings();
+                                                        self.preview_key.clear();
+                                                    } else if press_outside {
+                                                        self.sizing_menu_open = false;
+                                                    }
+                                                }
+                                                ui.add_space(8.0);
+                                                if icon_text_button_sized(
+                                                    ui,
+                                                    "folder-open",
+                                                    "Open output folder",
+                                                    ui.available_width(),
+                                                )
+                                                .clicked()
+                                                {
+                                                    self.open_output_folder();
+                                                }
+                                            });
+                                            ui.add_space(12.0);
+                                            ui.separator();
+                                            ui.add_space(12.0);
+                                            self.show_ocr_thresholds_section(ui);
+                                        }
+                                    }
+                                });
+                        });
+                });
+            });
+
+        // --- Inspector (right column, SPEC §3: fixed 380px, shown only in Stage 3 Review & Render) ---
+        if self.stage == WorkflowStep::Review {
+            egui::Panel::right("inspector")
+                .exact_size(380.0)
+                .resizable(false)
+                .show(ui, |ui| {
+                    ui.add_enabled_ui(!modal_open, |ui| {
+                        let t = crate::theme::Tokens::get(ui.ctx());
+                        ui.add_space(2.0);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), 32.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.label(
+                                    egui::RichText::new("DETECTED BLOCKS")
+                                        .font(crate::theme::display(13.0))
+                                        .color(t.accent_ink),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let copy_resp =
+                                            icon_text_button(ui, "copy", "Copy block list");
+                                        if copy_resp.clicked() {
+                                            match arboard::Clipboard::new().and_then(|mut cb| {
+                                                cb.set_text(self.verify_text.clone())
+                                            }) {
+                                                Ok(()) => {
+                                                    self.status =
+                                                        "Block list copied to clipboard.".into()
+                                                }
+                                                Err(_) => {
+                                                    self.status =
+                                                        "Couldn't copy the block list — try again."
+                                                            .into()
+                                                }
+                                            }
+                                        }
+                                    },
+                                );
+                            },
+                        );
+                        ui.add_space(2.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+                        let entry = self.preview_entry.clone();
+                        match &entry {
+                            Some(entry)
+                                if !entry.blocks.is_empty() || !entry.dropped.is_empty() =>
+                            {
+                                egui::ScrollArea::vertical()
+                                    .scroll_bar_visibility(
+                                        egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded,
+                                    )
+                                    .show(ui, |ui| {
+                                        self.show_block_cards(ui, entry);
+                                    });
+                            }
+                            _ => {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&self.verify_text)
+                                            .size(crate::theme::BODY)
+                                            .color(t.text_dim),
+                                    )
+                                    .selectable(false)
+                                    .wrap(),
+                                );
+                            }
+                        }
+                    });
+                });
+        }
+
         // --- Right column: tabbed workspace ---
         // The central workspace sits on `canvas` (the main reading surface),
         // a step above the chrome panels — this is what the `canvas` token is for.
@@ -3270,19 +3659,31 @@ impl eframe::App for CaptionStudioApp {
                                 "{}%",
                                 (self.preview_zoom * 100.0).round() as i32
                             );
-                            let right_reserve = if self.stage == WorkflowStep::Translate {
-                                680.0
-                            } else {
-                                let mode_w = segmented_total_width(
-                                    ui,
-                                    &["Original", "Detected boxes", "Rendered"],
-                                );
-                                let zoom_seg_w = segmented_total_width(
-                                    ui,
-                                    &["Fit view", zoom_pct.as_str()],
-                                );
-                                let zoom_cluster_w = 28.0 + 2.0 + zoom_seg_w + 2.0 + 28.0;
-                                mode_w + 16.0 + zoom_cluster_w + 20.0
+                            let zoom_seg_w = segmented_total_width(
+                                ui,
+                                &["Fit view", zoom_pct.as_str()],
+                            );
+                            let zoom_cluster_w = 28.0 + 2.0 + zoom_seg_w + 2.0 + 28.0;
+                            let right_reserve = match self.stage {
+                                WorkflowStep::Scan => {
+                                    let scan_modes_w = if self.extracted.is_some() {
+                                        segmented_total_width(
+                                            ui,
+                                            &["Original", "Detected boxes"],
+                                        ) + 12.0
+                                    } else {
+                                        0.0
+                                    };
+                                    240.0 + scan_modes_w + zoom_cluster_w + 20.0
+                                }
+                                WorkflowStep::Translate => 660.0,
+                                WorkflowStep::Review => {
+                                    let mode_w = segmented_total_width(
+                                        ui,
+                                        &["Original", "Detected boxes", "Rendered"],
+                                    );
+                                    mode_w + 16.0 + zoom_cluster_w + 20.0
+                                }
                             };
 
                             if !self.preview_file.is_empty() {
@@ -3305,90 +3706,71 @@ impl eframe::App for CaptionStudioApp {
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
                                     ui.add_space(8.0);
-                                    if self.stage == WorkflowStep::Translate {
-                                        if icon_text_button(ui, "file-json", "Bulk modal…")
-                                            .on_hover_text(
-                                                "Open the full-screen JSON bulk editor modal",
-                                            )
-                                            .clicked()
-                                        {
-                                            if let Some(d) = self.resolve_preview_data() {
-                                                self.editor_text = serde_json::to_string_pretty(
-                                                    &compact_map_from_data(&d),
-                                                )
-                                                .unwrap_or_default();
-                                            }
-                                            self.show_bulk_edit = true;
-                                        }
-                                        if icon_text_button(ui, "folder-open", "Import .json…")
-                                            .on_hover_text(
-                                                "Import a translated .json file directly from disk",
-                                            )
-                                            .clicked()
-                                        {
-                                            self.load_translated_file();
-                                        }
-                                        if icon_text_button(
-                                            ui,
-                                            "clipboard-paste",
-                                            "Paste JSON…",
-                                        )
-                                        .on_hover_text(
-                                            "Paste translated JSON from clipboard or import a .json file",
-                                        )
-                                        .clicked()
-                                        {
-                                            self.show_paste_modal = true;
-                                            self.paste_text.clear();
-                                        }
-                                        if icon_text_button(ui, "copy", "Copy all for AI")
-                                            .on_hover_text(
-                                                "Copy the compact translation map for all scanned images",
-                                            )
-                                            .clicked()
-                                        {
-                                            self.copy_compact_for_ai();
-                                        }
-                                        ui.add_space(4.0);
-                                        if let Some(all_mode) = segmented(
-                                            ui,
-                                            self.translate_all_mode,
-                                            &[
-                                                (false, "Selected image"),
-                                                (true, "All images"),
-                                            ],
-                                        ) {
-                                            self.translate_all_mode = all_mode;
-                                        }
-                                    } else {
-                                        ui.add_enabled_ui(!names.is_empty(), |ui| {
-                                            match zoom_capsule(
-                                                ui,
-                                                self.preview_zoom_fit,
-                                                zoom_pct.as_str(),
-                                            ) {
-                                                Some(ZoomAction::Out) => {
-                                                    self.preview_zoom_fit = false;
-                                                    self.preview_zoom =
-                                                        (self.preview_zoom / 1.25).clamp(0.25, 4.0);
+                                    match self.stage {
+                                        WorkflowStep::Scan => {
+                                            ui.add_enabled_ui(!names.is_empty(), |ui| {
+                                                match zoom_capsule(
+                                                    ui,
+                                                    self.preview_zoom_fit,
+                                                    zoom_pct.as_str(),
+                                                ) {
+                                                    Some(ZoomAction::Out) => {
+                                                        self.preview_zoom_fit = false;
+                                                        self.preview_zoom = (self.preview_zoom
+                                                            / 1.25)
+                                                            .clamp(0.25, 4.0);
+                                                    }
+                                                    Some(ZoomAction::Fit) => {
+                                                        self.preview_zoom_fit = true;
+                                                        self.preview_zoom = 1.0;
+                                                        self.preview_pan = egui::Vec2::ZERO;
+                                                    }
+                                                    Some(ZoomAction::Reset100) => {
+                                                        self.preview_zoom_fit = false;
+                                                        self.preview_zoom = 1.0;
+                                                        self.preview_pan = egui::Vec2::ZERO;
+                                                    }
+                                                    Some(ZoomAction::In) => {
+                                                        self.preview_zoom_fit = false;
+                                                        self.preview_zoom = (self.preview_zoom
+                                                            * 1.25)
+                                                            .clamp(0.25, 4.0);
+                                                    }
+                                                    None => {}
                                                 }
-                                                Some(ZoomAction::Fit) => {
-                                                    self.preview_zoom_fit = true;
-                                                    self.preview_zoom = 1.0;
-                                                    self.preview_pan = egui::Vec2::ZERO;
+                                                if self.extracted.is_some() {
+                                                    ui.add_space(4.0);
+                                                    let (div, _) = ui.allocate_exact_size(
+                                                        egui::vec2(1.0, 18.0),
+                                                        egui::Sense::hover(),
+                                                    );
+                                                    ui.painter()
+                                                        .rect_filled(div, 0.0, t.card_border);
+                                                    ui.add_space(4.0);
+                                                    let scan_mode = if matches!(
+                                                        self.preview_mode,
+                                                        PreviewMode::Ocr
+                                                    ) {
+                                                        PreviewMode::Ocr
+                                                    } else {
+                                                        PreviewMode::Original
+                                                    };
+                                                    if let Some(mode) = segmented(
+                                                        ui,
+                                                        scan_mode,
+                                                        &[
+                                                            (PreviewMode::Original, "Original"),
+                                                            (
+                                                                PreviewMode::Ocr,
+                                                                "Detected boxes",
+                                                            ),
+                                                        ],
+                                                    ) {
+                                                        self.preview_mode = mode;
+                                                        self.preview_key.clear();
+                                                    }
                                                 }
-                                                Some(ZoomAction::Reset100) => {
-                                                    self.preview_zoom_fit = false;
-                                                    self.preview_zoom = 1.0;
-                                                    self.preview_pan = egui::Vec2::ZERO;
-                                                }
-                                                Some(ZoomAction::In) => {
-                                                    self.preview_zoom_fit = false;
-                                                    self.preview_zoom =
-                                                        (self.preview_zoom * 1.25).clamp(0.25, 4.0);
-                                                }
-                                                None => {}
-                                            }
+                                            });
                                             ui.add_space(4.0);
                                             let (div, _) = ui.allocate_exact_size(
                                                 egui::vec2(1.0, 18.0),
@@ -3396,19 +3778,138 @@ impl eframe::App for CaptionStudioApp {
                                             );
                                             ui.painter().rect_filled(div, 0.0, t.card_border);
                                             ui.add_space(4.0);
-                                            if let Some(mode) = segmented(
+                                            ui.add_enabled_ui(
+                                                !self.preview_file.is_empty(),
+                                                |ui| {
+                                                    if icon_text_button(ui, "x", "Remove file")
+                                                        .on_hover_text(
+                                                            "Remove the selected image from the batch queue (Delete)",
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        let cur = self.preview_file.clone();
+                                                        self.remove_file_from_batch(&cur);
+                                                    }
+                                                },
+                                            );
+                                            if icon_text_button(
                                                 ui,
-                                                self.preview_mode,
+                                                "folder-open",
+                                                "Add images…",
+                                            )
+                                            .on_hover_text(
+                                                "Add individual images to the batch queue",
+                                            )
+                                            .clicked()
+                                            {
+                                                self.add_input_files();
+                                            }
+                                        }
+                                        WorkflowStep::Translate => {
+                                            if icon_text_button(ui, "save", "Export .json…")
+                                                .on_hover_text(
+                                                    "Export the translation JSON map to a file",
+                                                )
+                                                .clicked()
+                                            {
+                                                self.save_translated_file();
+                                            }
+                                            if icon_text_button(
+                                                ui,
+                                                "folder-open",
+                                                "Import .json…",
+                                            )
+                                            .on_hover_text(
+                                                "Import a translated .json file directly from disk",
+                                            )
+                                            .clicked()
+                                            {
+                                                self.load_translated_file();
+                                            }
+                                            if icon_text_button(
+                                                ui,
+                                                "clipboard-paste",
+                                                "Paste clipboard",
+                                            )
+                                            .on_hover_text(
+                                                "Apply translated JSON directly from clipboard",
+                                            )
+                                            .clicked()
+                                            {
+                                                self.paste_from_clipboard_direct();
+                                            }
+                                            if icon_text_button(ui, "copy", "Copy all for AI")
+                                                .on_hover_text(
+                                                    "Copy the compact translation map for all scanned images",
+                                                )
+                                                .clicked()
+                                            {
+                                                self.copy_compact_for_ai();
+                                            }
+                                            ui.add_space(4.0);
+                                            if let Some(all_mode) = segmented(
+                                                ui,
+                                                self.translate_all_mode,
                                                 &[
-                                                    (PreviewMode::Original, "Original"),
-                                                    (PreviewMode::Ocr, "Detected boxes"),
-                                                    (PreviewMode::Rendered, "Rendered"),
+                                                    (false, "Selected image"),
+                                                    (true, "All images"),
                                                 ],
                                             ) {
-                                                self.preview_mode = mode;
-                                                self.preview_key.clear();
+                                                self.translate_all_mode = all_mode;
                                             }
-                                        });
+                                        }
+                                        WorkflowStep::Review => {
+                                            ui.add_enabled_ui(!names.is_empty(), |ui| {
+                                                match zoom_capsule(
+                                                    ui,
+                                                    self.preview_zoom_fit,
+                                                    zoom_pct.as_str(),
+                                                ) {
+                                                    Some(ZoomAction::Out) => {
+                                                        self.preview_zoom_fit = false;
+                                                        self.preview_zoom = (self.preview_zoom
+                                                            / 1.25)
+                                                            .clamp(0.25, 4.0);
+                                                    }
+                                                    Some(ZoomAction::Fit) => {
+                                                        self.preview_zoom_fit = true;
+                                                        self.preview_zoom = 1.0;
+                                                        self.preview_pan = egui::Vec2::ZERO;
+                                                    }
+                                                    Some(ZoomAction::Reset100) => {
+                                                        self.preview_zoom_fit = false;
+                                                        self.preview_zoom = 1.0;
+                                                        self.preview_pan = egui::Vec2::ZERO;
+                                                    }
+                                                    Some(ZoomAction::In) => {
+                                                        self.preview_zoom_fit = false;
+                                                        self.preview_zoom = (self.preview_zoom
+                                                            * 1.25)
+                                                            .clamp(0.25, 4.0);
+                                                    }
+                                                    None => {}
+                                                }
+                                                ui.add_space(4.0);
+                                                let (div, _) = ui.allocate_exact_size(
+                                                    egui::vec2(1.0, 18.0),
+                                                    egui::Sense::hover(),
+                                                );
+                                                ui.painter().rect_filled(div, 0.0, t.card_border);
+                                                ui.add_space(4.0);
+                                                if let Some(mode) = segmented(
+                                                    ui,
+                                                    self.preview_mode,
+                                                    &[
+                                                        (PreviewMode::Original, "Original"),
+                                                        (PreviewMode::Ocr, "Detected boxes"),
+                                                        (PreviewMode::Rendered, "Rendered"),
+                                                    ],
+                                                ) {
+                                                    self.preview_mode = mode;
+                                                    self.preview_key.clear();
+                                                }
+                                            });
+                                        }
                                     }
                                 },
                             );
@@ -3845,6 +4346,16 @@ impl eframe::App for CaptionStudioApp {
                         }
                         if ui.ctx().input(|i| i.key_pressed(egui::Key::Enter)) {
                             stage_resp.request_focus();
+                        }
+                        if self.stage == WorkflowStep::Scan
+                            && !self.preview_file.is_empty()
+                            && ui.ctx().input(|i| {
+                                i.key_pressed(egui::Key::Delete)
+                                    || i.key_pressed(egui::Key::Backspace)
+                            })
+                        {
+                            let cur = self.preview_file.clone();
+                            self.remove_file_from_batch(&cur);
                         }
                     }
                 });
@@ -5603,10 +6114,9 @@ pub fn run_app() -> eframe::Result<()> {
     let icon = eframe::icon_data::from_png_bytes(VMAX_ICON_PNG).unwrap_or_default();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            // Redesign handoff (SPEC §3): minimum 1280×720; the old
-            // 1160×680 initial size is below the new minimum.
-            .with_inner_size([1600.0, 900.0])
-            .with_min_inner_size([1280.0, 720.0])
+            .with_maximized(true)
+            .with_inner_size([1280.0, 760.0])
+            .with_min_inner_size([1024.0, 640.0])
             .with_icon(icon)
             .with_title("Caption Studio — Batch Image Translator & OCR Verifier"),
         ..Default::default()
