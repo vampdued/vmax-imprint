@@ -1,9 +1,9 @@
-# Build Caption Studio for Windows (single self-contained .exe).
-# Run from the caption-studio directory in PowerShell:
+# Build VMAX Imprint for Windows (single self-contained .exe).
+# Run from the repository root in PowerShell:
 #   .\scripts\build-windows.ps1
 $ErrorActionPreference = "Stop"
 cargo build --release --locked
-$exe = "target\release\caption-studio.exe"
+$exe = "target\release\vmax-imprint.exe"
 if (-not (Test-Path $exe)) { throw "build failed: $exe not found" }
 Write-Host "Built: $exe ($((Get-Item $exe).Length) bytes)"
 $dlls = Get-ChildItem "target\release" -Filter *.dll -ErrorAction SilentlyContinue

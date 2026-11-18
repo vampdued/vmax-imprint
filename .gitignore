@@ -2,3 +2,5 @@
 /vendor
 *.pdb
 ocr-test.json
+*.zip
+/shot-test-output/

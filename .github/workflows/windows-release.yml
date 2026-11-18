@@ -3,6 +3,8 @@ name: Windows release
 # This project is a standalone repo: the workflow runs at the repo root.
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   pull_request:
@@ -58,7 +60,7 @@ jobs:
       - name: Check single-exe (no app DLLs beside it)
         shell: pwsh
         run: |
-          $exe = "target\x86_64-pc-windows-msvc\release\caption-studio.exe"
+          $exe = "target\x86_64-pc-windows-msvc\release\vmax-imprint.exe"
           if (-not (Test-Path $exe)) { throw "exe missing" }
           Get-ChildItem (Split-Path $exe) -Filter *.dll | ForEach-Object { throw "unexpected DLL: $($_.Name)" }
           Write-Host "exe size: $((Get-Item $exe).Length) bytes"
@@ -66,10 +68,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
-          name: caption-studio-windows
-          path: target/x86_64-pc-windows-msvc/release/caption-studio.exe
+          name: vmax-imprint-windows
+          path: target/x86_64-pc-windows-msvc/release/vmax-imprint.exe
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: target/x86_64-pc-windows-msvc/release/caption-studio.exe
+          files: target/x86_64-pc-windows-msvc/release/vmax-imprint.exe

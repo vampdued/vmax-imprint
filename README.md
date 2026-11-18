@@ -1,8 +1,7 @@
-# Caption Studio
+# VMAX Imprint
 
-Batch image caption extractor, translator and renderer — a complete,
-production-ready Rust port of the Python `caption_replacer.py`
-(tkinter + RapidOCR + OpenCV + Pillow) into a single standalone Windows
+Batch image text extractor, translator & renderer — a complete,
+production-ready Rust desktop application into a single standalone Windows
 `.exe` with **zero external DLL or model dependencies at runtime**.
 
 ## What it does
@@ -29,7 +28,7 @@ on the right. Settings live in `~/.caption_replacer.json`, the same file
 ## Single-exe packaging
 
 `cargo build --release` on Windows (x86_64-pc-windows-msvc) produces one
-`caption-studio.exe`:
+`vmax-imprint.exe`:
 
 - **GUI:** `eframe` + `egui` (+ `egui_extras`).
 - **OCR:** `ort` 2.0.0-rc.15 (ONNX Runtime 1.31). The build downloads the
@@ -57,10 +56,10 @@ on the right. Settings live in `~/.caption_replacer.json`, the same file
 ```powershell
 # install Rust: https://rustup.rs (stable, MSVC toolchain)
 git clone <this repo>
-cd caption-studio
+cd vmax-imprint
 .\scripts\build-windows.ps1   # cargo build --release, prints the exe path
 # or: cargo build --release
-# exe: target\release\caption-studio.exe
+# exe: target\release\vmax-imprint.exe
 ```
 
 A GitHub Actions workflow (`.github/workflows/windows-release.yml`)

@@ -38,18 +38,18 @@ fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(|s| s.as_str()) {
         Some("--version") => {
-            println!("caption-studio {}", env!("CARGO_PKG_VERSION"));
+            println!("vmax-imprint {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         Some("--help") | Some("-h") => {
             println!("VMAX Imprint — batch image text extractor, translator & renderer");
             println!();
             println!("Usage:");
-            println!("  caption-studio                 Launch the GUI");
-            println!("  caption-studio --ocr-test <image>  Run OCR on one image, print raw lines as JSON");
-            println!("  caption-studio --shot-test <input> <output> [--json <file>]");
+            println!("  vmax-imprint                 Launch the GUI");
+            println!("  vmax-imprint --ocr-test <image>  Run OCR on one image, print raw lines as JSON");
+            println!("  vmax-imprint --shot-test <input> <output> [--json <file>]");
             println!("      Drive the app through every reviewable state, saving a PNG per state into <output>");
-            println!("  caption-studio --version       Print version");
+            println!("  vmax-imprint --version       Print version");
             Ok(())
         }
         Some("--ocr-test") => {

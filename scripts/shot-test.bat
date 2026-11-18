@@ -9,14 +9,18 @@ REM   translated-json Optional translated JSON to import (default: C:\Users\Vamp
 setlocal
 cd /d "%~dp0.."
 
-set "EXE=D:\cargo-target\release\caption-studio.exe"
+set "EXE=D:\cargo-target\release\vmax-imprint.exe"
+if not exist "%EXE%" if exist "%CARGO_TARGET_DIR%\release\vmax-imprint.exe" set "EXE=%CARGO_TARGET_DIR%\release\vmax-imprint.exe"
+if not exist "%EXE%" if exist "target\release\vmax-imprint.exe" set "EXE=target\release\vmax-imprint.exe"
+if not exist "%EXE%" if exist "D:\cargo-target\release\caption-studio.exe" set "EXE=D:\cargo-target\release\caption-studio.exe"
 if not exist "%EXE%" if exist "%CARGO_TARGET_DIR%\release\caption-studio.exe" set "EXE=%CARGO_TARGET_DIR%\release\caption-studio.exe"
 if not exist "%EXE%" if exist "target\release\caption-studio.exe" set "EXE=target\release\caption-studio.exe"
 
 if not exist "%EXE%" (
-  echo Could not find caption-studio.exe at:
-  echo   D:\cargo-target\release\caption-studio.exe
-  echo   or target\release\caption-studio.exe
+  echo Could not find vmax-imprint.exe at:
+  echo   D:\cargo-target\release\vmax-imprint.exe
+  echo   or target\release\vmax-imprint.exe
+  echo Please run 'cargo build --release --offline --features shot-test' first.
   pause
   exit /b 2
 )

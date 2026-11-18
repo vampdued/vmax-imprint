@@ -1,6 +1,6 @@
 @echo off
 REM =========================================================================
-REM Caption Studio Shot Test & JPEG Packager
+REM VMAX Imprint Shot Test & JPEG Packager
 REM
 REM Drives the app through all reviewable states, converts PNG screenshots
 REM to compressed JPEGs (~85% quality), and packages them into a clean ZIP.

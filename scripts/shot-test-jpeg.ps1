@@ -56,17 +56,21 @@ $OutputFolder = [System.IO.Path]::GetFullPath($OutputFolder)
 
 # Locate executable
 if (-not $Exe) {
-    $envTarget = if ($env:CARGO_TARGET_DIR) { Join-Path $env:CARGO_TARGET_DIR "release\caption-studio.exe" } else { $null }
+    $envTargetVmax = if ($env:CARGO_TARGET_DIR) { Join-Path $env:CARGO_TARGET_DIR "release\vmax-imprint.exe" } else { $null }
+    $envTargetOld = if ($env:CARGO_TARGET_DIR) { Join-Path $env:CARGO_TARGET_DIR "release\caption-studio.exe" } else { $null }
     $candidates = @(
+        "D:\cargo-target\release\vmax-imprint.exe",
+        $envTargetVmax,
+        (Join-Path $RepoRoot "target\release\vmax-imprint.exe"),
         "D:\cargo-target\release\caption-studio.exe",
-        $envTarget,
+        $envTargetOld,
         (Join-Path $RepoRoot "target\release\caption-studio.exe")
     ) | Where-Object { $_ -and (Test-Path $_) }
 
     if ($candidates.Count -gt 0) {
         $Exe = $candidates[0]
     } else {
-        Write-Error "Could not find caption-studio.exe. Looked at:`n  - D:\cargo-target\release\caption-studio.exe`n  - target\release\caption-studio.exe`nPlease run 'cargo build --release --offline' first."
+        Write-Error "Could not find vmax-imprint.exe. Looked at:`n  - D:\cargo-target\release\vmax-imprint.exe`n  - target\release\vmax-imprint.exe`nPlease run 'cargo build --release --offline --features shot-test' first."
         exit 2
     }
 }
@@ -86,7 +90,7 @@ if (-not $TranslatedJson) {
 $Quality = [math]::Max(10, [math]::Min(100, $Quality))
 
 Write-Host "========================================================" -ForegroundColor Cyan
-Write-Host "Caption Studio Shot Test & JPEG Packager" -ForegroundColor Cyan
+Write-Host "VMAX Imprint Shot Test & JPEG Packager" -ForegroundColor Cyan
 Write-Host "  EXE:      $Exe"
 Write-Host "  INPUT:    $InputFolder"
 Write-Host "  OUTPUT:   $OutputFolder"
