@@ -398,7 +398,7 @@ impl CaptionStudioApp {
             log_follow: true,
             log_len_seen: 0,
             show_log: settings.show_log,
-            log_height: settings.log_height.clamp(64.0, 480.0),
+            log_height: settings.log_height.clamp(100.0, 420.0),
             shot_test: None,
             last_save_path: None,
             status: "Choose an input folder, then click 'Scan images'.".to_string(),
@@ -462,7 +462,7 @@ impl CaptionStudioApp {
             conf: self.conf.clamp(0.0, 1.0),
             minchars: self.minchars.max(0),
             sizing: self.sizing,
-            log_height: self.log_height.clamp(64.0, 480.0),
+            log_height: self.log_height.clamp(100.0, 420.0),
             show_log: self.show_log,
         }
         .save();
@@ -2428,7 +2428,7 @@ impl eframe::App for CaptionStudioApp {
                 .collapsible(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .resizable(false)
-                .fixed_size([440.0, 120.0])
+                .auto_sized()
                 .order(egui::Order::Foreground)
                 .frame(modal_frame(&t))
                 .open(&mut open)
@@ -2674,25 +2674,80 @@ impl eframe::App for CaptionStudioApp {
         // at idle it read as a second status line).
         egui::Panel::bottom("status_bar")
             .exact_size(32.0)
+            .resizable(false)
             .show(ui, |ui| {
                 ui.add_enabled_ui(!modal_open, |ui| {
+                    let t = crate::theme::Tokens::get(ui.ctx());
+                    let right_reserve: f32 =
+                        (if !self.show_log { 96.0 } else { 0.0 })
+                            + (if self.busy { 236.0 } else { 0.0 });
+                    let total_w = ui.available_width();
+                    let left_w = (total_w - right_reserve - 8.0).max(120.0);
                     ui.horizontal(|ui| {
-                        let t = crate::theme::Tokens::get(ui.ctx());
-                        // Right-aligned items FIRST: they claim their space
-                        // from the right, so the left-hand labels (counts,
-                        // save path, status) truncate to what is left
-                        // instead of running underneath the button.
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(left_w, 24.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                if let Some(e) = &self.preview_json_error {
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new("JSON error").color(t.danger),
+                                        )
+                                        .truncate(),
+                                    )
+                                    .on_hover_text(e.clone());
+                                    ui.separator();
+                                } else if self.preview_file_count > 0 {
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(render_counts(
+                                                self.preview_file_count,
+                                                self.render_summary,
+                                            ))
+                                            .color(t.text_dim),
+                                        )
+                                        .truncate(),
+                                    );
+                                    ui.separator();
+                                }
+                                if let Some(path) = &self.last_save_path {
+                                    let shown = std::path::Path::new(path)
+                                        .file_name()
+                                        .map(|n| n.to_string_lossy().into_owned())
+                                        .unwrap_or_else(|| path.clone());
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(shown).color(t.text_dim),
+                                        )
+                                        .truncate(),
+                                    )
+                                    .on_hover_text(path.clone());
+                                    ui.separator();
+                                }
+                                let status_text = if !self.ocr_ready {
+                                    "Warming up OCR engine…".to_string()
+                                } else {
+                                    self.status.clone()
+                                };
+                                let status_resp =
+                                    ui.add(egui::Label::new(&status_text).truncate());
+                                status_resp.widget_info(|| {
+                                    egui::WidgetInfo::labeled(
+                                        egui::Role::Status,
+                                        true,
+                                        status_text.clone(),
+                                    )
+                                });
+                                ui.ctx().accesskit_node_builder(status_resp.id, |node| {
+                                    node.set_live(egui::accesskit::Live::Polite);
+                                });
+                            },
+                        );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            // When the log panel is hidden, the bar offers it
-                            // back (the X in the log header hides it).
                             if !self.show_log && small_action_button(ui, "Show log").clicked() {
                                 self.show_log = true;
                                 self.save_settings();
                             }
-                            // A solid accent fill, not the 17%-alpha wash (1.23:1
-                            // against its track — the bar read as empty at 100%),
-                            // and capped at ~220px so it reads as a bar instead of a
-                            // second status line. Only while a job runs.
                             if self.busy {
                                 ui.add(
                                     egui::ProgressBar::new(self.progress)
@@ -2701,64 +2756,6 @@ impl eframe::App for CaptionStudioApp {
                                         .show_percentage(),
                                 );
                             }
-                        });
-                        // A JSON error replaces the counts (danger colour, full
-                        // error on hover) so a broken paste is visible without
-                        // switching tabs.
-                        if let Some(e) = &self.preview_json_error {
-                            ui.add(
-                                egui::Label::new(egui::RichText::new("JSON error").color(t.danger))
-                                    .truncate(),
-                            )
-                            .on_hover_text(e.clone());
-                            ui.separator();
-                        } else if self.preview_file_count > 0 {
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(render_counts(
-                                        self.preview_file_count,
-                                        self.render_summary,
-                                    ))
-                                    .color(t.text_dim),
-                                )
-                                .truncate(),
-                            );
-                            ui.separator();
-                        }
-                        // The last save destination (the output folder after a
-                        // render, the file after Save captions). Only the
-                        // folder/file name shows in the 32px bar — the full
-                        // path is the tooltip — so the useful part isn't the
-                        // part cut off at the window edge.
-                        if let Some(path) = &self.last_save_path {
-                            let shown = std::path::Path::new(path)
-                                .file_name()
-                                .map(|n| n.to_string_lossy().into_owned())
-                                .unwrap_or_else(|| path.clone());
-                            ui.add(
-                                egui::Label::new(egui::RichText::new(shown).color(t.text_dim))
-                                    .truncate(),
-                            )
-                            .on_hover_text(path.clone());
-                            ui.separator();
-                        }
-                        // A polite live region: a screen reader announces the status
-                        // when it changes (batch finished, error) instead of the user
-                        // having to go looking for it. The label truncates with an
-                        // ellipsis so a long path can't silently clip against the bar.
-                        // While OCR warms up, the warm-up state shows here (it used
-                        // to sit in the sidebar and push the PROJECT card off).
-                        let status_text = if !self.ocr_ready {
-                            "Warming up OCR engine…".to_string()
-                        } else {
-                            self.status.clone()
-                        };
-                        let status_resp = ui.add(egui::Label::new(&status_text).truncate());
-                        status_resp.widget_info(|| {
-                            egui::WidgetInfo::labeled(egui::Role::Status, true, status_text.clone())
-                        });
-                        ui.ctx().accesskit_node_builder(status_resp.id, |node| {
-                            node.set_live(egui::accesskit::Live::Polite);
                         });
                     });
                 });
@@ -2771,18 +2768,16 @@ impl eframe::App for CaptionStudioApp {
         // away from the top. The panel is resizable (drag its top edge) and
         // closable (the X in its header); the status bar brings it back.
         if self.show_log {
-            // App-managed height: egui's resizable-panel state snapped the
-            // panel back to its pre-drag size on release, so the height
-            // lives in the App (and in Settings) and the resize handle is
-            // drawn by hand. Drag the grip to resize (64–480px), drag it
-            // down past the floor to close, double-click to reset to 188px.
+            let log_h = self.log_height.clamp(100.0, 420.0);
             egui::Panel::bottom("activity_log")
-                .exact_size(self.log_height)
+                .exact_size(log_h)
+                .resizable(false)
                 .show(ui, |ui| {
+                    ui.set_min_height(log_h);
                     ui.add_enabled_ui(!modal_open, |ui| {
                         let t = crate::theme::Tokens::get(ui.ctx());
                         let handle = ui.allocate_response(
-                            egui::vec2(ui.available_width(), 12.0),
+                            egui::vec2(ui.available_width(), 10.0),
                             egui::Sense::click_and_drag(),
                         )
                         .on_hover_text("Drag to resize activity log (double-click to reset)");
@@ -2803,18 +2798,12 @@ impl eframe::App for CaptionStudioApp {
                             },
                         );
                         if handle.double_clicked() {
-                            self.log_height = 188.0;
+                            self.log_height = 160.0;
                             self.save_settings();
                         }
                         if handle.dragged() {
-                            match log_height_after_drag(self.log_height, handle.drag_delta().y) {
-                                None => {
-                                    // Dragged down past the floor: close.
-                                    self.show_log = false;
-                                    self.log_height = 188.0;
-                                    self.save_settings();
-                                }
-                                Some(h) => self.log_height = h,
+                            if let Some(h) = log_height_after_drag(self.log_height, handle.drag_delta().y) {
+                                self.log_height = h;
                             }
                         }
                         if handle.drag_stopped() {
@@ -2870,7 +2859,10 @@ impl eframe::App for CaptionStudioApp {
                         ui.separator();
                         let visible = log_visible(&self.log_lines, self.log_filter);
                         let new_lines = self.log_lines.len() != self.log_len_seen;
-                        let out = egui::ScrollArea::vertical().show(ui, |ui| {
+                        let out = egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+                            .show(ui, |ui| {
                             for (i, line) in visible.iter().enumerate() {
                                 // Zebra rows: alternate the card fill against the
                                 // panel background so adjacent lines stay distinct.
@@ -3496,17 +3488,7 @@ impl eframe::App for CaptionStudioApp {
                                                         self.sizing_menu_open = false;
                                                     }
                                                 }
-                                                ui.add_space(8.0);
-                                                if icon_text_button_sized(
-                                                    ui,
-                                                    "folder-open",
-                                                    "Open output folder",
-                                                    ui.available_width(),
-                                                )
-                                                .clicked()
-                                                {
-                                                    self.open_output_folder();
-                                                }
+
                                             });
                                             ui.add_space(12.0);
                                             ui.separator();
@@ -3674,9 +3656,12 @@ impl eframe::App for CaptionStudioApp {
                                     } else {
                                         0.0
                                     };
-                                    240.0 + scan_modes_w + zoom_cluster_w + 20.0
+                                    scan_modes_w + zoom_cluster_w + 20.0
                                 }
-                                WorkflowStep::Translate => 660.0,
+                                WorkflowStep::Translate => {
+                                    segmented_total_width(ui, &["Selected image", "All images"])
+                                        + 20.0
+                                }
                                 WorkflowStep::Review => {
                                     let mode_w = segmented_total_width(
                                         ui,
@@ -3771,82 +3756,8 @@ impl eframe::App for CaptionStudioApp {
                                                     }
                                                 }
                                             });
-                                            ui.add_space(4.0);
-                                            let (div, _) = ui.allocate_exact_size(
-                                                egui::vec2(1.0, 18.0),
-                                                egui::Sense::hover(),
-                                            );
-                                            ui.painter().rect_filled(div, 0.0, t.card_border);
-                                            ui.add_space(4.0);
-                                            ui.add_enabled_ui(
-                                                !self.preview_file.is_empty(),
-                                                |ui| {
-                                                    if icon_text_button(ui, "x", "Remove file")
-                                                        .on_hover_text(
-                                                            "Remove the selected image from the batch queue (Delete)",
-                                                        )
-                                                        .clicked()
-                                                    {
-                                                        let cur = self.preview_file.clone();
-                                                        self.remove_file_from_batch(&cur);
-                                                    }
-                                                },
-                                            );
-                                            if icon_text_button(
-                                                ui,
-                                                "folder-open",
-                                                "Add images…",
-                                            )
-                                            .on_hover_text(
-                                                "Add individual images to the batch queue",
-                                            )
-                                            .clicked()
-                                            {
-                                                self.add_input_files();
-                                            }
                                         }
                                         WorkflowStep::Translate => {
-                                            if icon_text_button(ui, "save", "Export .json…")
-                                                .on_hover_text(
-                                                    "Export the translation JSON map to a file",
-                                                )
-                                                .clicked()
-                                            {
-                                                self.save_translated_file();
-                                            }
-                                            if icon_text_button(
-                                                ui,
-                                                "folder-open",
-                                                "Import .json…",
-                                            )
-                                            .on_hover_text(
-                                                "Import a translated .json file directly from disk",
-                                            )
-                                            .clicked()
-                                            {
-                                                self.load_translated_file();
-                                            }
-                                            if icon_text_button(
-                                                ui,
-                                                "clipboard-paste",
-                                                "Paste clipboard",
-                                            )
-                                            .on_hover_text(
-                                                "Apply translated JSON directly from clipboard",
-                                            )
-                                            .clicked()
-                                            {
-                                                self.paste_from_clipboard_direct();
-                                            }
-                                            if icon_text_button(ui, "copy", "Copy all for AI")
-                                                .on_hover_text(
-                                                    "Copy the compact translation map for all scanned images",
-                                                )
-                                                .clicked()
-                                            {
-                                                self.copy_compact_for_ai();
-                                            }
-                                            ui.add_space(4.0);
                                             if let Some(all_mode) = segmented(
                                                 ui,
                                                 self.translate_all_mode,
