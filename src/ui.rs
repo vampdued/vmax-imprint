@@ -1,4 +1,4 @@
-//! Redesign layout (SPEC §3) — header (brand + 4-step stepper + the one
+﻿//! Redesign layout (SPEC §3) — header (brand + 4-step stepper + the one
 //! primary) / sidebar 316px (folders & font, OCR threshold tuning,
 //! Project) / workspace (tabbed: Translation JSON editor and Live Preview
 //! & OCR Check — Rendered / OCR Boxes / Original) / inspector 380px
@@ -1132,14 +1132,20 @@ impl CaptionStudioApp {
         };
         ui.painter()
             .rect_stroke(rect, t.radius_sm, stroke, egui::StrokeKind::Inside);
+        // Exact vertical centering for the 44px thumbnail inside the 68px row:
+        // (68 - 44) / 2 = 12px top and bottom margin, 10px left margin, and
+        // 14px right margin so status chips never collide with the selection stroke.
+        let inner_rect = egui::Rect::from_min_max(
+            egui::pos2(rect.min.x + 10.0, rect.min.y + 12.0),
+            egui::pos2(rect.max.x - 14.0, rect.max.y - 12.0),
+        );
         let mut child = ui.new_child(
             egui::UiBuilder::new()
-                .max_rect(rect.shrink(6.0))
+                .max_rect(inner_rect)
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
         child.horizontal(|ui| {
-            // Thumbnail: the 44px cell, the image centred inside it
-            // (thumbnails keep their aspect, so one side is < 44).
+            // Thumbnail: 44x44 cell vertically centered at y = rect.min.y + 12..56.
             let (cell, _) = ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::hover());
             if let Some(tex) = self.thumb_texture(ui.ctx(), name, budget) {
                 let (tw, th) = (tex.size()[0] as f32, tex.size()[1] as f32);
@@ -1153,51 +1159,58 @@ impl CaptionStudioApp {
             } else {
                 ui.painter().rect_filled(cell, 4.0, t.raised);
             }
-            ui.vertical(|ui| {
-                // Hover-only sense: egui's default `selectable_labels`
-                // gives every label click-and-drag sense (and `.sense()`
-                // alone doesn't stop it — the selectable block ORs the
-                // click sense back in), so the filename and count labels
-                // stole the click from the row and only the thumbnail /
-                // gaps selected it. These are metadata, not text to copy,
-                // so they are not selectable and the whole row selects.
-                let shown = tail_ellipsis(ui, name, ui.available_width());
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(shown)
-                            .size(crate::theme::LABEL)
-                            .color(t.text),
-                    )
-                    .truncate()
-                    .selectable(false)
-                    .sense(egui::Sense::hover()),
-                );
-                // Explicit baseline separation between the filename and
-                // the metadata row, so the two lines never read as one.
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
+            ui.add_space(6.0);
+            let text_col_w = ui.available_width().max(24.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(text_col_w, 44.0),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    // Single-pass middle truncation (`middle_ellipsis`) with
+                    // `.wrap_mode(TextWrapMode::Extend)` so egui never applies a
+                    // second `.truncate()` pass that produces double ellipses.
+                    let shown = middle_ellipsis(ui, name, text_col_w);
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new(format!("{blocks} blocks"))
-                                .size(crate::theme::CAPTION)
-                                .color(t.text_dim),
+                            egui::RichText::new(shown)
+                                .size(crate::theme::LABEL)
+                                .color(t.text),
                         )
+                        .wrap_mode(egui::TextWrapMode::Extend)
                         .selectable(false)
                         .sense(egui::Sense::hover()),
                     );
-                    if let Some(s) = status {
-                        let color = match s {
-                            FileStatus::Rendered => t.ok,
-                            FileStatus::NoText => t.warning,
-                            FileStatus::Failed => t.danger,
-                            FileStatus::Untranslated => t.text_dim,
-                            FileStatus::Ready => t.accent_ink,
-                        };
-                        status_chip(ui, file_status_label(s), color);
-                    }
-                });
-            });
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("{blocks} blocks"))
+                                    .size(crate::theme::CAPTION)
+                                    .color(t.text_dim),
+                            )
+                            .selectable(false)
+                            .sense(egui::Sense::hover()),
+                        );
+                        if let Some(s) = status {
+                            let color = match s {
+                                FileStatus::Rendered => t.ok,
+                                FileStatus::NoText => t.warning,
+                                FileStatus::Failed => t.danger,
+                                FileStatus::Untranslated => t.text_dim,
+                                FileStatus::Ready => t.accent_ink,
+                            };
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    status_chip(ui, file_status_label(s), color);
+                                },
+                            );
+                        }
+                    });
+                },
+            );
         });
+        let resp = resp.on_hover_text(name);
+        let _ = resp;
         clicked
     }
 
@@ -1981,9 +1994,7 @@ impl eframe::App for CaptionStudioApp {
                 .order(egui::Order::Middle)
                 .fixed_pos(egui::Pos2::ZERO)
                 .show(&ctx, |ui| {
-                    let screen = ui
-                        .ctx()
-                        .input(|i| i.raw.screen_rect.unwrap_or_else(|| ui.max_rect()));
+                    let screen = ui.ctx().input(|i| i.raw.screen_rect.unwrap_or_else(|| ui.max_rect()));
                     ui.painter().rect_filled(
                         screen,
                         0.0,
@@ -2537,7 +2548,7 @@ impl eframe::App for CaptionStudioApp {
                     // click handler was removed (round-2 duplicate-button
                     // unification). Navigation lives in the tabs; the
                     // action lives in the header primary.
-                    let steps_w = (ui.available_width() - 200.0 - 32.0).max(0.0);
+                    let steps_w = (ui.available_width() - 210.0 - 40.0).max(0.0);
                     for (i, step) in WorkflowStep::ALL.iter().enumerate() {
                         step_button(
                             ui,
@@ -2555,10 +2566,9 @@ impl eframe::App for CaptionStudioApp {
                             self.run_header_primary();
                         }
                     });
-                    // 32px clear of the OS window controls (— □ ✕): the
-                    // primary used to sit flush against them, so a click
-                    // aimed at it could land on minimise / close instead.
-                    ui.add_space(32.0);
+                    // 40px right margin clearance from the window's right boundary
+                    // and native OS window controls (— □ ✕).
+                    ui.add_space(40.0);
                 });
             });
         });
@@ -2675,72 +2685,85 @@ impl eframe::App for CaptionStudioApp {
                                     } else if self.busy || modal_open {
                                         egui::Popup::close_id(ui.ctx(), popup_id);
                                     }
+                                    let menu_w = sizing_btn.rect.width().max(268.0);
                                     egui::Popup::menu(&sizing_btn)
                                         .close_behavior(
                                             egui::PopupCloseBehavior::CloseOnClickOutside,
                                         )
-                                        // The popup is exactly the button's
-                                        // width, so it stays inside the 316px
-                                        // sidebar instead of spilling into the
-                                        // workspace. `Popup::width` only sets
-                                        // the Area's *default* width — the
-                                        // Area still shrinks to its content
-                                        // (the longest item, ~215px) — so the
-                                        // width is also set on the content.
-                                        // The explicit opaque frame keeps the
-                                        // sidebar text from showing through
-                                        // on the first open frame.
-                                        .width(sizing_btn.rect.width())
+                                        // Strictly downward opening (`RectAlign::BOTTOM_START`)
+                                        // with upward fallback removed so it never covers the
+                                        // Output folder field above.
+                                        .align(egui::RectAlign::BOTTOM_START)
+                                        .align_alternatives(&[])
+                                        .width(menu_w)
                                         .frame(
-                                            egui::Frame::popup(ui.style())
-                                                .fill(t.card)
-                                                .stroke(egui::Stroke::new(1.0, t.card_border))
-                                                .corner_radius(t.radius_lg)
+                                            egui::Frame::new()
+                                                .fill(egui::Color32::from_rgb(0x17, 0x18, 0x1b))
+                                                .stroke(egui::Stroke::new(
+                                                    1.0,
+                                                    egui::Color32::from_rgb(0x2b, 0x2e, 0x35),
+                                                ))
+                                                .corner_radius(egui::CornerRadius::same(6))
+                                                .inner_margin(egui::Margin::same(4))
                                                 .shadow(egui::epaint::Shadow {
-                                                    // egui 0.37's Shadow has no
-                                                    // `extrusion` field — the spec's
-                                                    // 8px extrusion is `spread` here
-                                                    // (expand in all directions).
                                                     offset: [0, 8],
                                                     blur: 16,
-                                                    spread: 8,
-                                                    color: egui::Color32::from_black_alpha(160),
+                                                    spread: 4,
+                                                    color: egui::Color32::from_black_alpha(180),
                                                 }),
                                         )
-                                        // Natural downward opening: the menu
-                                        // drops from the button's bottom edge,
-                                        // falling back to upward only when it
-                                        // doesn't fit below. (It used to open
-                                        // upward because the old ComboBox's
-                                        // downward menu covered the OCR
-                                        // Thresholds card; the spec restores
-                                        // the natural direction.)
-                                        .align(egui::RectAlign::BOTTOM_START)
-                                        .align_alternatives(&[egui::RectAlign::TOP_START])
                                         .show(|ui| {
-                                            // Match the button's width (less the
-                                            // popup frame's inner margin).
-                                            ui.set_width(
-                                                (sizing_btn.rect.width()
-                                                    - ui.style().spacing.menu_margin.sum().x)
-                                                    .max(0.0),
+                                            let row_w = (menu_w - 8.0).max(200.0);
+                                            ui.set_min_width(row_w);
+                                            ui.set_max_width(row_w);
+                                            // Paint an extra solid backing rect over the menu interior
+                                            // to guarantee 100% opacity even on the first open frame.
+                                            ui.painter().rect_filled(
+                                                ui.max_rect().expand(2.0),
+                                                egui::CornerRadius::same(6),
+                                                egui::Color32::from_rgb(0x17, 0x18, 0x1b),
                                             );
+                                            ui.spacing_mut().item_spacing.y = 2.0;
                                             for mode in crate::model::SizingMode::all() {
-                                                if ui
-                                                    .selectable_value(
-                                                        &mut self.sizing,
-                                                        mode,
-                                                        mode.label(),
-                                                    )
-                                                    .clicked()
-                                                {
-                                                    picked = Some(mode);
-                                                    egui::Popup::close_id(
-                                                        ui.ctx(),
-                                                        egui::Popup::default_response_id(
-                                                            &sizing_btn,
-                                                        ),
+                                                let selected = self.sizing == mode;
+                                                let (row_rect, row_resp) = ui.allocate_exact_size(
+                                                    egui::vec2(row_w, 30.0),
+                                                    egui::Sense::click(),
+                                                );
+                                                if selected {
+                                                    ui.painter().rect_filled(
+                                                        row_rect,
+                                                        egui::CornerRadius::same(4),
+                                                        t.accent,
                                                     );
+                                                } else if row_resp.hovered() {
+                                                    ui.painter().rect_filled(
+                                                        row_rect,
+                                                        egui::CornerRadius::same(4),
+                                                        egui::Color32::from_white_alpha(25),
+                                                    );
+                                                }
+                                                let text_col = if selected {
+                                                    egui::Color32::WHITE
+                                                } else if row_resp.hovered() {
+                                                    t.text
+                                                } else {
+                                                    t.text_dim
+                                                };
+                                                ui.painter().text(
+                                                    egui::pos2(
+                                                        row_rect.min.x + 10.0,
+                                                        row_rect.center().y,
+                                                    ),
+                                                    egui::Align2::LEFT_CENTER,
+                                                    mode.label(),
+                                                    crate::theme::medium(crate::theme::LABEL),
+                                                    text_col,
+                                                );
+                                                focus_ring(ui, &row_resp);
+                                                if row_resp.clicked() {
+                                                    picked = Some(mode);
+                                                    egui::Popup::close_id(ui.ctx(), popup_id);
                                                 }
                                             }
                                         });
@@ -3066,96 +3089,83 @@ impl eframe::App for CaptionStudioApp {
                             // right-hand groups' reserved width, so a long
                             // name truncates instead of pushing the mode /
                             // zoom groups off the bar.
+                            let zoom_pct = format!(
+                                "{}%",
+                                (self.preview_zoom * 100.0).round() as i32
+                            );
+                            let mode_w = segmented_button_width(
+                                ui,
+                                &["Original", "Detected boxes", "Rendered"],
+                            ) * 3.0
+                                + 14.0;
+                            let zoom_seg_w = segmented_button_width(
+                                ui,
+                                &["Fit view", zoom_pct.as_str()],
+                            ) * 2.0
+                                + 10.0;
+                            let zoom_cluster_w = 32.0 + 4.0 + zoom_seg_w + 4.0 + 32.0;
+                            let right_reserve =
+                                mode_w + 16.0 + zoom_cluster_w + 16.0 + ui.spacing().item_spacing.x * 3.0;
                             if !self.preview_file.is_empty() {
-                                let zoom_pct = format!(
-                                    "{}%",
-                                    (self.preview_zoom * 100.0).round() as i32
-                                );
-                                let mode_w = segmented_button_width(
-                                    ui,
-                                    &["Original", "Detected boxes", "Rendered"],
-                                ) * 3.0;
-                                let zoom_w = segmented_button_width(
-                                    ui,
-                                    &["Fit view", zoom_pct.as_str()],
-                                ) * 2.0
-                                    + 56.0;
-                                let right_reserve = mode_w
-                                    + zoom_w
-                                    + 1.0
-                                    + 12.0
-                                    + ui.spacing().item_spacing.x * 6.0;
                                 let name_w = (ui.available_width() - right_reserve).max(0.0);
+                                let shown_name = middle_ellipsis(ui, &self.preview_file, name_w);
                                 ui.add_sized(
                                     egui::vec2(name_w, 32.0),
                                     egui::Label::new(
-                                        egui::RichText::new(&self.preview_file)
+                                        egui::RichText::new(shown_name)
                                             .size(crate::theme::LABEL)
                                             .color(t.text),
                                     )
-                                    .truncate()
+                                    .wrap_mode(egui::TextWrapMode::Extend)
                                     .selectable(false),
                                 )
                                 .on_hover_text(&self.preview_file);
                             }
-                            // The mode + zoom controls ride at the right end.
-                            // Disabled until a preview exists — with zero images
-                            // the segmented groups lit up ("Rendered", "Fit")
-                            // over an empty stage.
+                            // Mode + zoom controls in a clean left-to-right sub-layout
+                            // anchored at the right end of the bar so segmented pills
+                            // and zoom buttons never suffer right-to-left order inversion.
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                // A right inset, so the groups sit inside the
-                                // bar instead of flush against the panel's
-                                // right edge (shot 03: "not properly within
-                                // the view"). In a right-to-left layout the
-                                // first item lands at the right edge.
                                 ui.add_space(12.0);
                                 ui.add_enabled_ui(!names.is_empty(), |ui| {
-                                // The manual-zoom button shows the LIVE zoom
-                                // (e.g. "200%"), not a fixed "100%" — the old
-                                // label lit up at any manual zoom and lied
-                                // about the level. Clicking it resets to 100%.
-                                if ui
-                                    .add_sized(egui::vec2(28.0, 32.0), egui::Button::new("+"))
-                                    .on_hover_text("Zoom in")
-                                    .clicked()
-                                {
-                                    self.preview_zoom_fit = false;
-                                    self.preview_zoom = (self.preview_zoom * 1.25).clamp(0.25, 4.0);
-                                }
-                                let zoom_pct =
-                                    format!("{}%", (self.preview_zoom * 100.0).round() as i32);
-                                if let Some(fit) = segmented(
-                                    ui,
-                                    self.preview_zoom_fit,
-                                    &[(true, "Fit view"), (false, zoom_pct.as_str())],
-                                ) {
-                                    self.preview_zoom_fit = fit;
-                                    self.preview_zoom = 1.0;
-                                    self.preview_pan = egui::Vec2::ZERO;
-                                }
-                                if ui
-                                    .add_sized(egui::vec2(28.0, 32.0), egui::Button::new("−"))
-                                    .on_hover_text("Zoom out")
-                                    .clicked()
-                                {
-                                    self.preview_zoom_fit = false;
-                                    self.preview_zoom = (self.preview_zoom / 1.25).clamp(0.25, 4.0);
-                                }
-                                // 16px vertical divider between the mode
-                                // and zoom groups.
-                                let (div, _) = ui.allocate_exact_size(
-                                    egui::vec2(1.0, 16.0),
-                                    egui::Sense::hover(),
-                                );
-                                ui.painter().rect_filled(div, 0.0, t.card_border);
-                                if let Some(mode) = segmented(ui, self.preview_mode, &[
-                                    (PreviewMode::Rendered, "Rendered"),
-                                    (PreviewMode::Ocr, "Detected boxes"),
-                                    (PreviewMode::Original, "Original"),
-                                ]) {
-                                    self.preview_mode = mode;
-                                    self.preview_key.clear();
-                                }
+                                    // Zoom cluster: [ − ] [ Fit view | 100% ] [ + ]
+                                    if zoom_step_button(ui, "+", "Zoom in").clicked() {
+                                        self.preview_zoom_fit = false;
+                                        self.preview_zoom =
+                                            (self.preview_zoom * 1.25).clamp(0.25, 4.0);
+                                    }
+                                    if let Some(fit) = segmented(
+                                        ui,
+                                        self.preview_zoom_fit,
+                                        &[(true, "Fit view"), (false, zoom_pct.as_str())],
+                                    ) {
+                                        self.preview_zoom_fit = fit;
+                                        self.preview_zoom = 1.0;
+                                        self.preview_pan = egui::Vec2::ZERO;
+                                    }
+                                    if zoom_step_button(ui, "−", "Zoom out").clicked() {
+                                        self.preview_zoom_fit = false;
+                                        self.preview_zoom =
+                                            (self.preview_zoom / 1.25).clamp(0.25, 4.0);
+                                    }
+                                    ui.add_space(4.0);
+                                    let (div, _) = ui.allocate_exact_size(
+                                        egui::vec2(1.0, 18.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter().rect_filled(div, 0.0, t.card_border);
+                                    ui.add_space(4.0);
+                                    if let Some(mode) = segmented(
+                                        ui,
+                                        self.preview_mode,
+                                        &[
+                                            (PreviewMode::Original, "Original"),
+                                            (PreviewMode::Ocr, "Detected boxes"),
+                                            (PreviewMode::Rendered, "Rendered"),
+                                        ],
+                                    ) {
+                                        self.preview_mode = mode;
+                                        self.preview_key.clear();
+                                    }
                                 });
                             });
                         });
@@ -3543,9 +3553,31 @@ fn segmented_button_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
     max_text_w + ui.spacing().button_padding.x * 2.0
 }
 
-/// A segmented control (mockup `.seg`): adjacent buttons, the selected one
-/// solid accent with white text, the rest on the unified `t.raised` track
-/// with a border. Returns the picked value, if the user clicked one.
+/// A 32×32 zoom step button (`−` or `+`) styled to match the 32px segmented
+/// capsule track height (`Tokens::field` fill, 1px `Tokens::card_border`, 6px radius).
+fn zoom_step_button(ui: &mut egui::Ui, symbol: &str, tooltip: &str) -> egui::Response {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let btn = egui::Button::new(
+        egui::RichText::new(symbol)
+            .font(crate::theme::semibold(crate::theme::BODY))
+            .color(t.text),
+    )
+    .min_size(egui::vec2(32.0, 32.0))
+    .fill(t.field)
+    .stroke(egui::Stroke::new(1.0, t.card_border))
+    .corner_radius(egui::CornerRadius::same(6));
+    let resp = ui.add(btn).on_hover_text(tooltip);
+    focus_ring(ui, &resp);
+    resp
+}
+
+/// A segmented control (SPEC §3.1 capsule track): outer container frame with
+/// `Tokens::field` background, 1px `Tokens::card_border`, 6px corner radius,
+/// and 2px uniform inner padding (total 32px height). Inner buttons are 28px
+/// tall with 4px corner radius on ALL 4 corners (active = solid `#2F5BFF`
+/// with crisp white text and no stroke; inactive = transparent fill, `#9AA1AD`
+/// text, no stroke, and subtle 10% white hover tint), rendered in natural
+/// left-to-right order inside the capsule so corners never invert.
 fn segmented<T: PartialEq + Copy>(
     ui: &mut egui::Ui,
     current: T,
@@ -3553,63 +3585,62 @@ fn segmented<T: PartialEq + Copy>(
 ) -> Option<T> {
     let t = crate::theme::Tokens::get(ui.ctx());
     let mut picked = None;
-    // Equal widths within the group: measure the widest label and give
-    // every button that width, so the group reads as one consistent
-    // control instead of label-sized buttons (shot 03: "not consistent
-    // shape"). The button's own horizontal padding is added back so the
-    // widest label doesn't touch the button's edges.
     let labels: Vec<&str> = options.iter().map(|(_, label)| *label).collect();
     let btn_w = segmented_button_width(ui, &labels);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        let n = options.len();
-        for (i, (value, label)) in options.iter().enumerate() {
-            let selected = *value == current;
-            let r = t.radius_sm as u8;
-            let radius = if n == 1 {
-                egui::CornerRadius::same(r)
-            } else if i == 0 {
-                egui::CornerRadius {
-                    nw: r,
-                    ne: 0,
-                    sw: r,
-                    se: 0,
-                }
-            } else if i == n - 1 {
-                egui::CornerRadius {
-                    nw: 0,
-                    ne: r,
-                    sw: 0,
-                    se: r,
-                }
-            } else {
-                egui::CornerRadius::ZERO
-            };
-            let text = egui::RichText::new(*label).color(if selected {
-                egui::Color32::WHITE
-            } else {
-                t.text
-            });
-            let btn = egui::Button::new(text)
-                // 32px, the Medium control height: the segmented groups
-                // came out shorter than the chevron buttons beside them
-                // (shot 03: "not consistent shape"), so the two groups
-                // and the toolbar read as different controls.
-                .min_size(egui::vec2(btn_w, 32.0))
-                .fill(if selected { t.accent } else { t.raised })
-                .stroke(if selected {
-                    egui::Stroke::NONE
-                } else {
-                    egui::Stroke::new(1.0, t.card_border)
-                })
-                .corner_radius(radius);
-            let resp = ui.add(btn);
-            focus_ring(ui, &resp);
-            if resp.clicked() {
-                picked = Some(*value);
-            }
-        }
-    });
+    let n = options.len() as f32;
+    let inner_w = btn_w * n + 2.0 * (n - 1.0).max(0.0);
+    egui::Frame::new()
+        .fill(t.field)
+        .stroke(egui::Stroke::new(1.0, t.card_border))
+        .corner_radius(egui::CornerRadius::same(6))
+        .inner_margin(egui::Margin::same(2))
+        .show(ui, |ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(inner_w, 28.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for (value, label) in options.iter() {
+                        let selected = *value == current;
+                        let (rect, resp) = ui.allocate_exact_size(
+                            egui::vec2(btn_w, 28.0),
+                            egui::Sense::click(),
+                        );
+                        if selected {
+                            ui.painter().rect_filled(
+                                rect,
+                                egui::CornerRadius::same(4),
+                                t.accent,
+                            );
+                        } else if resp.hovered() {
+                            ui.painter().rect_filled(
+                                rect,
+                                egui::CornerRadius::same(4),
+                                egui::Color32::from_white_alpha(25),
+                            );
+                        }
+                        let text_col = if selected {
+                            egui::Color32::WHITE
+                        } else if resp.hovered() {
+                            t.text
+                        } else {
+                            t.text_dim
+                        };
+                        ui.painter().text(
+                            rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            *label,
+                            crate::theme::medium(crate::theme::LABEL),
+                            text_col,
+                        );
+                        focus_ring(ui, &resp);
+                        if resp.clicked() {
+                            picked = Some(*value);
+                        }
+                    }
+                },
+            );
+        });
     picked
 }
 
@@ -4051,6 +4082,43 @@ fn tail_ellipsis(ui: &egui::Ui, text: &str, max_width: f32) -> String {
     tail_ellipsis_str(text, lo)
 }
 
+/// Single-pass middle truncation for filenames (e.g. `krithika___memes_…_1.jpg`):
+/// preserves both the leading prefix and the trailing index/extension with a
+/// single `…` so egui never compounds two ellipses.
+fn middle_ellipsis_str(text: &str, keep: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if keep == 0 {
+        return "…".to_string();
+    }
+    if keep >= chars.len() {
+        return text.to_string();
+    }
+    let tail_len = (keep / 2).max(1).min(10);
+    let head_len = keep.saturating_sub(tail_len);
+    let head: String = chars[..head_len].iter().collect();
+    let tail: String = chars[chars.len() - tail_len..].iter().collect();
+    format!("{head}…{tail}")
+}
+
+fn middle_ellipsis(ui: &egui::Ui, text: &str, max_width: f32) -> String {
+    if text_width(ui, text) <= max_width {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut lo = 0usize;
+    let mut hi = chars.len();
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2;
+        let candidate = middle_ellipsis_str(text, mid);
+        if text_width(ui, &candidate) <= max_width {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    middle_ellipsis_str(text, lo)
+}
+
 /// A folder path row: the label above, then a 36px field showing the tail
 /// of the path (leading "…" when it overflows) with the full path on hover,
 /// and a 36px browse button. The path is set via Browse, not typed — a
@@ -4221,10 +4289,9 @@ fn icon_text_button_sized(
     resp
 }
 
-/// A primary action: accent fill, white icon and label. The screen's main
-/// steps (Scan, Review, Render) get this so they read as the thing to do,
-/// not as one more secondary button. `full_width` makes it the panel's full
-/// width at the default control height (Scan and Render).
+/// A primary action: solid `#2F5BFF` (`Tokens::accent`), 34px height
+/// (`ControlSize::Medium`), 6px corner radius, 16×16 white icon, and 13px
+/// bold (`semibold`) crisp white text (`#FFFFFF`).
 fn primary_icon_text_button(
     ui: &mut egui::Ui,
     icon: &str,
@@ -4232,20 +4299,22 @@ fn primary_icon_text_button(
     full_width: bool,
 ) -> egui::Response {
     let t = crate::theme::Tokens::get(ui.ctx());
-    let size = if full_width {
-        crate::theme::ControlSize::Medium
-    } else {
-        crate::theme::ControlSize::Small
-    };
     let tint = if ui.is_enabled() {
         egui::Color32::WHITE
     } else {
         t.text_faint
     };
-    let image = crate::icons::image(icon, size.icon(), tint);
-    let button = egui::Button::image_and_text(image, label).fill(t.accent);
+    let image = crate::icons::image(icon, 16.0, tint);
+    let text = egui::RichText::new(label)
+        .font(crate::theme::semibold(crate::theme::LABEL))
+        .color(tint);
+    let button = egui::Button::image_and_text(image, text)
+        .fill(t.accent)
+        .stroke(egui::Stroke::NONE)
+        .corner_radius(egui::CornerRadius::same(6))
+        .min_size(egui::vec2(148.0, 34.0));
     let resp = if full_width {
-        ui.add_sized(egui::vec2(ui.available_width(), size.height()), button)
+        ui.add_sized(egui::vec2(ui.available_width(), 34.0), button)
     } else {
         ui.add(button)
     };
@@ -5285,6 +5354,16 @@ mod tests {
         assert!(ShotKind::InspectorFiltered.needs_blocks());
         assert!(!ShotKind::ModalPaste.needs_blocks());
         assert!(!ShotKind::EmptyImage.needs_blocks());
+    }
+
+    #[test]
+    fn middle_ellipsis_preserves_prefix_and_suffix_without_double_dots() {
+        assert_eq!(middle_ellipsis_str("abc", 0), "…");
+        assert_eq!(middle_ellipsis_str("abc", 3), "abc");
+        let s = middle_ellipsis_str("krithika___memes_4021256968115619306_33478258612_1.jpg", 22);
+        assert!(s.starts_with("krithika___m"));
+        assert!(s.ends_with("8612_1.jpg"));
+        assert_eq!(s.matches('…').count(), 1);
     }
 
     #[test]
