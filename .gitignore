@@ -1,6 +1,22 @@
+# Rust build artifacts
 /target
 /vendor
+**/*.rs.bk
 *.pdb
-ocr-test.json
+
+# Local test outputs & archives
 *.zip
 /shot-test-output/
+ocr-test.json
+
+# Operating System files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE & Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

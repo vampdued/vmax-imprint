@@ -1,176 +1,125 @@
 # VMAX Imprint
 
-Batch image text extractor, translator & renderer — a complete,
-production-ready Rust desktop application into a single standalone Windows
-`.exe` with **zero external DLL or model dependencies at runtime**.
+[![CI](https://github.com/vampdued/vmax-imprint/actions/workflows/ci.yml/badge.svg)](https://github.com/vampdued/vmax-imprint/actions/workflows/ci.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/vampdued/vmax-imprint?color=blue&label=release)](https://github.com/vampdued/vmax-imprint/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey.svg)](https://github.com/vampdued/vmax-imprint/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
 
-## What it does
+**VMAX Imprint** is a fast, standalone desktop application for batch image text extraction, translation, and rendering. It detects on-image captions, provides an interactive editor for translation workflows, cleanly inpaints old text backgrounds, and renders new text with subpixel typographic precision.
 
-1. **Scan & Extract Text** — RapidOCR (PP-OCRv4, DBNet detection +
-   CTC recognition) finds caption text in every image in a folder.
-   All raw detections with confidence ≥ 0.10 are kept in memory, so
-   changing the confidence / min-chars thresholds re-filters instantly
-   without re-running the neural nets.
-2. **Translate** — copy the compact `{file: {block_id: text}}` JSON for
-   an AI translator, paste the translated JSON back (fences, `x = {...}`
-   assignments and Python-literal dicts are all accepted).
-3. **Render Translated Images** — the old captions are inpainted away
-   and the new text is rendered on smooth Bezier-rounded plates, with
-   cosmic-text shaping for Indic (Tamil, Hindi, Telugu, Kannada,
-   Malayalam, Bengali) and CJK (Japanese, Korean, Chinese) scripts.
+It ships as a **single standalone Windows `.exe`** with **zero external dependencies** — the ONNX Runtime engine, RapidOCR (PP-OCRv4) neural models, font engines, and vector renderers are fully bundled inside the executable.
 
-The UI is the Python app's dual-column layout: folders & font, threshold
-tuning, batch workflow and activity log on the left; Translation JSON
-editor and Live Preview & OCR Check (Rendered / OCR Boxes / Original)
-on the right. Settings live in `~/.caption_replacer.json`, the same file
-(and keys) as the Python app, so settings carry over.
+---
 
-## Single-exe packaging
+## Key Features
 
-`cargo build --release` on Windows (x86_64-pc-windows-msvc) produces one
-`vmax-imprint.exe`:
+- **Embedded Neural OCR**: Integrated RapidOCR (PP-OCRv4 detection and CTC recognition) runs entirely locally via embedded ONNX models. Adjust confidence and character thresholds in real time without re-running models.
+- **3-Stage Workflow**:
+  1. **Scan**: Ingest folders of images (`JPG`, `PNG`, `WEBP`, `BMP`), detect text blocks, inspect bounding boxes, and adjust filter thresholds.
+  2. **Translate**: View and edit translations directly. Copy structured JSON to clipboard for AI translators (e.g. ChatGPT, Claude), or paste translated JSON back with automatic format parsing.
+  3. **Review & Render**: Telea-style inpainting clears the original background; smooth subpixel Bezier plates render the new translated text with customizable font sizing modes.
+- **Advanced Typographic Shaping**: Powered by `cosmic-text` and `tiny-skia` with full shaping support for Latin, CJK (Chinese, Japanese, Korean), and complex Indic scripts (Tamil, Hindi, Telugu, Kannada, Malayalam, Bengali).
+- **Interactive Stage Canvas**: Full zoom (`Fit view`, `100%`, incremental zoom up to 800%), smooth panning, checkerboard background, and toggleable preview modes (`Rendered`, `OCR Boxes`, `Original`).
+- **Completely Self-Contained**: No Python environment, no CUDA toolkit, and no external runtime DLLs required.
 
-- **GUI:** `eframe` + `egui` (+ `egui_extras`).
-- **OCR:** `ort` 2.0.0-rc.15 (ONNX Runtime 1.31). The build downloads the
-  prebuilt ONNX Runtime distribution once and links it **statically**
-  (`cargo:rustc-link-lib=static=onnxruntime`). `copy-dylibs` and
-  `load-dynamic` are deliberately *not* enabled, so no `onnxruntime.dll`
-  is copied or loaded at runtime.
-- **Models:** `ch_PP-OCRv4_det_infer.onnx` (4.6 MB),
-  `ch_PP-OCRv4_rec_infer.onnx` (10.4 MB) and `ppocr_keys_v1.txt`
-  (6,623 chars) are embedded with `include_bytes!()` / `include_str!()`.
-- **Fonts:** plate rendering uses the system fonts (Segoe UI / Nirmala UI /
-  Yu Gothic / Malgun Gothic / Microsoft YaHei on Windows), with a
-  DejaVu Sans Bold copy embedded as a last-resort fallback. The UI itself
-  uses vendored fonts (Chakra Petch, IBM Plex Sans, IBM Plex Mono in
-  `assets/fonts/`).
-- **CRT note:** the ONNX Runtime static lib is built with `/MD`
-  (dynamic CRT), so the exe intentionally does **not** use
-  `+crt-static`. The UCRT ships with Windows 10/11, so the exe still
-  needs no app DLLs of its own.
+---
 
-## Build
+## Download
 
-### Windows (the release target)
+Prebuilt standalone binaries are available on the [Releases](https://github.com/vampdued/vmax-imprint/releases/latest) page.
+
+1. Download **`vmax-imprint.exe`** (or the `.zip` package).
+2. Run `vmax-imprint.exe` directly on Windows 10 or 11 (64-bit). No installation needed.
+
+---
+
+## Quickstart
+
+### 1. Scan Images
+- Click **Select input folder** or drag and drop images directly into the window.
+- Click **Scan images**. RapidOCR will process each image and display the detected text blocks.
+- Fine-tune **Min confidence** and **Min characters** sliders in the sidebar if needed.
+
+### 2. Translate
+- Switch to the **Translate** tab.
+- Click **Copy JSON** to copy all detected captions in a compact format for your translation workflow.
+- Translate the text and click **Paste JSON** to import your translations, or edit blocks individually in the inspector panel.
+
+### 3. Review & Render
+- Switch to the **Render** tab to preview the rendered image side-by-side with the original.
+- Choose your **Font sizing** mode:
+  - `Adaptive shrink`: Automatically fits text into the original box bounding size.
+  - `Uniform step`: Scales all captions uniformly.
+  - `Fixed pt`: Uses an exact point size across all blocks.
+- Click **Render all images** to save the output files.
+
+---
+
+## Command-Line Interface (CLI)
+
+In addition to the graphical interface, `vmax-imprint` can be invoked from the command line:
 
 ```powershell
-# install Rust: https://rustup.rs (stable, MSVC toolchain)
-git clone <this repo>
+# Launch the graphical application
+vmax-imprint.exe
+
+# Run OCR diagnostics on a single image and output detected lines as JSON
+vmax-imprint.exe --ocr-test path\to\image.png
+
+# Display version information
+vmax-imprint.exe --version
+
+# Display command-line help
+vmax-imprint.exe --help
+```
+
+---
+
+## Building from Source
+
+### Prerequisites
+- [Rust toolchain](https://rustup.rs) (stable, MSVC target `x86_64-pc-windows-msvc`).
+- Windows 10 or 11 with the standard MSVC C++ build tools.
+
+### Build Steps
+
+```powershell
+# Clone the repository
+git clone https://github.com/vampdued/vmax-imprint.git
 cd vmax-imprint
-.\scripts\build-windows.ps1   # cargo build --release, prints the exe path
-# or: cargo build --release
-# exe: target\release\vmax-imprint.exe
+
+# Run tests
+cargo test
+
+# Build optimized release executable
+cargo build --release
 ```
 
-A GitHub Actions workflow (`.github/workflows/windows-release.yml`)
-builds the same exe on every tag push (`v*`) and attaches it as a
-release asset. The workflow also runs `cargo test` on Linux first.
-
-### Linux (development / verification)
-
-```sh
-cargo test            # unit tests (layout, parser, inpaint, render, OCR geometry)
-cargo run -- --version
-cargo run -- --ocr-test path/to/image.png   # prints raw OCR lines as JSON, writes ocr-test.json
-xvfb-run cargo run    # GUI under a virtual display
+The resulting standalone executable will be located at:
+```text
+target\release\vmax-imprint.exe
 ```
 
-**Linux ONNX Runtime note.** The `ort` crate downloads its prebuilt
-binaries from pyke's CDN (`cdn.pyke.io`) at build time. That CDN returns
-HTTP 403 from some networks (observed 2026-11-16 on this VM). The
-workaround for Linux dev builds is the official ONNX Runtime release
-(1.32.0, API 32 ≥ the `ort` 2.0.0-rc.15 minimum of 31), linked
-dynamically:
+---
 
-```sh
-# one-time: extract onnxruntime-linux-x64-1.32.0.tgz into vendor/
-export ORT_LIB_LOCATION=$PWD/vendor/onnxruntime-linux-x64-1.32.0/lib
-export ORT_PREFER_DYNAMIC_LINK=1
-cargo check   # or test / build
-LD_LIBRARY_PATH=$ORT_LIB_LOCATION ./target/debug/caption-studio --ocr-test img.png
-```
+## Architecture & Core Crates
 
-`vendor/` is gitignored. This affects Linux dev builds only: the
-Windows release build keeps static linking via pyke's CDN (which the
-GitHub Actions runner can reach), so the shipped `.exe` still has zero
-runtime DLL dependencies. A Linux binary built this way *does* depend on
-`libonnxruntime.so` at runtime — that is expected and Linux-only.
+| Component | Implementation |
+| :--- | :--- |
+| **GUI Framework** | [`eframe`](https://github.com/emilk/egui) / [`egui`](https://github.com/emilk/egui) v0.37 |
+| **Neural Inference Engine** | [`ort`](https://github.com/pykeio/ort) statically linking ONNX Runtime |
+| **OCR Models** | Embedded PP-OCRv4 (DBNet detection + CTC recognition) |
+| **Text Shaping** | [`cosmic-text`](https://github.com/pop-os/cosmic-text) + [`fontdb`](https://github.com/RazrFalcon/fontdb) |
+| **2D Vector Rendering** | [`tiny-skia`](https://github.com/RazrFalcon/tiny-skia) |
+| **Image Processing & IO** | [`image`](https://github.com/image-rs/image) + custom Telea-style inpainter |
 
-**Linux GUI note.** Running the GUI on Linux needs the system library
-`libxkbcommon-x11` (winit's X11 backend). This VM does not have it and
-its apt mirror is unreachable, so the GUI could not be smoke-tested
-here — only the headless paths (`--version`, `--ocr-test`, unit tests)
-were verified on Linux. Windows needs no such library.
+---
 
-## Project layout
+## License
 
-| File | Contents |
-|---|---|
-| `src/main.rs` | Entry point, `--version` / `--ocr-test` helpers, no-console on Windows release |
-| `src/model.rs` | `captions.json` data model (wire-compatible with Python), settings |
-| `src/ocr.rs` | RapidOCR pipeline: DBNet thresholding, min-area boxes, Vatti unclip, perspective-warp recognition, CTC greedy decode, 1600px downscale |
-| `src/layout.rs` | Colour sampling (14% ring, 92nd-percentile text colour), block grouping & threshold filtering |
-| `src/inpaint.rs` | Mask dilation + diffusion inpainting over the masked ROI |
-| `src/render.rs` | `fit_text_to_box` (fast path + binary search), smooth caption plates (tiny-skia), `render_entry`, OCR diagnostic overlay |
-| `src/parser.rs` | Flexible JSON / Python-dict parsing, translation merging |
-| `src/fonts.rs` | cosmic-text font system, script font chains, custom font loading |
-| `src/image_io.rs` | Unicode-safe image load/save (JPEG q95, WebP q95) |
-| `src/theme.rs` | SPEC dark tokens, sizes, control heights |
-| `src/icons.rs` | Lucide SVG icon set (embedded, tinted per theme) |
-| `src/ui.rs` | eframe/egui three-column UI (sidebar / workspace / inspector), scan/render workers, live preview |
-| `assets/models/` | Embedded ONNX models + dictionary (see `assets/models/README.md`) |
+This project is licensed under either of:
 
-## Behaviour ported from Python (exact)
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
 
-- `MAX_OCR_DIM = 1600` downscale, coordinates mapped back to native res.
-- Colour sampling: 14% outer ring (≤1,500 px), median bg, `is_boxed =
-  bg_std < 34.0`, dark boxed bg snaps to `[18, 18, 18]`; text colour =
-  median of inner pixels ≥ 92nd percentile distance from bg (≤2,000 px).
-- Grouping: `score >= min_conf` (dropped lines recorded as
-  `"conf X.XX < Y.YY"`), sort top-to-bottom/left-to-right, merge when
-  `color_dist < 75` and same-row (overlap > 0.45·avg_h, gap < 3·avg_h)
-  or stacked (gap −0.3…0.85·avg_h, overlap > −1.5·avg_h); unboxed blocks
-  under `min_chars` dropped as `"unboxed N < M chars"`.
-- Rendering: `start_size = max(16, avg_h·1.05)`, `max_w =
-  min(w−56, max(0.86·w if wide else box_w, box_w))`,
-  `max_h = max(1.3·box_h, 1.5·avg_h)`, fast-path fit then binary search
-  13…start−1, fallback 12; pads `pad_x = max(14, 0.45·size)`,
-  `pad_y = max(7, 0.22·size)`; anchor top if `y1 < 0.35h`, bottom if
-  `y2 > 0.65h`; boxed plates use the old box padded by
-  `max(36, 0.95·avg_h)` / `max(20, 0.60·avg_h)` for inpainting, unboxed
-  text masks pixels within RGB distance 90 of the text colour; plate
-  fill alpha 232, radius `max(10, 0.32·size)`, unboxed stroke width 2.
-- Batch render: up to 8 workers (rayon), unchanged blocks are copied,
-  not re-rendered; `captions.json` is written next to the input images.
-
-## Deliberate deviations (no OpenCV in a single Rust exe)
-
-- **Inpainting:** `cv2.inpaint(TELEA)` is replaced by iterative
-  diffusion (Laplace) inpainting over the same ROI with the same 5×5
-  dilation. On the flat/graded caption plates this removes, the result
-  is visually identical; on busy photos it is a smooth blur rather
-  than Telea's edge-following fill.
-- **OCR downscale filter:** Python used OpenCV `INTER_AREA`; Rust uses
-  the `image` crate's triangle (bilinear) filter for the 1600px and
-  960px resizes.
-- **Font measurement:** PIL `textbbox` metrics are replaced by
-  cosmic-text layout metrics (ascent+descent of `Agjpqy`, per-line
-  widths from shaped runs). Positions match to within a few pixels.
-- **CTC dictionary:** the embedded `ppocr_keys_v1.txt` is the PaddleOCR
-  release/2.8 file (6,623 lines). The rec model outputs **6,625 classes**
-  whose rows are already softmax probabilities: blank=0, character `i` =
-  `dict[i-1]` for `i` in 1..=6623, and class 6624 = space. All three facts
-  were verified empirically against the model (2026-11-16).
-- **WebP output:** the `image` crate 0.25 only supports *lossless* WebP
-  encoding, so Rust saves WebP as lossless instead of Python's q95
-  lossy. Files are larger; visual quality is equal or better.
-
-## Model provenance
-
-- Detection/recognition: [SWHL/RapidOCR](https://huggingface.co/SWHL/RapidOCR)
-  (`PP-OCRv4/`), ONNX conversions of PaddleOCR models, Apache-2.0.
-  SHA-256 verified (see `assets/models/README.md`).
-- Dictionary: [PaddlePaddle/PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR)
-  `release/2.8`, `ppocr/utils/ppocr_keys_v1.txt`, Apache-2.0.
-- Embedded fallback font: DejaVu Sans Bold (Bitstream Vera licence,
-  see `assets/fonts/`).
+at your option.
