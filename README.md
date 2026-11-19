@@ -3,7 +3,7 @@
 [![CI](https://github.com/vampdued/vmax-imprint/actions/workflows/ci.yml/badge.svg)](https://github.com/vampdued/vmax-imprint/actions/workflows/ci.yml)
 [![GitHub Release](https://img.shields.io/github/v/release/vampdued/vmax-imprint?color=blue&label=release)](https://github.com/vampdued/vmax-imprint/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey.svg)](https://github.com/vampdued/vmax-imprint/releases/latest)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **VMAX Imprint** is a fast, standalone desktop application for batch image text extraction, translation, and rendering. It detects on-image captions, provides an interactive editor for translation workflows, cleanly inpaints old text backgrounds, and renders new text with subpixel typographic precision.
 
@@ -26,10 +26,22 @@ It ships as a **single standalone Windows `.exe`** with **zero external dependen
 
 ## Download
 
-Prebuilt standalone binaries are available on the [Releases](https://github.com/vampdued/vmax-imprint/releases/latest) page.
+Get the latest standalone build from the [Releases](https://github.com/vampdued/vmax-imprint/releases/latest) page:
 
-1. Download **`vmax-imprint.exe`** (or the `.zip` package).
-2. Run `vmax-imprint.exe` directly on Windows 10 or 11 (64-bit). No installation needed.
+- **[⬇️ Download `vmax-imprint.exe`](https://github.com/vampdued/vmax-imprint/releases/latest)** (Standalone binary, ~60 MB)
+- **[📦 Download `vmax-imprint-windows.zip`](https://github.com/vampdued/vmax-imprint/releases/latest)** (Zipped package with docs)
+
+No installation or external dependencies (Python, CUDA, DLLs) required.
+
+> [!NOTE]
+> **Windows SmartScreen / Antivirus Warning:**
+> As a free, open-source project without a paid commercial code-signing certificate, Windows Defender SmartScreen may display an *"Unrecognized app"* or *"Windows protected your PC"* prompt upon first launch.
+>
+> **To launch the application:**
+> 1. Click **More info** on the popup dialog.
+> 2. Click **Run anyway**.
+>
+> The binary is 100% open-source, contains zero telemetry or malware, and is compiled directly by GitHub Actions. You can inspect the source code and build it locally at any time.
 
 ---
 
@@ -117,9 +129,4 @@ target\release\vmax-imprint.exe
 
 ## License
 
-This project is licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
+This project is open-source software licensed under the [MIT License](LICENSE).
