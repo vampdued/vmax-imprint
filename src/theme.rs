@@ -85,16 +85,18 @@ pub struct Tokens {
 /// The app colour: Max Blue (#2F5BFF). White on it passes WCAG AA (5.2:1),
 /// so it is the button fill; the lighter #8FA8FF is the small-blue-text
 /// colour on dark surfaces, never a background behind text.
-pub const BRAND: Color32 = Color32::from_rgb(0x2f, 0x5b, 0xff);
+pub use vmax_ui;
+
+pub const BRAND: Color32 = vmax_ui::ACCENT;
 
 /// Max Blue's supporting colours, from the VMAX kit.
-pub const BLUE_TEXT_ON_DARK: Color32 = Color32::from_rgb(0x8f, 0xa8, 0xff);
+pub const BLUE_TEXT_ON_DARK: Color32 = vmax_ui::FOCUS_RING;
 pub const STEEL: Color32 = Color32::from_rgb(0x9a, 0xa1, 0xad);
 
 /// Redesign-handoff surface scale (SPEC §4): p1 #0b0c0e, p2 #17181B,
 /// p3 #202228, hairline ln #2b2e35, ok #4ADE80, warn #FBBF24, err #F87171.
 pub const P1: Color32 = Color32::from_rgb(0x0b, 0x0c, 0x0e);
-pub const P2: Color32 = Color32::from_rgb(0x17, 0x18, 0x1b);
+pub const P2: Color32 = vmax_ui::BG_PANEL;
 pub const P3: Color32 = Color32::from_rgb(0x20, 0x22, 0x28);
 pub const LN: Color32 = Color32::from_rgb(0x2b, 0x2e, 0x35);
 pub const OK_GREEN: Color32 = Color32::from_rgb(0x4a, 0xde, 0x80);
@@ -110,39 +112,31 @@ impl Tokens {
             // white, secondary text is Steel; the accent is Max Blue.
             ThemeKind::Studio => Tokens {
                 kind,
-                chrome: Color32::BLACK,
-                canvas: P1,
-                card: P2,
-                card_border: LN,
-                raised: P3,
-                // A field reads as something to type in because it is
-                // black on a p2 card, edged in `field_border` below.
-                field: Color32::BLACK,
-                // 3.62:1 on card, 4.28:1 on chrome (measured) — the SPEC
-                // hairline `ln` is only 1.31:1 on card, so it must never
-                // edge an interactive control.
-                field_border: mix(STEEL, P2, 0.35),
-                hover: P3,
-                pressed: LN,
-                text: Color32::WHITE,
-                text_dim: STEEL,
-                // Faint text (#8A919E, 5.75:1 on card, 6.22:1 on canvas, 6.67:1 on
-                // chrome) passes WCAG AA across every surface including card rows,
-                // inspector cards, and disabled controls.
-                text_faint: mix(STEEL, P1, 0.10),
-                icon_rest: STEEL,
-                accent: BRAND,
-                accent_ink: BLUE_TEXT_ON_DARK,
-                accent_soft: Color32::from_rgba_unmultiplied(0x2f, 0x5b, 0xff, 44),
-                separator: LN,
+                chrome: vmax_ui::BG_PANEL,
+                canvas: vmax_ui::BG_CANVAS,
+                card: vmax_ui::BG_ELEVATED,
+                card_border: vmax_ui::BORDER_SUBTLE,
+                raised: vmax_ui::BG_CONTROL,
+                field: vmax_ui::BG_RECESSED,
+                field_border: vmax_ui::BORDER_STRONG,
+                hover: vmax_ui::BG_CONTROL_HOVER,
+                pressed: vmax_ui::BG_CONTROL_ACTIVE,
+                text: vmax_ui::TEXT_PRIMARY,
+                text_dim: vmax_ui::TEXT_SECONDARY,
+                text_faint: vmax_ui::TEXT_DISABLED,
+                icon_rest: vmax_ui::TEXT_SECONDARY,
+                accent: vmax_ui::ACCENT,
+                accent_ink: vmax_ui::FOCUS_RING,
+                accent_soft: vmax_ui::accent_soft(),
+                separator: vmax_ui::BORDER_SUBTLE,
                 shadow: Color32::from_black_alpha(120),
-                danger: ERR_RED,
+                danger: vmax_ui::CUT_DANGER,
                 warning: WARN_AMBER,
                 ok: OK_GREEN,
-                code_bg: Color32::BLACK,
-                radius_sm: RADIUS_SM,
-                radius: RADIUS,
-                radius_lg: RADIUS_LG,
+                code_bg: vmax_ui::BG_RECESSED,
+                radius_sm: vmax_ui::RADIUS_SM as f32,
+                radius: vmax_ui::RADIUS_MD as f32,
+                radius_lg: vmax_ui::RADIUS_LG as f32,
             },
         }
     }
@@ -378,10 +372,9 @@ impl ControlSize {
 
     pub const fn height(self) -> f32 {
         match self {
-            ControlSize::Small => 24.0,
-            ControlSize::Medium => 32.0,
-            ControlSize::Large => 40.0,
-            ControlSize::Hero => 48.0,
+            ControlSize::Small => vmax_ui::BTN_H_SM,
+            ControlSize::Medium => vmax_ui::BTN_H_MD,
+            ControlSize::Large | ControlSize::Hero => vmax_ui::BTN_H_LG,
         }
     }
 
@@ -406,9 +399,9 @@ impl ControlSize {
 
     pub const fn icon(self) -> f32 {
         match self {
-            ControlSize::Small => icon::SM,
-            ControlSize::Medium | ControlSize::Large => icon::MD,
-            ControlSize::Hero => icon::LG,
+            ControlSize::Small => 16.0,
+            ControlSize::Medium => 17.0,
+            ControlSize::Large | ControlSize::Hero => 18.5,
         }
     }
 }
@@ -715,8 +708,12 @@ mod tests {
 
     #[test]
     fn control_sizes_step_up() {
+        assert_eq!(ControlSize::Small.height(), vmax_ui::BTN_H_SM);
+        assert_eq!(ControlSize::Medium.height(), vmax_ui::BTN_H_MD);
+        assert_eq!(ControlSize::Large.height(), vmax_ui::BTN_H_LG);
+        assert_eq!(ControlSize::Hero.height(), vmax_ui::BTN_H_LG);
         for pair in ControlSize::ALL.windows(2) {
-            assert_eq!(pair[1].height() - pair[0].height(), space::SM, "{pair:?}");
+            assert!(pair[1].height() >= pair[0].height(), "{pair:?}");
         }
         assert_eq!(ControlSize::default(), ControlSize::Medium);
     }

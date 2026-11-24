@@ -1,6 +1,6 @@
 [package]
 name = "vmax-imprint"
-version = "1.0.0"
+version = "1.1.0-alpha.0.0.11"
 edition = "2021"
 description = "VMAX Imprint — batch image text extractor, translator & renderer"
 license = "MIT"
@@ -18,6 +18,7 @@ shot-test = []
 eframe = "0.37"
 egui = "0.37"
 egui_extras = { version = "0.37", features = ["image", "svg"] }
+vmax-ui = { path = "crates/vmax-ui" }
 
 # OCR: ort 2.0.0-rc.15 wraps ONNX Runtime 1.31.
 # Static linking, no DLL at runtime:

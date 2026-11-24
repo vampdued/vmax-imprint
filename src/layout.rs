@@ -179,14 +179,15 @@ pub fn group_lines_into_blocks(
             let avg_h = (lh + ph) / 2.0;
 
             let v_overlap = (ly2.min(py2) - ly1.max(py1)) as f32;
-            let same_row = v_overlap > avg_h * 0.45 && ((lx1 - px2) as f32).abs() < avg_h * 3.0;
+            let same_row = v_overlap > avg_h * 0.45 && ((lx1 - px2) as f32).abs() < avg_h * 2.4;
             let v_gap = (ly1 - py2) as f32;
             let h_overlap = (lx2.min(px2) - lx1.max(px1)) as f32;
             let stacked =
-                (-avg_h * 0.3..=avg_h * 0.85).contains(&v_gap) && h_overlap > -avg_h * 1.5;
+                (-avg_h * 0.25..=avg_h * 0.55).contains(&v_gap) && h_overlap > -avg_h * 0.8;
             let similar_color = color_dist(line.text_color, last.text_color) < 75.0;
+            let similar_height = (lh / ph).max(ph / lh) <= 1.75;
 
-            if (same_row || stacked) && similar_color {
+            if (same_row || stacked) && similar_color && similar_height {
                 blk.push(line);
                 placed = true;
                 break;

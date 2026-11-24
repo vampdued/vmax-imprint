@@ -48,12 +48,12 @@ pub fn dilate_mask_5x5(mask: &[u8], w: usize, h: usize) -> Vec<u8> {
 /// Only the bounding box of masked pixels (+16px margin, like Python) is
 /// processed. `iterations` scales with the masked area so large boxed
 /// plates converge; callers pass the default from [`inpaint_roi`].
+#[allow(dead_code)]
 pub fn inpaint_masked(img: &mut RgbImage, mask: &[u8]) {
     let (w, h) = (img.width() as usize, img.height() as usize);
     if mask.len() != w * h || !mask.iter().any(|&m| m > 0) {
         return;
     }
-    // ROI bounding box + 16px margin (Python).
     let mut min_x = w;
     let mut min_y = h;
     let mut max_x = 0usize;
@@ -68,10 +68,37 @@ pub fn inpaint_masked(img: &mut RgbImage, mask: &[u8]) {
             }
         }
     }
-    let rx1 = min_x.saturating_sub(16);
-    let ry1 = min_y.saturating_sub(16);
-    let rx2 = (max_x + 17).min(w);
-    let ry2 = (max_y + 17).min(h);
+    inpaint_masked_roi(img, mask, [min_x, min_y, max_x + 1, max_y + 1]);
+}
+
+/// Inpaint only within a single block's tight bounding box (+16 px margin) so distant
+/// blocks never share one global ROI mean or streak colors across unrelated regions.
+pub fn inpaint_masked_roi(img: &mut RgbImage, mask: &[u8], bounds: [usize; 4]) {
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    if mask.len() != w * h {
+        return;
+    }
+    let bx1 = bounds[0].min(w);
+    let by1 = bounds[1].min(h);
+    let bx2 = bounds[2].min(w);
+    let by2 = bounds[3].min(h);
+    if bx2 <= bx1 || by2 <= by1 {
+        return;
+    }
+    let mut has_any = false;
+    for y in by1..by2 {
+        if mask[y * w + bx1..y * w + bx2].iter().any(|&m| m > 0) {
+            has_any = true;
+            break;
+        }
+    }
+    if !has_any {
+        return;
+    }
+    let rx1 = bx1.saturating_sub(16);
+    let ry1 = by1.saturating_sub(16);
+    let rx2 = (bx2 + 16).min(w);
+    let ry2 = (by2 + 16).min(h);
 
     // Dilate only the ROI slice: build a local mask first.
     let rw = rx2 - rx1;

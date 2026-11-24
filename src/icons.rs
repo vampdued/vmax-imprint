@@ -171,18 +171,20 @@ pub fn button_box_bordered(
     } else if resp.hovered() {
         t.hover
     } else {
-        t.field
+        t.raised
     };
-    let border = if selected || resp.hovered() {
+    let border = if selected {
         t.accent
-    } else {
+    } else if resp.hovered() {
         t.field_border
+    } else {
+        t.card_border
     };
     ui.painter().rect(
         rect,
-        t.radius_sm,
+        t.radius,
         fill,
-        Stroke::new(1.0, border),
+        Stroke::new(1.0_f32, border),
         egui::StrokeKind::Inside,
     );
     let tint = if selected {
@@ -192,7 +194,7 @@ pub fn button_box_bordered(
     } else {
         t.icon_rest
     };
-    paint(ui, rect, name, (box_size * 0.50).round(), tint);
+    paint(ui, rect, name, (box_size * 0.66).round(), tint);
     if resp.has_focus() {
         ui.painter().rect_stroke(
             rect.expand(1.0),
@@ -230,11 +232,27 @@ pub fn button_box(
 
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(box_size), Sense::click());
 
-    if selected {
-        ui.painter().rect_filled(rect, t.radius_sm, t.accent_soft);
+    let fill = if selected {
+        t.accent_soft
     } else if resp.hovered() {
-        ui.painter().rect_filled(rect, t.radius_sm, t.hover);
-    }
+        t.hover
+    } else {
+        t.raised
+    };
+    let border = if selected {
+        t.accent
+    } else if resp.hovered() {
+        t.field_border
+    } else {
+        t.card_border
+    };
+    ui.painter().rect(
+        rect,
+        t.radius,
+        fill,
+        Stroke::new(1.0_f32, border),
+        egui::StrokeKind::Inside,
+    );
 
     let tint = if selected {
         t.accent_ink
@@ -244,7 +262,7 @@ pub fn button_box(
         t.icon_rest
     };
 
-    paint(ui, rect, name, (box_size * 0.55).round(), tint);
+    paint(ui, rect, name, (box_size * 0.66).round(), tint);
 
     if resp.has_focus() {
         // `accent_ink` (#8FA8FF), not `accent`: the Max Blue ring was 2.44:1

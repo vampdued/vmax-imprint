@@ -1,0 +1,9 @@
+[package]
+name = "vmax-ui"
+version = "0.2.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Reusable VMAX Brand Kit v1.2 dark design system, WCAG tokens, and panic-free egui 0.37 primitives."
+
+[dependencies]
+egui = "0.37"

@@ -64,6 +64,7 @@ pub fn save_image(img: &RgbImage, path: &Path) -> Result<()> {
 /// triangle filter — the OCR pre-scale; Python used INTER_AREA here, which
 /// is a box filter; triangle is the closest `image`-crate equivalent and
 /// differs only on very noisy downscales).
+#[allow(dead_code)]
 pub fn downscale_for_ocr(img: &RgbImage, max_side: u32) -> (RgbImage, f32) {
     let (w, h) = (img.width(), img.height());
     let m = w.max(h);

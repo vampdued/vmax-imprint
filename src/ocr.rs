@@ -98,8 +98,10 @@ pub struct OcrEngine {
     det: Mutex<Session>,
     rec: Mutex<Session>,
     det_input: String,
+    #[allow(dead_code)]
     det_output: String,
     rec_input: String,
+    #[allow(dead_code)]
     rec_output: String,
     dict: Vec<String>,
 }
@@ -144,6 +146,7 @@ impl OcrEngine {
         })
     }
 
+    #[allow(dead_code)]
     pub fn dict_len(&self) -> usize {
         self.dict.len()
     }

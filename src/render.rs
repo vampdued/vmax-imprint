@@ -14,7 +14,7 @@ use image::{Rgb, RgbImage};
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, StrokeDash, Transform};
 
 use crate::fonts::{attrs_for, font_system, load_custom_font};
-use crate::inpaint::inpaint_masked;
+use crate::inpaint::inpaint_masked_roi;
 use crate::model::{clamp_box, ImageEntry};
 
 thread_local! {
@@ -512,6 +512,94 @@ pub fn fit_bounds_for(
     }
 }
 
+/// Push vertically colliding caption plates apart so expanded bottom blocks never bury
+/// neighboring blocks above them. Runs a top-down pass then a bottom-up clamp inside `[6, img_h - 6]`.
+fn resolve_job_collisions(jobs: &mut [RenderJob], img_h: i32) {
+    if jobs.len() < 2 || img_h < 24 {
+        return;
+    }
+    let bounds_of = |job: &RenderJob| -> [i32; 4] {
+        let mut x1 = i32::MAX;
+        let mut y1 = i32::MAX;
+        let mut x2 = i32::MIN;
+        let mut y2 = i32::MIN;
+        for p in &job.pills {
+            x1 = x1.min(p[0]);
+            y1 = y1.min(p[1]);
+            x2 = x2.max(p[2]);
+            y2 = y2.max(p[3]);
+        }
+        if x1 > x2 {
+            [job.start_x, job.start_y, job.start_x + 1, job.start_y + 1]
+        } else {
+            [x1, y1, x2, y2]
+        }
+    };
+    let shift_job = |job: &mut RenderJob, dy: i32| {
+        if dy == 0 {
+            return;
+        }
+        job.start_y += dy;
+        for p in &mut job.pills {
+            p[1] += dy;
+            p[3] += dy;
+        }
+    };
+
+    let mut order: Vec<usize> = (0..jobs.len()).collect();
+    order.sort_by_key(|&i| {
+        let b = bounds_of(&jobs[i]);
+        (b[1], b[0])
+    });
+
+    let min_gap = 6_i32;
+    let margin = 6_i32;
+
+    // Pass 1: push overlapping blocks upward if bottom-anchored, or downward if room exists
+    for pos in 1..order.len() {
+        let prev_i = order[pos - 1];
+        let curr_i = order[pos];
+        let pb = bounds_of(&jobs[prev_i]);
+        let cb = bounds_of(&jobs[curr_i]);
+        let h_overlap = cb[0] < pb[2] && cb[2] > pb[0];
+        if !h_overlap {
+            continue;
+        }
+        let needed_y1 = pb[3] + min_gap;
+        if cb[1] < needed_y1 {
+            let overlap = needed_y1 - cb[1];
+            let down_room = (img_h - margin - cb[3]).max(0);
+            let push_down = overlap.min(down_room);
+            shift_job(&mut jobs[curr_i], push_down);
+            let remaining = overlap - push_down;
+            if remaining > 0 {
+                let up_room = (pb[1] - margin).max(0);
+                let push_up = remaining.min(up_room);
+                shift_job(&mut jobs[prev_i], -push_up);
+            }
+        }
+    }
+
+    // Pass 2: bottom-up pass in case Pass 1 pushed an earlier block into an even higher one
+    for pos in (0..order.len().saturating_sub(1)).rev() {
+        let prev_i = order[pos];
+        let curr_i = order[pos + 1];
+        let pb = bounds_of(&jobs[prev_i]);
+        let cb = bounds_of(&jobs[curr_i]);
+        let h_overlap = cb[0] < pb[2] && cb[2] > pb[0];
+        if !h_overlap {
+            continue;
+        }
+        let max_prev_y2 = cb[1] - min_gap;
+        if pb[3] > max_prev_y2 {
+            let overlap = pb[3] - max_prev_y2;
+            let up_room = (pb[1] - margin).max(0);
+            let push_up = overlap.min(up_room);
+            shift_job(&mut jobs[prev_i], -push_up);
+        }
+    }
+}
+
 pub fn render_entry(
     img: &RgbImage,
     entry: &ImageEntry,
@@ -524,6 +612,7 @@ pub fn render_entry(
     let mut work = img.clone();
     let mut inpaint_mask = vec![0u8; (w * h) as usize];
     let mut jobs: Vec<RenderJob> = Vec::new();
+    let mut inpaint_rois: Vec<[usize; 4]> = Vec::new();
 
     // Uniform modes need one size for the whole image, computed up front
     // from the blocks that actually have a translation and are kept
@@ -627,31 +716,23 @@ pub fn render_entry(
         let txt_col = blk.text_color;
         let is_boxed = blk.is_boxed;
 
+        let mut roi_bounds = [w as usize, h as usize, 0usize, 0usize];
         if is_boxed {
-            let old_pad_x = 36.max((avg_h * 0.95) as i32);
-            let old_pad_y = 20.max((avg_h * 0.60) as i32);
+            let old_pad_x = 10.max((avg_h * 0.30) as i32);
+            let old_pad_y = 6.max((avg_h * 0.20) as i32);
             for [lx1, ly1, lx2, ly2] in &line_bboxes {
-                let ox1 = if lx1 - old_pad_x < 15 {
-                    0
-                } else {
-                    lx1 - old_pad_x
-                };
-                let oy1 = if ly1 - old_pad_y < 15 {
-                    0
-                } else {
-                    ly1 - old_pad_y
-                };
-                let ox2 = if lx2 + old_pad_x > wi - 15 {
-                    wi
-                } else {
-                    lx2 + old_pad_x
-                };
-                let oy2 = if ly2 + old_pad_y > hi - 15 {
-                    hi
-                } else {
-                    ly2 + old_pad_y
-                };
-                let [ox1, oy1, ox2, oy2] = clamp_box([ox1, oy1, ox2, oy2], wi, hi);
+                let [ox1, oy1, ox2, oy2] = clamp_box(
+                    [lx1 - old_pad_x, ly1 - old_pad_y, lx2 + old_pad_x, ly2 + old_pad_y],
+                    wi,
+                    hi,
+                );
+                if ox2 <= ox1 || oy2 <= oy1 {
+                    continue;
+                }
+                roi_bounds[0] = roi_bounds[0].min(ox1 as usize);
+                roi_bounds[1] = roi_bounds[1].min(oy1 as usize);
+                roi_bounds[2] = roi_bounds[2].max(ox2 as usize);
+                roi_bounds[3] = roi_bounds[3].max(oy2 as usize);
                 for y in oy1..oy2 {
                     for x in ox1..ox2 {
                         inpaint_mask[y as usize * w as usize + x as usize] = 255;
@@ -664,6 +745,10 @@ pub fn render_entry(
                 if lx2 <= lx1 || ly2 <= ly1 {
                     continue;
                 }
+                roi_bounds[0] = roi_bounds[0].min(lx1 as usize);
+                roi_bounds[1] = roi_bounds[1].min(ly1 as usize);
+                roi_bounds[2] = roi_bounds[2].max(lx2 as usize);
+                roi_bounds[3] = roi_bounds[3].max(ly2 as usize);
                 for y in ly1..ly2 {
                     for x in lx1..lx2 {
                         let p = work.get_pixel(x as u32, y as u32);
@@ -680,6 +765,9 @@ pub fn render_entry(
                 }
             }
         }
+        if roi_bounds[2] > roi_bounds[0] && roi_bounds[3] > roi_bounds[1] {
+            inpaint_rois.push(roi_bounds);
+        }
 
         jobs.push(RenderJob {
             is_boxed,
@@ -695,7 +783,11 @@ pub fn render_entry(
         });
     }
 
-    inpaint_masked(&mut work, &inpaint_mask);
+    resolve_job_collisions(&mut jobs, hi);
+
+    for roi in &inpaint_rois {
+        inpaint_masked_roi(&mut work, &inpaint_mask, *roi);
+    }
 
     // Composite onto a tiny-skia pixmap (premultiplied) for plate + text.
     let mut pixmap = Pixmap::new(w, h).expect("pixmap");
